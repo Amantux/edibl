@@ -10,8 +10,13 @@ pantry. Opens in the sidebar via **Ingress** (no separate login).
    `https://github.com/Amantux/edibl`
 2. Install **Edibl**, then **Start**. Open it from the sidebar.
 
-The first build compiles the frontend and installs the backend, so it can take a
-few minutes. Data is stored in the add-on's persistent `/data` (survives updates).
+**Built for ARM.** The web UI is pre-built and shipped with the add-on, so there
+is **no npm build on your device** — install only fetches the small Python
+backend and installs wheels (no compiling). Works on **amd64** and **aarch64**.
+On a Raspberry Pi, use the **64-bit** Home Assistant OS (aarch64); 32-bit (armv7)
+isn't supported because its crypto libraries have no prebuilt wheels.
+
+Data is stored in the add-on's persistent `/data` (survives updates).
 
 ## Configuration
 

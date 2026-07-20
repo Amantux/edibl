@@ -1,0 +1,28 @@
+add_to_shopping_list:
+  name: Add to shopping list
+  description: Add an item to the Edibl shopping list.
+  fields:
+    name:
+      name: Name
+      description: What to add.
+      required: true
+      example: Whole milk
+      selector:
+        text:
+    quantity:
+      name: Quantity
+      description: How much.
+      example: 2
+      default: 1
+      selector:
+        number:
+          min: 0
+          step: 0.1
+          mode: box
+    unit:
+      name: Unit
+      description: Unit of measure.
+      example: count
+      default: count
+      selector:
+        text:

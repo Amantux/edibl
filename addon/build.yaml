@@ -1,0 +1,9 @@
+# Base images per architecture. We build on the official python:3.11-slim
+# (Debian) images so the runtime matches the tested standalone Edibl container
+# (reliable bcrypt/cryptography wheels; no musl compile surprises).
+build_from:
+  amd64: python:3.11-slim-bookworm
+  aarch64: python:3.11-slim-bookworm
+labels:
+  org.opencontainers.image.title: Edibl
+  org.opencontainers.image.source: https://github.com/Amantux/edibl

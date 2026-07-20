@@ -1,0 +1,47 @@
+name: Edibl
+version: "1.0.0"
+slug: edibl
+description: Your kitchen's real food inventory — freshness, waste-learning, and a pantry chat assistant (Ollama / OpenAI / Anthropic).
+url: https://github.com/Amantux/edibl/tree/master/addon
+# armv7 is omitted: bcrypt/cryptography wheels are unreliable on 32-bit musl.
+arch:
+  - amd64
+  - aarch64
+init: false
+startup: application
+boot: auto
+# HA authenticates the user, then proxies to the app — single-tenant mode.
+ingress: true
+ingress_port: 7746
+panel_icon: mdi:food-apple
+panel_title: Edibl
+hassio_api: false
+homeassistant_api: false
+# The Edibl MCP server (SSE). Left unmapped by default; set a token and map the
+# port if you want Home Assistant's MCP Client (or another agent) to reach it.
+ports:
+  # Optional. Map 7746 only if you want the HACS integration or other LAN
+  # clients to reach the REST API directly (Ingress does not need it).
+  7746/tcp: null
+  7767/tcp: null
+ports_description:
+  7746/tcp: Edibl REST API — map only for the HACS integration / LAN access
+  7767/tcp: Edibl MCP server (SSE) — set mcp_server_token before exposing
+options:
+  disable_auth: true
+  llm_provider: ""
+  llm_base_url: ""
+  llm_api_key: ""
+  llm_model: ""
+  barcode_lookup: false
+  mcp_enabled: true
+  mcp_server_token: ""
+schema:
+  disable_auth: bool
+  llm_provider: "list(|ollama|openai|anthropic)"
+  llm_base_url: str
+  llm_api_key: password
+  llm_model: str
+  barcode_lookup: bool
+  mcp_enabled: bool
+  mcp_server_token: password

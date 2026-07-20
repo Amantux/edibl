@@ -1,0 +1,38 @@
+configuration:
+  disable_auth:
+    name: Single-tenant mode (recommended behind Ingress)
+    description: >-
+      Home Assistant already authenticates you before proxying, so Edibl runs
+      as one household with no separate login. Turn off only if you expose Edibl
+      outside Ingress and want its own accounts.
+  llm_provider:
+    name: Chat assistant provider
+    description: >-
+      Which LLM backend powers the in-app pantry chat. Leave blank for the
+      built-in rules assistant (zero config). ollama / openai / anthropic.
+  llm_base_url:
+    name: LLM base URL
+    description: >-
+      e.g. http://homeassistant.local:11434 for Ollama, or an OpenAI-compatible
+      base URL. Leave blank to use the provider default.
+  llm_api_key:
+    name: LLM API key
+    description: API key for openai / anthropic. Not needed for a local Ollama.
+  llm_model:
+    name: LLM model
+    description: e.g. llama3.1 (Ollama), gpt-4o-mini (OpenAI), claude-opus-4-8.
+  barcode_lookup:
+    name: Barcode enrichment (Open Food Facts)
+    description: >-
+      When a scanned barcode is unknown locally, look it up online to pre-fill
+      name/brand/category. Sends the barcode to Open Food Facts.
+  mcp_enabled:
+    name: Run the MCP server
+    description: >-
+      Exposes Edibl's tools over MCP (SSE) so an agent — e.g. Home Assistant's
+      MCP Client — can query and act on your pantry.
+  mcp_server_token:
+    name: MCP server token
+    description: >-
+      Require this bearer token on the MCP endpoint. Strongly recommended if you
+      map port 7767 to the network.

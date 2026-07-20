@@ -1,0 +1,21 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Edibl",
+        "description": "Enter your Edibl URL. If Edibl runs the Home Assistant add-on, map port 7746 and use http://homeassistant.local:7746. A long-lived API token (edbl_…) is optional when Edibl runs in single-tenant mode.",
+        "data": {
+          "host": "Edibl URL",
+          "token": "API token (optional)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach Edibl at that URL.",
+      "invalid_auth": "Edibl rejected the token."
+    },
+    "abort": {
+      "already_configured": "This Edibl instance is already configured."
+    }
+  }
+}

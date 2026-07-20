@@ -1,0 +1,12 @@
+{
+  "domain": "edibl",
+  "name": "Edibl",
+  "codeowners": ["@Amantux"],
+  "config_flow": true,
+  "documentation": "https://github.com/Amantux/edibl/blob/master/docs/home-assistant.md",
+  "integration_type": "service",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/Amantux/edibl/issues",
+  "requirements": [],
+  "version": "1.0.0"
+}

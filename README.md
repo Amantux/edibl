@@ -1,3 +1,13 @@
+<p align="center">
+  <img src="docs/logo.png" alt="Edibl" width="360">
+</p>
+
+<p align="center">
+  <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FAmantux%2Fedibl">
+    <img src="https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg" alt="Add the Edibl add-on repository to your Home Assistant.">
+  </a>
+</p>
+
 # Edibl 🥑
 
 **Edibl is your kitchen's real inventory** — what food you actually have, where it
@@ -91,12 +101,17 @@ until curl -fsS http://localhost:7746/api/v1/ready; do sleep 2; done
 
 ## Home Assistant
 
-Edibl ships as a **Home Assistant add-on** (runs in the sidebar via Ingress) and
-a **HACS integration** (sensors + an `add_to_shopping_list` service). Add this
-repo under **Settings → Add-ons → Repositories** to install the app, and/or as a
-HACS custom **integration** repository. Wire the chat assistant to a local
-**Ollama** or **OpenAI** endpoint, or talk to your pantry by voice via HA Assist
-+ MCP. Full guide: [`docs/home-assistant.md`](docs/home-assistant.md).
+[![Add the Edibl add-on repository to your Home Assistant.](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FAmantux%2Fedibl)
+
+Click the button above to add the repository, then install **Edibl** — it pulls a
+**prebuilt image** (no build on your device; aarch64 / amd64) and runs in the
+sidebar via Ingress.
+
+Edibl also ships a **HACS integration**: freshness/expiry **sensors**, an
+`add_to_shopping_list` service, and your shopping list as a native **To-do List**.
+Wire the chat assistant to a local **Ollama** / **OpenAI** endpoint (or reuse HA's
+own conversation agent), or talk to your pantry by voice via HA Assist + MCP.
+Full guide: [`docs/home-assistant.md`](docs/home-assistant.md).
 
 ## Docs
 

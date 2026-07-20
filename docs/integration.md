@@ -66,10 +66,31 @@ A separate SSE server (`:7767/sse`, `EDIBL_MCP_SERVER_TOKEN` to require auth) wi
 myMeal's agent, at it.
 
 **Query:** `do_i_have`, `whats_in_stock`, `expiring_soon`, `runout_forecast`,
-`freezer_inventory`, `wine_cellar`.
+`freezer_inventory`, `wine_cellar`, `food_insights` (what you waste + per-item
+"lasts ~N days" learning).
 **Bridge to recipes:** `check_recipe`, `plan_status`, `ingest_meal_plan`,
 `order_shortfall`.
-**Act:** `add_stock`, `record_consumption`, `add_to_shopping_list`, `shopping_list`.
+**Act:** `add_stock`, `bulk_add_stock` (a whole haul at once), `record_consumption`
+(with an `outcome`: eaten/spoiled/expired/discarded — feeds shelf-life learning),
+`add_to_shopping_list`, `shopping_list`.
+
+## 4. The in-app chat assistant (same tools, on every screen)
+
+Beside the MCP server (for external agents/HA), Edibl has a **built-in chat
+assistant** on every screen — the same inventory tools, provider-neutral so it
+suits a Home Assistant deployment:
+
+```
+EDIBL_LLM_PROVIDER = ollama | openai | anthropic | ""(built-in rules)
+EDIBL_LLM_BASE_URL, EDIBL_LLM_API_KEY, EDIBL_LLM_MODEL
+```
+
+`ollama`/`openai` use the OpenAI function-calling shape; `anthropic` uses the
+Messages API. With no provider set, a rules assistant handles the common intents
+(zero config). Endpoints: `GET /api/v1/assistant/config`, `POST
+/api/v1/assistant/chat` ({messages:[{role,content}]} → {reply, actions}). A
+misconfigured/unreachable provider degrades to the rules assistant rather than
+erroring, so the chat box never goes dark.
 
 Example conversation the tools enable:
 

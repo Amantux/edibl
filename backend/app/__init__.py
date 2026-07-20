@@ -40,6 +40,7 @@ def create_app(config_object=Config):
     from . import models  # noqa: F401
     with app.app_context():
         db.create_all()
+        _ensure_columns()
         _seed_reference_data()
 
     _register_blueprints(app)
@@ -47,6 +48,36 @@ def create_app(config_object=Config):
     _register_errors(app)
     _register_security_headers(app)
     return app
+
+
+def _ensure_columns():
+    """Additive SQLite migration for columns added after a DB was first created.
+
+    There's no Alembic here (create_all is the schema source of truth), so when we
+    add a column to an existing model, older databases lack it. Add any missing
+    columns idempotently. New databases already have them from create_all — this
+    is a no-op there.
+    """
+    from sqlalchemy import inspect, text
+
+    wanted = {
+        "stock_lots": {"state": "VARCHAR(16) DEFAULT ''"},
+        "consumption_events": {
+            "outcome": "VARCHAR(16) DEFAULT 'eaten'",
+            "days_kept": "INTEGER",
+            "state": "VARCHAR(16) DEFAULT ''",
+        },
+    }
+    insp = inspect(db.engine)
+    existing_tables = set(insp.get_table_names())
+    for table, cols in wanted.items():
+        if table not in existing_tables:
+            continue
+        have = {c["name"] for c in insp.get_columns(table)}
+        for name, ddl in cols.items():
+            if name not in have:
+                db.session.execute(text(f'ALTER TABLE {table} ADD COLUMN {name} {ddl}'))
+    db.session.commit()
 
 
 def _seed_reference_data():
@@ -69,10 +100,11 @@ def _register_blueprints(app):
     from .api.shopping import bp as shopping_bp
     from .api.dashboard import bp as dashboard_bp
     from .api.integrations import bp as integrations_bp
+    from .api.assistant import bp as assistant_bp
     from .api.misc import bp as misc_bp
 
     for bp in (users_bp, tokens_bp, locations_bp, products_bp, stock_bp,
-               shopping_bp, dashboard_bp, integrations_bp, misc_bp):
+               shopping_bp, dashboard_bp, integrations_bp, assistant_bp, misc_bp):
         app.register_blueprint(bp, url_prefix="/api/v1")
 
 

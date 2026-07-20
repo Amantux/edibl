@@ -161,17 +161,50 @@ def add_stock(name: str, quantity: float = 1, unit: str = "count",
 
 
 @mcp.tool()
-def record_consumption(name: str, quantity: float = 1) -> str:
-    """Record that you used some of an ingredient (feeds runout prediction and the
-    reorder suggestions). Consumes from the soonest-to-expire matching lot."""
+def record_consumption(name: str, quantity: float = 1, outcome: str = "eaten") -> str:
+    """Record how some of an ingredient left inventory. `outcome` = eaten (default),
+    spoiled, expired, or discarded. Feeds runout prediction AND personalized
+    shelf-life learning (losses teach Edibl the item goes bad sooner). Consumes
+    from the soonest-to-expire matching lot."""
     items = _get("/stock").get("items", [])
     q = name.lower()
     matches = [i for i in items if i.get("product") and q in i["product"]["name"].lower()]
     if not matches:
         return f"No stock matching '{name}'."
     lot = matches[0]  # already sorted soonest-expiry first
-    _post(f"/stock/{lot['id']}/consume", {"quantity": quantity})
-    return f"Recorded using {quantity} {lot['unit']} of {lot['product']['name']}."
+    res = _post(f"/stock/{lot['id']}/consume", {"quantity": quantity, "outcome": outcome})
+    msg = f"Recorded {quantity} {lot['unit']} of {lot['product']['name']} ({outcome})."
+    if res.get("insight"):
+        msg += " " + res["insight"]
+    return msg
+
+
+@mcp.tool()
+def bulk_add_stock(items: list, storage_method: str = "refrigerated",
+                   category: str = "other", location: str = "", source: str = "") -> str:
+    """Add many items at once (a grocery haul, a farm box, a butchered animal).
+    `items` = [{name, quantity?, unit?, category?, storageMethod?, state?}]. Shared
+    args are per-item defaults. Expiry is auto-estimated per item."""
+    shared = {"storageMethod": storage_method, "category": category, "source": source}
+    if location:
+        locs = _get("/locations")
+        match = next((loc for loc in locs if loc["name"].lower() == location.lower()), None)
+        if match:
+            shared["locationId"] = match["id"]
+    res = _post("/stock/bulk", {"shared": shared, "items": items})
+    return f"Added {res.get('created', 0)} items."
+
+
+@mcp.tool()
+def food_insights(name: str = "") -> dict:
+    """Lifecycle insight. With a `name`, per-item stats + a suggestion ('your
+    bananas usually last ~5 days'). Without, what you tend to waste, group-wide."""
+    if name:
+        items = _get("/products", {"q": name})
+        if not items:
+            return {"error": f"no product matching '{name}'"}
+        return _get(f"/products/{items[0]['id']}/insights")
+    return _get("/dashboard/lifecycle")
 
 
 @mcp.tool()

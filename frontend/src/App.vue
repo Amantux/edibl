@@ -1,5 +1,6 @@
 <script setup>
 import { useRoute } from 'vue-router'
+import ChatAssistant from './components/ChatAssistant.vue'
 const route = useRoute()
 const nav = [
   { to: '/', icon: '📊', label: 'Dashboard' },
@@ -24,5 +25,6 @@ const nav = [
       <div class="muted" style="padding:8px 11px;font-size:.78rem">Your kitchen's real inventory</div>
     </aside>
     <div class="main"><div class="content"><router-view /></div></div>
+    <ChatAssistant />
   </div>
 </template>

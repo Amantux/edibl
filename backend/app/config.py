@@ -42,6 +42,24 @@ class Config:
     HOMEHOARD_URL = os.environ.get("EDIBL_HOMEHOARD_URL", "")
     HOMEHOARD_TOKEN = os.environ.get("EDIBL_HOMEHOARD_TOKEN", "")
 
+    # --- Chat assistant (provider-neutral LLM) ---------------------------
+    # Point the in-app assistant at whichever endpoint you run. Designed for
+    # Home Assistant deployments: use a local Ollama, an OpenAI-compatible
+    # endpoint, or Anthropic. Leave provider empty for the built-in rules-based
+    # assistant (works with zero config; handles the common intents).
+    #   EDIBL_LLM_PROVIDER = ollama | openai | anthropic | ""(rules)
+    LLM_PROVIDER = os.environ.get("EDIBL_LLM_PROVIDER", "").strip().lower()
+    LLM_BASE_URL = os.environ.get("EDIBL_LLM_BASE_URL", "").strip().rstrip("/")
+    LLM_API_KEY = os.environ.get("EDIBL_LLM_API_KEY", "").strip()
+    LLM_MODEL = os.environ.get("EDIBL_LLM_MODEL", "").strip()
+    LLM_TIMEOUT = int(os.environ.get("EDIBL_LLM_TIMEOUT", "60"))
+    LLM_MAX_STEPS = int(os.environ.get("EDIBL_LLM_MAX_STEPS", "6"))
+
+    # --- Barcode enrichment ----------------------------------------------
+    # When a scanned barcode isn't known locally, optionally look it up in the
+    # public Open Food Facts database (network; off by default).
+    BARCODE_LOOKUP = _bool("EDIBL_BARCODE_LOOKUP", False)
+
     MAX_UPLOAD_BYTES = int(os.environ.get("EDIBL_MAX_UPLOAD_MB", "25")) * 1024 * 1024
     JSON_SORT_KEYS = False
 

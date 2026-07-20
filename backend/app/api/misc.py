@@ -47,8 +47,10 @@ def ready():
 @bp.get("/meta")
 def meta():
     """Enum reference data for the UI (categories, units, storage methods…)."""
-    from ..models import CATEGORIES, UNITS, STORAGE_METHODS, LOCATION_KINDS
+    from ..models import (CATEGORIES, UNITS, STORAGE_METHODS, LOCATION_KINDS,
+                          LIFECYCLE_STATES, OUTCOMES)
     return jsonify({
         "categories": list(CATEGORIES), "units": list(UNITS),
         "storageMethods": list(STORAGE_METHODS), "locationKinds": list(LOCATION_KINDS),
+        "lifecycleStates": [s for s in LIFECYCLE_STATES if s], "outcomes": list(OUTCOMES),
     })

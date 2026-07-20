@@ -4,6 +4,7 @@ from ..extensions import db
 from ..models import Product, CATEGORIES
 from ..auth import login_required, current_group
 from ..schemas.serializers import product_out
+from ..services.estimation import product_insights
 
 bp = Blueprint("products", __name__)
 
@@ -42,14 +43,29 @@ def list_products():
     return jsonify([product_out(p) for p in q.order_by(Product.name.asc()).all()])
 
 
+@bp.get("/products/<product_id>/insights")
+@login_required
+def insights(product_id):
+    """Lifecycle insight for a product (waste rate, learned shelf life, suggestion)."""
+    _get(product_id)
+    return jsonify(product_insights(current_group().id, product_id))
+
+
 @bp.get("/products/barcode/<code>")
 @login_required
 def by_barcode(code):
+    """Resolve a scanned barcode. Known products return locally; unknown codes
+    optionally fall back to the public Open Food Facts database (EDIBL_BARCODE_LOOKUP)
+    so a scan can pre-fill name/brand/category for a new item."""
     p = (db.session.query(Product)
          .filter_by(group_id=current_group().id, barcode=code).first())
-    if not p:
-        return jsonify({"found": False, "barcode": code})
-    return jsonify({"found": True, "product": product_out(p)})
+    if p:
+        return jsonify({"found": True, "product": product_out(p)})
+    from ..services.barcode import lookup_barcode
+    hit = lookup_barcode(code)
+    if hit:
+        return jsonify({"found": False, "barcode": code, "suggestion": hit})
+    return jsonify({"found": False, "barcode": code})
 
 
 @bp.post("/products")

@@ -4,7 +4,7 @@ from ..extensions import db
 from ..models import StockLot, Product, Location
 from ..auth import login_required, current_group
 from ..schemas.serializers import stock_out, expiry_status
-from ..services.estimation import predict_runout
+from ..services.estimation import predict_runout, waste_insights
 
 bp = Blueprint("dashboard", __name__)
 
@@ -100,6 +100,14 @@ def freezer():
             if s.storage_method in ("frozen", "vacuum_sealed")]
     lots.sort(key=lambda s: (s.attrs or {}).get("butcherSession") or "")
     return jsonify({"items": [stock_out(s) for s in lots], "total": len(lots)})
+
+
+@bp.get("/dashboard/lifecycle")
+@login_required
+def lifecycle():
+    """What you tend to waste, learned from consumption outcomes — the basis for
+    'you lose bananas often, buy fewer' style personalized suggestions."""
+    return jsonify({"items": waste_insights(current_group().id)})
 
 
 @bp.get("/have")

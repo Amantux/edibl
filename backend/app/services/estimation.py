@@ -6,10 +6,12 @@ it from typical shelf life for (category, storage_method). Precedence:
 Vacuum-sealing + freezing dramatically extend life — that's why the meat
 butchering workflow (vacuum_sealed + frozen) yields long expiries.
 """
-from datetime import timedelta
+from datetime import datetime, timedelta
+from statistics import median
 
 from ..extensions import db
-from ..models import ShelfLifeProfile, ConsumptionEvent, utcnow
+from ..models import (ShelfLifeProfile, ConsumptionEvent, Product,
+                      GOOD_OUTCOMES, LOSS_OUTCOMES, utcnow)
 
 # (category, storage_method) -> typical days. Conservative, food-safety-ish
 # defaults; users can override per product or edit the DB table.
@@ -46,21 +48,126 @@ def typical_days(category: str, storage_method: str):
     return DEFAULT_SHELF_LIFE.get((category, storage_method))
 
 
-def estimate_expiry(purchase_date, category, storage_method, product_shelf_life=None):
-    """Return (expiry_date, estimated_bool) or (None, False) if not estimable."""
+def _outcome(e):
+    """Normalized outcome for a consumption event, tolerating legacy rows that
+    only set `reason` (used/expired/discarded)."""
+    o = (getattr(e, "outcome", None) or "").strip()
+    if o:
+        return o
+    r = (e.reason or "used").strip()
+    return "eaten" if r == "used" else r
+
+
+def learned_shelf_life(group_id, product_id):
+    """Personalized shelf life (days) for a product, learned from how long its
+    lots actually lasted before they *went bad* (spoiled/expired/discarded).
+
+    We only shorten based on losses — if you always eat something before it turns,
+    we don't second-guess the default. Returns (days, sample_count) or (None, 0).
+    """
+    if not product_id:
+        return None, 0
+    events = (
+        db.session.query(ConsumptionEvent)
+        .filter(ConsumptionEvent.group_id == group_id,
+                ConsumptionEvent.product_id == product_id,
+                ConsumptionEvent.days_kept.isnot(None))
+        .all()
+    )
+    losses = [int(e.days_kept) for e in events
+              if _outcome(e) in LOSS_OUTCOMES and e.days_kept is not None and e.days_kept >= 0]
+    if len(losses) < 2:
+        return None, len(losses)
+    return int(round(median(losses))), len(losses)
+
+
+def estimate_expiry(purchase_date, category, storage_method, product_shelf_life=None,
+                    group_id=None, product_id=None):
+    """Return (expiry_date, estimated_bool). Precedence: explicit per-product
+    override → learned-from-history → category/storage table."""
     if not purchase_date:
         return None, False
-    days = product_shelf_life or typical_days(category, storage_method)
+    days = product_shelf_life
+    if not days and group_id and product_id:
+        days, _n = learned_shelf_life(group_id, product_id)
+    if not days:
+        days = typical_days(category, storage_method)
     if not days:
         return None, False
     return purchase_date + timedelta(days=int(days)), True
+
+
+def product_insights(group_id, product_id):
+    """Per-item lifecycle summary + a plain-language suggestion. Drives the
+    'your bananas usually last ~5 days' style hints."""
+    p = db.session.get(Product, product_id) if product_id else None
+    events = (
+        db.session.query(ConsumptionEvent)
+        .filter(ConsumptionEvent.group_id == group_id,
+                ConsumptionEvent.product_id == product_id)
+        .all()
+    ) if product_id else []
+    good = [e for e in events if _outcome(e) in GOOD_OUTCOMES]
+    loss = [e for e in events if _outcome(e) in LOSS_OUTCOMES]
+    kept = [int(e.days_kept) for e in events if e.days_kept is not None and e.days_kept >= 0]
+    learned, n_loss = learned_shelf_life(group_id, product_id)
+    total = len(events)
+    waste_rate = round(len(loss) / total, 2) if total else 0.0
+    name = p.name if p else "this item"
+
+    suggestion = ""
+    if learned:
+        suggestion = f"Based on your history, {name} tends to last about {learned} days here."
+        if n_loss >= 3 and waste_rate >= 0.4:
+            suggestion += " You lose it fairly often — buy less at a time or store it colder."
+    elif len(loss) >= 2:
+        suggestion = f"You've lost {name} {len(loss)}× — consider smaller quantities."
+    elif good:
+        suggestion = f"You usually finish {name} in time. 👍"
+
+    return {
+        "productId": product_id,
+        "productName": name,
+        "events": total,
+        "eaten": len(good),
+        "wasted": len(loss),
+        "wasteRate": waste_rate,
+        "avgDaysKept": round(sum(kept) / len(kept), 1) if kept else None,
+        "learnedShelfLifeDays": learned,
+        "lossSamples": n_loss,
+        "suggestion": suggestion,
+    }
+
+
+def waste_insights(group_id, limit=6):
+    """Group-wide 'what am I wasting' feed for the dashboard: the products with the
+    most losses, each with a suggestion."""
+    rows = (
+        db.session.query(ConsumptionEvent)
+        .filter(ConsumptionEvent.group_id == group_id)
+        .all()
+    )
+    by_product = {}
+    for e in rows:
+        if not e.product_id:
+            continue
+        by_product.setdefault(e.product_id, []).append(e)
+    out = []
+    for pid, evs in by_product.items():
+        loss = [e for e in evs if _outcome(e) in LOSS_OUTCOMES]
+        if not loss:
+            continue
+        out.append(product_insights(group_id, pid))
+    out.sort(key=lambda d: (d["wasted"], d["wasteRate"]), reverse=True)
+    return out[:limit]
 
 
 def predict_runout(group_id, product_id, on_hand):
     """Estimate days until a product runs out from its recent consumption rate.
 
     Returns (days_left, daily_rate) or (None, None) with too little history.
-    Uses the last 60 days of consumption events for the product.
+    Uses the last 60 days of consumption events for the product, and only counts
+    food that was actually *eaten* (not thrown out) toward the burn rate.
     """
     if on_hand <= 0:
         return 0.0, None
@@ -74,11 +181,15 @@ def predict_runout(group_id, product_id, on_hand):
         )
         .all()
     )
+    events = [e for e in events if _outcome(e) in GOOD_OUTCOMES]
     total = sum(e.quantity or 0 for e in events)
     if total <= 0 or len(events) < 2:
         return None, None
     # Span from the first event to now, at least 1 day to avoid div-by-zero.
-    span_days = max((utcnow() - min(e.at for e in events)).days, 1)
+    # Stored timestamps come back tz-naive from SQLite, so compare naive-to-naive.
+    def _naive(dt):
+        return dt.replace(tzinfo=None) if dt and dt.tzinfo else dt
+    span_days = max((datetime.utcnow() - min(_naive(e.at) for e in events)).days, 1)
     daily = total / span_days
     if daily <= 0:
         return None, None

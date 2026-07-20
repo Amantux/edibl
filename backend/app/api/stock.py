@@ -4,10 +4,10 @@ from flask import Blueprint, request, jsonify, abort
 
 from ..extensions import db
 from ..models import (StockLot, Product, Location, ConsumptionEvent, utcnow,
-                      STORAGE_METHODS)
+                      STORAGE_METHODS, LIFECYCLE_STATES, OUTCOMES, LOSS_OUTCOMES)
 from ..auth import login_required, current_group
 from ..schemas.serializers import stock_out, expiry_status
-from ..services.estimation import estimate_expiry
+from ..services.estimation import estimate_expiry, product_insights
 
 bp = Blueprint("stock", __name__)
 
@@ -21,11 +21,28 @@ def _parse_dt(v):
         return None
 
 
+def _days_kept(purchase):
+    """Whole days from purchase to now, tolerating tz-naive stored dates."""
+    if not purchase:
+        return None
+    p = purchase.replace(tzinfo=None) if purchase.tzinfo else purchase
+    return max((datetime.utcnow() - p).days, 0)
+
+
 def _get(lot_id):
     s = db.session.get(StockLot, lot_id)
     if not s or s.group_id != current_group().id:
         abort(404)
     return s
+
+
+def _valid_location(gid, location_id):
+    """A lot may only be placed in a location owned by its own group. Empty is OK
+    (unassigned). Guards against attaching stock to another tenant's location."""
+    if not location_id:
+        return True
+    loc = db.session.get(Location, location_id)
+    return bool(loc and loc.group_id == gid)
 
 
 def _resolve_product(data):
@@ -53,16 +70,22 @@ def _build_lot(data, product, gid):
     storage = data.get("storageMethod") or "refrigerated"
     if storage not in STORAGE_METHODS:
         storage = "refrigerated"
+    state = data.get("state") or ""
+    if state not in LIFECYCLE_STATES:
+        state = ""
     purchase = _parse_dt(data.get("purchaseDate")) or utcnow()
     expiry = _parse_dt(data.get("expiryDate"))
     estimated = False
     if not expiry:
+        # Personalized: learns from this household's own spoilage history for the
+        # product, falling back to the category/storage table.
         expiry, estimated = estimate_expiry(purchase, product.category, storage,
-                                            product.shelf_life_days)
+                                            product.shelf_life_days,
+                                            group_id=gid, product_id=product.id)
     return StockLot(
         product_id=product.id, location_id=data.get("locationId") or None,
         quantity=float(data.get("quantity") or 1), unit=data.get("unit") or product.default_unit,
-        storage_method=storage, purchase_date=purchase, expiry_date=expiry,
+        storage_method=storage, state=state, purchase_date=purchase, expiry_date=expiry,
         expiry_estimated=estimated, cost=data.get("cost"), source=data.get("source", ""),
         lot_code=data.get("lotCode", ""), notes=data.get("notes", ""),
         attrs=data.get("attrs") or {}, group_id=gid,
@@ -95,10 +118,13 @@ def list_stock():
 @login_required
 def create():
     data = request.get_json(force=True) or {}
+    gid = current_group().id
     product = _resolve_product(data)
     if not product:
         return jsonify({"error": "productId or productName required"}), 422
-    lot = _build_lot(data, product, current_group().id)
+    if not _valid_location(gid, data.get("locationId")):
+        return jsonify({"error": "unknown location"}), 422
+    lot = _build_lot(data, product, gid)
     db.session.add(lot)
     db.session.commit()
     return jsonify(stock_out(lot)), 201
@@ -120,9 +146,13 @@ def update(lot_id):
     if "unit" in data:
         s.unit = data["unit"]
     if "locationId" in data:
+        if not _valid_location(s.group_id, data["locationId"]):
+            return jsonify({"error": "unknown location"}), 422
         s.location_id = data["locationId"] or None
     if "storageMethod" in data and data["storageMethod"] in STORAGE_METHODS:
         s.storage_method = data["storageMethod"]
+    if "state" in data and data["state"] in LIFECYCLE_STATES:
+        s.state = data["state"]
     for k, attr in {"expiryDate": "expiry_date", "openedDate": "opened_date",
                     "purchaseDate": "purchase_date"}.items():
         if k in data:
@@ -142,23 +172,49 @@ def update(lot_id):
 @bp.post("/stock/<lot_id>/consume")
 @login_required
 def consume(lot_id):
-    """Use some/all of a lot. Records a ConsumptionEvent (feeds runout prediction)
-    and marks the lot finished when it hits zero."""
+    """Resolve some/all of a lot with an *outcome* — eaten (default), spoiled,
+    expired, discarded. Records a ConsumptionEvent with how long it was kept and
+    its ripeness state; this feeds runout prediction AND personalized shelf-life
+    learning (losses shorten future estimates for the product)."""
     s = _get(lot_id)
     data = request.get_json(force=True) or {}
     amount = data.get("quantity")
     amount = float(amount) if amount is not None else s.quantity  # default: all
     amount = min(amount, s.quantity)
     s.quantity = round(s.quantity - amount, 4)
-    reason = data.get("reason", "used")
+
+    outcome = (data.get("outcome") or "").strip().lower()
+    if outcome not in OUTCOMES:
+        # Back-compat: fall back to the legacy `reason` field.
+        legacy = (data.get("reason") or "used").strip().lower()
+        outcome = {"used": "eaten", "expired": "expired",
+                   "discarded": "discarded"}.get(legacy, "eaten")
+    state = (data.get("state") or s.state or "").strip()
+    if state not in LIFECYCLE_STATES:
+        state = ""
+    days_kept = _days_kept(s.purchase_date)
+
     if s.quantity <= 0:
         s.finished = True
         s.quantity = 0
-    db.session.add(ConsumptionEvent(product_id=s.product_id, quantity=amount,
-                                    unit=s.unit, reason=reason,
-                                    group_id=current_group().id))
+    db.session.add(ConsumptionEvent(
+        product_id=s.product_id, quantity=amount, unit=s.unit,
+        reason="used" if outcome == "eaten" else outcome,
+        outcome=outcome, days_kept=days_kept, state=state,
+        group_id=current_group().id))
     db.session.commit()
-    return jsonify(stock_out(s))
+    insight = None
+    if outcome in LOSS_OUTCOMES:
+        insight = product_insights(current_group().id, s.product_id).get("suggestion") or None
+    return jsonify({**stock_out(s), "insight": insight})
+
+
+@bp.get("/stock/<lot_id>/insights")
+@login_required
+def lot_insights(lot_id):
+    """Lifecycle insight for the product behind a lot."""
+    s = _get(lot_id)
+    return jsonify(product_insights(current_group().id, s.product_id))
 
 
 @bp.delete("/stock/<lot_id>")
@@ -169,14 +225,80 @@ def delete(lot_id):
     return "", 204
 
 
+def _bulk_create(shared, items, gid):
+    """Create many lots at once. `shared` supplies defaults (storageMethod,
+    category, locationId, source, purchaseDate, attrs) that each item can override.
+    Used by the generic bulk-add flow and the (optional) butchering preset."""
+    location_id = shared.get("locationId") or None
+    if not _valid_location(gid, location_id):
+        return None, (jsonify({"error": "unknown location"}), 422)
+    created = []
+    for it in items:
+        name = (it.get("name") or it.get("productName") or "").strip()
+        if not name:
+            continue
+        eff_loc = it.get("locationId") or location_id
+        if not _valid_location(gid, eff_loc):
+            db.session.rollback()
+            return None, (jsonify({"error": "unknown location"}), 422)
+        category = it.get("category") or shared.get("category") or "other"
+        product = _resolve_product({"productName": name, "category": category,
+                                    "barcode": it.get("barcode")})
+        merged = {
+            "productName": name,
+            "quantity": it.get("quantity", 1),
+            "unit": it.get("unit") or shared.get("unit"),
+            "category": category,
+            "storageMethod": it.get("storageMethod") or shared.get("storageMethod")
+            or "refrigerated",
+            "state": it.get("state") or shared.get("state") or "",
+            "locationId": eff_loc,
+            "purchaseDate": it.get("purchaseDate") or shared.get("purchaseDate"),
+            "expiryDate": it.get("expiryDate"),
+            "source": it.get("source") or shared.get("source") or "",
+            "cost": it.get("cost"),
+            "attrs": {**(shared.get("attrs") or {}), **(it.get("attrs") or {})},
+        }
+        lot = _build_lot(merged, product, gid)
+        db.session.add(lot)
+        created.append(lot)
+    db.session.commit()
+    return created, None
+
+
+@bp.post("/stock/bulk")
+@login_required
+def bulk_add():
+    """Add many items in one action — the flexible batch-intake path.
+
+    Body: { shared?: {storageMethod, category, locationId, source, purchaseDate,
+    attrs}, items: [{name, quantity?, unit?, category?, storageMethod?, state?,
+    barcode?, expiryDate?, attrs?}] }. Item fields override the shared defaults.
+    Expiry is auto-estimated per item when omitted. Freezing a butchered animal,
+    unpacking a grocery haul, and logging a farm box are all the same operation.
+    """
+    data = request.get_json(force=True) or {}
+    items = data.get("items") or []
+    if not items:
+        return jsonify({"error": "items[] required"}), 422
+    if len(items) > 500:
+        return jsonify({"error": "too many items (max 500)"}), 422
+    created, err = _bulk_create(data.get("shared") or {}, items, current_group().id)
+    if err:
+        return err
+    return jsonify({"created": len(created),
+                    "items": [stock_out(s) for s in created]}), 201
+
+
 @bp.post("/stock/butcher")
 @login_required
 def butcher_session():
-    """Butchering workflow: one animal/source → many vacuum-sealed frozen lots.
+    """Butchering preset over the generic bulk path: one animal/source → many
+    vacuum-sealed frozen lots, each with a long estimated expiry and a shared
+    session tag. Kept for back-compat; the UI now uses /stock/bulk directly.
 
     Body: { source, animal, locationId, freezeDate?, cuts: [{cut, name?, weightG,
-    quantity?, category?}] }. Each cut becomes a StockLot (vacuum_sealed + frozen)
-    with a long estimated expiry and shared session metadata in attrs.
+    quantity?, category?}] }.
     """
     data = request.get_json(force=True) or {}
     cuts = data.get("cuts") or []
@@ -184,28 +306,23 @@ def butcher_session():
         return jsonify({"error": "cuts[] required"}), 422
     gid = current_group().id
     session_id = data.get("sessionId") or utcnow().strftime("butcher-%Y%m%d-%H%M%S")
-    freeze = _parse_dt(data.get("freezeDate")) or utcnow()
-    location_id = data.get("locationId") or None
-    if location_id:
-        loc = db.session.get(Location, location_id)
-        if not loc or loc.group_id != gid:
-            return jsonify({"error": "unknown location"}), 422
-    created = []
-    for c in cuts:
-        cut_name = (c.get("name") or c.get("cut") or "Cut").strip()
-        product = _resolve_product({"productName": cut_name,
-                                    "category": c.get("category") or "meat"})
-        weight_g = c.get("weightG")
-        lot = _build_lot({
-            "quantity": c.get("quantity", 1), "unit": c.get("unit", "pack"),
-            "storageMethod": "vacuum_sealed", "purchaseDate": data.get("purchaseDate"),
-            "locationId": location_id, "source": data.get("source", "butcher"),
-            "attrs": {"cut": c.get("cut", cut_name), "animal": data.get("animal", ""),
-                      "weightG": weight_g, "freezeDate": freeze.isoformat(),
-                      "butcherSession": session_id},
-        }, product, gid)
-        db.session.add(lot)
-        created.append(lot)
-    db.session.commit()
+    freeze = (_parse_dt(data.get("freezeDate")) or utcnow()).isoformat()
+    shared = {
+        "storageMethod": "vacuum_sealed", "category": "meat",
+        "locationId": data.get("locationId") or None,
+        "source": data.get("source", "butcher"),
+        "purchaseDate": data.get("purchaseDate"),
+        "attrs": {"animal": data.get("animal", ""), "freezeDate": freeze,
+                  "butcherSession": session_id},
+    }
+    items = [{
+        "name": (c.get("name") or c.get("cut") or "Cut").strip(),
+        "quantity": c.get("quantity", 1), "unit": c.get("unit", "pack"),
+        "category": c.get("category") or "meat",
+        "attrs": {"cut": c.get("cut", (c.get("name") or "Cut")), "weightG": c.get("weightG")},
+    } for c in cuts]
+    created, err = _bulk_create(shared, items, gid)
+    if err:
+        return err
     return jsonify({"session": session_id, "created": len(created),
                     "items": [stock_out(s) for s in created]}), 201

@@ -137,6 +137,19 @@ STORAGE_METHODS = (
     "fresh", "refrigerated", "frozen", "vacuum_sealed", "pantry", "opened",
 )
 
+# Perishable lifecycle / condition of a lot right now (mainly for fruit & veg).
+# "" = not tracked. These feed personalized shelf-life learning + suggestions.
+LIFECYCLE_STATES = (
+    "", "unripe", "ripe", "overripe", "opened", "spoiling",
+)
+
+# How a lot (or part of one) left inventory. "Good" outcomes (eaten) teach us the
+# item lasted at least that long; "loss" outcomes (spoiled/expired/discarded) are
+# the signal that shortens the personalized shelf-life estimate for next time.
+OUTCOMES = ("eaten", "spoiled", "expired", "discarded", "other")
+GOOD_OUTCOMES = frozenset({"eaten", "used"})
+LOSS_OUTCOMES = frozenset({"spoiled", "expired", "discarded"})
+
 
 class StockLot(IDMixin, TimestampMixin, db.Model):
     __tablename__ = "stock_lots"
@@ -145,6 +158,8 @@ class StockLot(IDMixin, TimestampMixin, db.Model):
     quantity: Mapped[float] = mapped_column(Float, default=1)
     unit: Mapped[str] = mapped_column(String(16), default="count")
     storage_method: Mapped[str] = mapped_column(String(24), default="refrigerated")
+    # Current ripeness / condition (LIFECYCLE_STATES); "" when not tracked.
+    state: Mapped[str] = mapped_column(String(16), default="")
     purchase_date: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     opened_date: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     expiry_date: Mapped[datetime] = mapped_column(DateTime, nullable=True)
@@ -210,7 +225,13 @@ class ConsumptionEvent(IDMixin, db.Model):
     product_id: Mapped[str] = mapped_column(String(36), ForeignKey("products.id"), nullable=True)
     quantity: Mapped[float] = mapped_column(Float, default=0)
     unit: Mapped[str] = mapped_column(String(16), default="count")
-    reason: Mapped[str] = mapped_column(String(24), default="used")  # used/expired/discarded
+    reason: Mapped[str] = mapped_column(String(24), default="used")  # legacy: used/expired/discarded
+    # Richer lifecycle label (OUTCOMES) + how long the lot was kept before this
+    # event + its ripeness state at the time. These drive personalized shelf-life
+    # learning and per-item suggestions.
+    outcome: Mapped[str] = mapped_column(String(16), default="eaten")
+    days_kept: Mapped[int] = mapped_column(nullable=True)
+    state: Mapped[str] = mapped_column(String(16), default="")
     at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     group_id: Mapped[str] = mapped_column(String(36), ForeignKey("groups.id"))
     group = relationship("Group", back_populates="consumption")
@@ -220,6 +241,7 @@ __all__ = [
     "db", "gen_uuid", "utcnow",
     "Group", "User", "ApiToken", "TOKEN_PREFIX", "generate_raw_token", "hash_token",
     "Location", "LOCATION_KINDS", "Product", "CATEGORIES", "UNITS",
-    "StockLot", "STORAGE_METHODS", "ShelfLifeProfile", "ShoppingItem", "ConsumptionEvent",
-    "PlannedItem",
+    "StockLot", "STORAGE_METHODS", "LIFECYCLE_STATES", "OUTCOMES",
+    "GOOD_OUTCOMES", "LOSS_OUTCOMES",
+    "ShelfLifeProfile", "ShoppingItem", "ConsumptionEvent", "PlannedItem",
 ]

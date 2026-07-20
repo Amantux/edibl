@@ -20,9 +20,19 @@ client) can query and act on your inventory.
 - **Auto-estimate expiry** from the food's category × storage method — leave the
   date blank and Edibl fills it in. Vacuum-sealed + frozen meat lasts *years*;
   fresh dairy days.
+- **Learns your food's real shelf life** — mark how things left the kitchen
+  (eaten / spoiled / expired / tossed) and their ripeness (unripe/ripe/overripe);
+  Edibl personalizes future expiry estimates from *your* losses and suggests what
+  to buy less of ("your bananas usually last ~5 days"). Waste feed on the dashboard.
 - **"Use it or lose it" dashboard** — what's expiring soon, everywhere.
-- **Butchering workflow** — one animal → many **vacuum-sealed frozen cuts** in one
-  action, each with a long estimated shelf life and a shared session tag.
+- **Chat assistant on every screen** — ask "what's expiring?", "do I have eggs?",
+  "what am I wasting?", or just tell it what you bought/ate. Provider-neutral and
+  built for Home Assistant: point it at a local **Ollama**, any **OpenAI-compatible**
+  endpoint, or **Anthropic** — or use the built-in rules assistant with zero config.
+- **Flexible bulk add** — log a whole grocery haul, a farm box, or a butchered
+  animal in one action, with shared defaults + per-row overrides.
+- **Barcode intake** — scan (native browser `BarcodeDetector`) or type a code;
+  known products auto-fill, unknown ones can enrich from Open Food Facts.
 - **Wine & alcohol** specialty view (vintage / varietal / region).
 - **Shopping list → one-click "Copy for delivery"** — a paste-ready list for Uber
   Eats / Instacart, plus auto-suggestions for what you've run out of.
@@ -30,8 +40,27 @@ client) can query and act on your inventory.
   what you have vs. need, and **order just the shortfall**.
 - **Runout prediction** — learns your consumption rate and forecasts when you'll
   run out.
-- **MCP AI tooling** — 14 tools so you can *talk* to your pantry: "do I have
+- **MCP AI tooling** — tools so you can *talk* to your pantry: "do I have
   butter? / what's expiring? / can I make this recipe? / order what I'm short on."
+  Point Home Assistant's MCP Client (or myMeal's agent) at it.
+
+## Assistant setup (optional)
+
+The in-app chat works with **no configuration** (built-in rules assistant). For
+full natural-language chat and voice, set a provider:
+
+```bash
+# Local Ollama (recommended for Home Assistant / privacy):
+EDIBL_LLM_PROVIDER=ollama  EDIBL_LLM_BASE_URL=http://localhost:11434  EDIBL_LLM_MODEL=llama3.1
+# Any OpenAI-compatible endpoint:
+EDIBL_LLM_PROVIDER=openai  EDIBL_LLM_API_KEY=sk-...  EDIBL_LLM_MODEL=gpt-4o-mini
+# Anthropic:
+EDIBL_LLM_PROVIDER=anthropic  EDIBL_LLM_API_KEY=sk-ant-...  EDIBL_LLM_MODEL=claude-opus-4-8
+```
+
+The assistant uses the same inventory tools as the MCP server, so it can look
+things up and make changes (add stock, record what you ate/tossed, edit the
+shopping list). Optional barcode enrichment: `EDIBL_BARCODE_LOOKUP=1`.
 
 ## Quick start
 
@@ -47,8 +76,18 @@ docker compose up -d --build
 until curl -fsS http://localhost:7746/api/v1/ready; do sleep 2; done
 ```
 
+## Home Assistant
+
+Edibl ships as a **Home Assistant add-on** (runs in the sidebar via Ingress) and
+a **HACS integration** (sensors + an `add_to_shopping_list` service). Add this
+repo under **Settings → Add-ons → Repositories** to install the app, and/or as a
+HACS custom **integration** repository. Wire the chat assistant to a local
+**Ollama** or **OpenAI** endpoint, or talk to your pantry by voice via HA Assist
++ MCP. Full guide: [`docs/home-assistant.md`](docs/home-assistant.md).
+
 ## Docs
 
+- [`docs/home-assistant.md`](docs/home-assistant.md) — add-on, HACS integration, Ollama/OpenAI, Assist/voice.
 - [`docs/architecture.md`](docs/architecture.md) — data model, services, failure domains.
 - [`docs/integration.md`](docs/integration.md) — **myMeal ↔ Edibl ↔ HomeHoard** wiring + the MCP tools.
 - [`docs/roadmap.md`](docs/roadmap.md) — computer vision & weight estimation (planned) and more.

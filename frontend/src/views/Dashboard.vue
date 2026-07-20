@@ -5,10 +5,12 @@ import { api } from '../api'
 const router = useRouter()
 const d = ref(null)
 const runout = ref([])
+const lifecycle = ref([])
 onMounted(async () => {
   try {
     d.value = await api.get('/dashboard')
     runout.value = (await api.get('/dashboard/runout')).items
+    lifecycle.value = (await api.get('/dashboard/lifecycle')).items
   } catch (e) { /* handled by api 401 redirect */ }
 })
 </script>
@@ -56,6 +58,21 @@ onMounted(async () => {
         </tbody>
       </table>
       <div v-else class="muted">Not enough consumption history yet to forecast runout.</div>
+    </div>
+
+    <div class="card">
+      <h2>♻️ Lifecycle &amp; waste (learned)</h2>
+      <table v-if="lifecycle.length">
+        <thead><tr><th>Product</th><th>Lost</th><th>Suggestion</th></tr></thead>
+        <tbody>
+          <tr v-for="r in lifecycle" :key="r.productId">
+            <td><strong>{{ r.productName }}</strong></td>
+            <td><span class="badge" :class="r.wasteRate >= 0.4 ? 'expiring' : ''">{{ r.wasted }}×</span></td>
+            <td class="muted">{{ r.suggestion }}</td>
+          </tr>
+        </tbody>
+      </table>
+      <div v-else class="muted">No waste recorded yet — Edibl learns your food's real shelf life as you mark what you eat vs. toss. 🌱</div>
     </div>
   </div>
   <div v-else class="empty"><div class="ico">🥑</div><p>Loading your kitchen…</p></div>

@@ -64,6 +64,7 @@ def stock_out(s):
         "location": {"id": s.location.id, "name": s.location.name, "kind": s.location.kind}
         if s.location else None,
         "quantity": s.quantity, "unit": s.unit, "storageMethod": s.storage_method,
+        "state": s.state or "",
         "purchaseDate": iso(s.purchase_date), "openedDate": iso(s.opened_date),
         "expiryDate": iso(s.expiry_date), "expiryEstimated": s.expiry_estimated,
         "daysToExpiry": _days_to_expiry(s.expiry_date),

@@ -4,7 +4,7 @@ import Stock from './views/Stock.vue'
 import Shopping from './views/Shopping.vue'
 import Plan from './views/Plan.vue'
 import Locations from './views/Locations.vue'
-import Data from './views/Data.vue'
+import Settings from './views/Data.vue'
 import Login from './views/Login.vue'
 import { getToken } from './api'
 
@@ -14,7 +14,8 @@ const routes = [
   { path: '/shopping', component: Shopping },
   { path: '/plan', component: Plan },
   { path: '/locations', component: Locations },
-  { path: '/data', component: Data },
+  { path: '/settings', component: Settings },
+  { path: '/data', redirect: '/settings' },
   { path: '/login', component: Login, meta: { public: true } },
 ]
 const router = createRouter({ history: createWebHashHistory(), routes })

@@ -1,15 +1,18 @@
 <script setup>
+import { ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import ChatAssistant from './components/ChatAssistant.vue'
 const route = useRoute()
+const menuOpen = ref(false)
 const nav = [
   { to: '/', icon: '📊', label: 'Dashboard' },
   { to: '/stock', icon: '🥫', label: 'Stock' },
   { to: '/plan', icon: '🍽️', label: 'Meal plan' },
   { to: '/shopping', icon: '🛒', label: 'Shopping' },
   { to: '/locations', icon: '📍', label: 'Locations' },
-  { to: '/data', icon: '💾', label: 'Data' },
+  { to: '/settings', icon: '⚙️', label: 'Settings' },
 ]
+watch(() => route.path, () => { menuOpen.value = false })
 </script>
 
 <template>
@@ -17,7 +20,14 @@ const nav = [
     <router-view />
   </template>
   <div v-else class="app-shell">
-    <aside class="sidebar">
+    <!-- Mobile top bar -->
+    <header class="topbar">
+      <button class="menu-btn" aria-label="Menu" @click="menuOpen = !menuOpen">☰</button>
+      <div class="brand"><span class="logo">🥑</span> Edibl</div>
+    </header>
+
+    <div v-if="menuOpen" class="nav-backdrop" @click="menuOpen = false"></div>
+    <aside class="sidebar" :class="{ open: menuOpen }">
       <div class="brand"><span class="logo">🥑</span> Edibl</div>
       <router-link v-for="n in nav" :key="n.to" :to="n.to" class="nav-link">
         <span class="ico">{{ n.icon }}</span> {{ n.label }}

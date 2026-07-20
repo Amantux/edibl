@@ -215,7 +215,7 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
   <div v-if="loading" class="muted">Loading…</div>
 
   <!-- Grouped view -->
-  <div v-else-if="filter.view==='all' && groups.length" class="card" style="padding:0;overflow:hidden">
+  <div v-else-if="filter.view==='all' && groups.length" class="card tablewrap" style="padding:0">
     <table>
       <thead><tr><th>Group</th><th>Products</th><th>On hand</th><th>Next expiry</th><th></th></tr></thead>
       <tbody>
@@ -249,7 +249,7 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
   </div>
 
   <!-- Flat view (freezer / wine) -->
-  <div v-else-if="filter.view!=='all' && flatItems.length" class="card" style="padding:0;overflow:hidden">
+  <div v-else-if="filter.view!=='all' && flatItems.length" class="card tablewrap" style="padding:0">
     <table>
       <thead><tr><th>Item</th><th>Where</th><th>Qty</th><th>Storage</th><th>Expiry</th><th></th></tr></thead>
       <tbody>

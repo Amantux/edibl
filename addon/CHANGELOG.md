@@ -3,6 +3,15 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.4.3
+
+- **Mobile-friendly** — the sidebar now collapses into a top-bar menu on phones
+  (previously navigation was hidden on small screens), wide tables scroll, and
+  modals fit. A new **Settings** page shows the assistant status and the
+  export/import tools.
+- **Home Assistant messaging** — an importable **notification blueprint** sends
+  expiry alerts through any HA notify service (companion app, Telegram, …).
+
 ## 1.4.2
 
 - **Surfaced, undoable chat actions** — the chat now shows each tool call it made

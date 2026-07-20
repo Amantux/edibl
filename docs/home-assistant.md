@@ -116,6 +116,24 @@ Let Home Assistant's own assistant reach Edibl's tools:
    Conversation**. Now "what's expiring?" and "add milk to the shopping list"
    work by voice.
 
+## Messaging: alerts out, chat in
+
+Home Assistant's messaging can drive Edibl both directions:
+
+**Outbound — Edibl messages you.** Import the notification blueprint and it sends
+through any HA notify service (companion app, Telegram, …) when food is expiring:
+
+[![Open your Home Assistant instance and show the blueprint import dialog with a specific blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2FAmantux%2Fedibl%2Fblob%2Fmaster%2Fblueprints%2Fautomation%2Fedibl%2Fexpiring_notification.yaml)
+
+Pick your Edibl "Expiring soon" sensor, a notify service, and a time — done. (The
+sensor comes from the HACS integration above.)
+
+**Inbound — you message Edibl.** Any messaging channel wired to HA **Assist**
+(the companion app's Assist, a Telegram bot bound to a conversation agent, etc.)
+can talk to Edibl through the MCP path above — "do I have eggs?", "add milk". And
+Edibl's own chat box can reuse HA's conversation agent directly with
+`llm_provider: homeassistant` (completion-only).
+
 Edibl is the source of truth for what's actually on hand; myMeal owns recipes.
 Point the same MCP server at myMeal's agent too — see
 [`integration.md`](integration.md).

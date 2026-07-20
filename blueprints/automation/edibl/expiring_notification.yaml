@@ -1,0 +1,65 @@
+blueprint:
+  name: Edibl — Expiring food notification
+  description: >-
+    Send a message through any Home Assistant notify service (mobile app,
+    Telegram, etc.) when Edibl reports food expiring soon. Uses the Edibl HACS
+    integration's "Expiring soon" sensor.
+  domain: automation
+  source_url: https://github.com/Amantux/edibl/blob/master/blueprints/automation/edibl/expiring_notification.yaml
+  input:
+    edibl_sensor:
+      name: Edibl "Expiring soon" sensor
+      description: The sensor from the Edibl integration.
+      default: sensor.edibl_expiring_soon
+      selector:
+        entity:
+          domain: sensor
+    notify_service:
+      name: Notify service
+      description: >-
+        The notify service to send through, e.g. notify.mobile_app_myphone or
+        notify.telegram. (Find yours under Developer Tools → Actions.)
+      default: notify.notify
+      selector:
+        text:
+    at_time:
+      name: Time of day
+      description: When to check and notify.
+      default: "08:00:00"
+      selector:
+        time:
+    min_items:
+      name: Minimum items
+      description: Only notify if at least this many items are expiring.
+      default: 1
+      selector:
+        number:
+          min: 1
+          max: 50
+          mode: box
+
+mode: single
+
+variables:
+  sensor_entity: !input edibl_sensor
+  min_count: !input min_items
+
+trigger:
+  - platform: time
+    at: !input at_time
+
+condition:
+  - condition: template
+    value_template: "{{ (states(sensor_entity) | int(0)) >= (min_count | int(1)) }}"
+
+action:
+  - service: !input notify_service
+    data:
+      title: "🥑 Edibl — use it or lose it"
+      message: >-
+        {% set items = state_attr(sensor_entity, 'items') or [] %}
+        {% if items %}
+        {{ items | map(attribute='name') | join(', ') }} expiring soon ({{ items | length }} item(s)).
+        {% else %}
+        {{ states(sensor_entity) }} item(s) expiring soon.
+        {% endif %}

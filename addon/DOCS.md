@@ -23,7 +23,7 @@ Data is stored in the add-on's persistent `/data` (survives updates).
 | Option | Meaning |
 |---|---|
 | `disable_auth` | Keep **on** behind Ingress (HA authenticates you). |
-| `llm_provider` | `ollama` / `openai` / `anthropic`, or blank for the built-in rules assistant. |
+| `llm_provider` | `ollama` / `openai` / `anthropic` — **required** for the chat assistant. |
 | `llm_base_url` | e.g. `http://homeassistant.local:11434` for the HA **Ollama** add-on. |
 | `llm_api_key` | Only for `openai` / `anthropic`. |
 | `llm_model` | `llama3.1`, `gpt-4o-mini`, `claude-opus-4-8`, … |
@@ -33,8 +33,9 @@ Data is stored in the add-on's persistent `/data` (survives updates).
 
 ## Using Ollama (recommended) or OpenAI
 
-The chat box (bottom-right on every screen) works with **no config** via a
-built-in rules assistant. For full natural-language chat:
+The chat box (bottom-right on every screen) **requires an LLM provider** — set
+one below and it can query *and* act (add / update / remove stock, edit the
+shopping list). Without a provider the chat shows setup instructions.
 
 **Ollama, entirely local** — install the community **Ollama** add-on (or point at
 any Ollama host), pull a model (`ollama run llama3.1`), then set:
@@ -52,9 +53,9 @@ llm_model:    llama3.1
 (`claude-opus-4-8`).
 
 The assistant uses the same inventory tools as the MCP server, so it can look
-things up **and** act (add stock, record what you ate/tossed, edit the shopping
-list). An unreachable provider falls back to the rules assistant — the chat never
-goes dark.
+things up **and** act (add / update / remove stock, record what you ate/tossed,
+edit the shopping list). An unreachable provider shows an error rather than
+crashing the chat.
 
 ## Talking to your pantry through HA Assist (voice)
 

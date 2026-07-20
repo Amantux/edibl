@@ -11,9 +11,10 @@ const body = ref(null)
 
 const suggestions = [
   "What's expiring soon?",
-  'Do I have eggs?',
+  'Do I have milk?',
+  'Add 2 L of organic milk',
+  'Mark the milk as opened',
   'What am I wasting?',
-  'Add 6 eggs to the shopping list',
 ]
 
 onMounted(async () => {
@@ -57,16 +58,24 @@ function toggle() { open.value = !open.value; if (open.value) scrollDown() }
       <div class="phead">
         <strong>🥑 Ask Edibl</strong>
         <span class="tag" :class="cfg.enabled ? 'on' : 'off'">
-          {{ cfg.enabled ? cfg.provider : 'built-in' }}</span>
+          {{ cfg.enabled ? cfg.provider : 'not set up' }}</span>
       </div>
 
       <div ref="body" class="pbody">
-        <div v-if="!msgs.length" class="hello">
-          <p class="muted">Ask about your kitchen — what you have, what's expiring, what you tend to waste — or tell me what you bought or ate.</p>
+        <div v-if="!cfg.enabled" class="hello">
+          <p class="muted">🔌 The assistant needs an LLM. Set a provider in the Edibl add-on options (or <code>EDIBL_LLM_PROVIDER</code>):</p>
+          <ul class="setup">
+            <li><strong>Ollama</strong> (local): base URL <code>http://homeassistant.local:11434</code>, model <code>llama3.1</code></li>
+            <li><strong>OpenAI</strong>: API key + model <code>gpt-4o-mini</code></li>
+            <li><strong>Anthropic</strong>: API key + model <code>claude-opus-4-8</code></li>
+          </ul>
+          <p class="muted tiny">Then it can look things up and add / update / remove stock and your shopping list by chat.</p>
+        </div>
+        <div v-else-if="!msgs.length" class="hello">
+          <p class="muted">Ask about your kitchen — what you have, what's expiring, what you tend to waste — or tell me what you bought, ate, or want to change.</p>
           <div class="chips">
             <button v-for="s in suggestions" :key="s" class="chip-btn" @click="send(s)">{{ s }}</button>
           </div>
-          <p v-if="!cfg.enabled" class="muted tiny">Built-in assistant. For full natural-language chat &amp; voice, set <code>EDIBL_LLM_PROVIDER</code> (ollama / openai / anthropic).</p>
         </div>
         <div v-for="(m, i) in msgs" :key="i" class="msg" :class="m.role">
           <div class="bubble">{{ m.content }}</div>
@@ -78,8 +87,9 @@ function toggle() { open.value = !open.value; if (open.value) scrollDown() }
       </div>
 
       <form class="pfoot" @submit.prevent="send()">
-        <input v-model="input" :disabled="busy" placeholder="Message Edibl…" autofocus />
-        <button type="submit" :disabled="busy || !input.trim()">Send</button>
+        <input v-model="input" :disabled="busy || !cfg.enabled"
+          :placeholder="cfg.enabled ? 'Message Edibl…' : 'Configure an LLM provider to chat'" autofocus />
+        <button type="submit" :disabled="busy || !cfg.enabled || !input.trim()">Send</button>
       </form>
     </div>
   </div>
@@ -105,6 +115,8 @@ function toggle() { open.value = !open.value; if (open.value) scrollDown() }
 .tag.off { background: var(--surface, #2a2e34); color: var(--muted, #999); }
 .pbody { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
 .hello { display: flex; flex-direction: column; gap: 10px; }
+.setup { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; font-size: .82rem; }
+.setup code { font-size: .76rem; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip-btn {
   border: 1px solid var(--border, #333); background: var(--surface, #2a2e34);

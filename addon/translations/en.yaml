@@ -8,8 +8,8 @@ configuration:
   llm_provider:
     name: Chat assistant provider
     description: >-
-      Which LLM backend powers the in-app pantry chat. Leave blank for the
-      built-in rules assistant (zero config). ollama / openai / anthropic.
+      Which LLM backend powers the in-app pantry chat. Required for the chat —
+      ollama / openai / anthropic. Left blank, the chat shows setup guidance.
   llm_base_url:
     name: LLM base URL
     description: >-

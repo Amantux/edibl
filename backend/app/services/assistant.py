@@ -6,12 +6,12 @@ you ate, and manage the shopping list — from a chat box on every screen.
 
 Provider is operator-configured (built for Home Assistant deployments):
 
-    EDIBL_LLM_PROVIDER = ollama | openai | anthropic | ""(rules)
+    EDIBL_LLM_PROVIDER = ollama | openai | anthropic
     EDIBL_LLM_BASE_URL, EDIBL_LLM_API_KEY, EDIBL_LLM_MODEL
 
 `ollama` and `openai` speak the OpenAI-style function-calling shape; `anthropic`
-speaks the Messages API. With no provider set, a built-in rules assistant handles
-the common intents deterministically, so the chat works with zero configuration.
+speaks the Messages API. An LLM provider is required — with none configured the
+chat returns setup guidance instead of a degraded experience.
 
 Tool handlers operate directly on the DB (no HTTP hop) and are fully unit-tested;
 the network provider loops follow each vendor's documented tool-calling shape.
@@ -384,35 +384,46 @@ def _cfg():
     }
 
 
+_PROVIDERS = ("ollama", "openai", "anthropic")
+
+SETUP_MESSAGE = (
+    "The chat assistant needs an LLM. In the Edibl add-on options (or via "
+    "EDIBL_LLM_PROVIDER) set a provider — ollama, openai, or anthropic — e.g. a "
+    "local Ollama at http://homeassistant.local:11434 with model llama3.1."
+)
+
+
 def config_public():
     cfg = _cfg()
-    return {"enabled": cfg["provider"] in ("ollama", "openai", "anthropic"),
-            "provider": cfg["provider"] or "rules",
-            "model": cfg["model"] if cfg["provider"] else None}
+    enabled = cfg["provider"] in _PROVIDERS
+    return {"enabled": enabled, "provider": cfg["provider"] or "none",
+            "model": cfg["model"] if enabled else None,
+            "setup": None if enabled else SETUP_MESSAGE}
 
 
 def run_chat(gid, messages):
     """messages: [{role: 'user'|'assistant', content: str}] → {reply, actions,
-    provider, model}. Dispatches to the configured provider; falls back to the
-    built-in rules assistant when none is set (or on provider error)."""
+    provider, model, enabled}. Requires a configured LLM provider; without one it
+    returns setup guidance rather than a degraded experience."""
     cfg = _cfg()
     provider = cfg["provider"]
+    if provider not in _PROVIDERS:
+        return {"reply": SETUP_MESSAGE, "actions": [], "provider": "none",
+                "model": None, "enabled": False}
     actions = []
     try:
         if provider == "anthropic":
             reply = _loop_anthropic(gid, messages, cfg, actions)
-        elif provider in ("openai", "ollama"):
-            reply = _loop_openai_style(gid, messages, cfg, actions)
         else:
-            reply = _rules_reply(gid, messages, actions)
-            provider = "rules"
+            reply = _loop_openai_style(gid, messages, cfg, actions)
     except Exception as exc:  # noqa: BLE001 — never 500 the chat box
         _LOGGER.warning("assistant provider '%s' failed: %s", provider, exc)
-        reply = (f"(The '{provider}' assistant backend is unreachable — "
-                 f"{exc}.) ") + _rules_reply(gid, messages, actions)
-        provider = f"{provider}:error→rules"
-    return {"reply": reply, "actions": actions,
-            "provider": provider, "model": cfg["model"] if cfg["provider"] else None}
+        return {"reply": f"The '{provider}' assistant is unreachable ({exc}). "
+                "Check the base URL and model in the add-on options.",
+                "actions": actions, "provider": f"{provider}:error",
+                "model": cfg["model"], "enabled": True}
+    return {"reply": reply, "actions": actions, "provider": provider,
+            "model": cfg["model"], "enabled": True}
 
 
 # --------------------------------------------------------------------------- #
@@ -502,37 +513,3 @@ def _loop_anthropic(gid, user_messages, cfg, actions):
                                     "tool_use_id": b["id"], "content": result})
             convo.append({"role": "user", "content": results})
     return "I've done what I can — ask me to continue if there's more."
-
-
-# --------------------------------------------------------------------------- #
-# Built-in rules assistant (no LLM configured) — handles the common intents so
-# the chat box is useful with zero setup.
-# --------------------------------------------------------------------------- #
-def _rules_reply(gid, messages, actions):
-    text = ""
-    for m in reversed(messages):
-        if m.get("role") == "user":
-            text = (m.get("content") or "").strip()
-            break
-    low = text.lower()
-
-    if any(w in low for w in ("expir", "use it", "going bad", "use-it-or-lose")):
-        return h_expiring_soon(gid, 5)
-    if any(w in low for w in ("shopping", "buy", "grocery", "need to get")):
-        return "Shopping list:\n" + h_shopping_list(gid)
-    if any(w in low for w in ("waste", "wasting", "throw", "insight", "suggest")):
-        return _run_tool(gid, "food_insights", {}, actions)
-    if low.startswith(("do i have", "do we have", "have i got", "is there any")):
-        ing = (low.replace("do i have", "").replace("do we have", "")
-               .replace("have i got", "").replace("is there any", "")
-               .strip(" ?."))
-        if ing:
-            return _run_tool(gid, "do_i_have", {"ingredient": ing}, actions)
-    if any(w in low for w in ("what do i have", "what's in stock", "whats in stock",
-                              "in stock", "inventory")):
-        return _run_tool(gid, "whats_in_stock", {}, actions)
-
-    return ("I can tell you what you have, what's expiring, what you tend to waste, "
-            "and manage your shopping list. For full natural-language chat and "
-            "adding items by voice, set EDIBL_LLM_PROVIDER (ollama / openai / "
-            "anthropic). Try: “what's expiring?”, “do I have eggs?”, or “shopping list”.")

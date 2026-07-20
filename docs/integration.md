@@ -81,16 +81,17 @@ assistant** on every screen — the same inventory tools, provider-neutral so it
 suits a Home Assistant deployment:
 
 ```
-EDIBL_LLM_PROVIDER = ollama | openai | anthropic | ""(built-in rules)
+EDIBL_LLM_PROVIDER = ollama | openai | anthropic
 EDIBL_LLM_BASE_URL, EDIBL_LLM_API_KEY, EDIBL_LLM_MODEL
 ```
 
 `ollama`/`openai` use the OpenAI function-calling shape; `anthropic` uses the
-Messages API. With no provider set, a rules assistant handles the common intents
-(zero config). Endpoints: `GET /api/v1/assistant/config`, `POST
-/api/v1/assistant/chat` ({messages:[{role,content}]} → {reply, actions}). A
-misconfigured/unreachable provider degrades to the rules assistant rather than
-erroring, so the chat box never goes dark.
+Messages API. An LLM provider is **required** — with none configured the chat
+returns setup guidance (`/api/v1/assistant/config` reports `enabled:false` +
+`setup`). With a provider it can query and full-CRUD stock. Endpoints:
+`GET /api/v1/assistant/config`, `POST /api/v1/assistant/chat`
+({messages:[{role,content}]} → {reply, actions, enabled}). An unreachable
+provider returns an error message rather than 500-ing the chat box.
 
 Example conversation the tools enable:
 

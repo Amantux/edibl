@@ -78,8 +78,8 @@ llm_model:    gpt-4o-mini
 ```
 
 It uses the same inventory tools as the MCP server, so it can look things up and
-act (add stock, record eaten/tossed, edit the shopping list). No provider set →
-a built-in rules assistant still handles the common questions.
+act (add / update / remove stock, record eaten/tossed, edit the shopping list).
+A provider is required — without one the chat shows setup guidance.
 
 ### B. HA Assist / voice (through MCP)
 

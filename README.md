@@ -35,7 +35,8 @@ client) can query and act on your inventory.
 - **Chat assistant on every screen** — ask "what's expiring?", "do I have eggs?",
   "what am I wasting?", or just tell it what you bought/ate. Provider-neutral and
   built for Home Assistant: point it at a local **Ollama**, any **OpenAI-compatible**
-  endpoint, or **Anthropic** — or use the built-in rules assistant with zero config.
+  endpoint, or **Anthropic**. It can look things up *and* act — add, update, and
+  remove stock and shopping-list items by chat. (Requires a configured provider.)
 - **Flexible bulk add** — log a whole grocery haul, a farm box, or a butchered
   animal in one action, with shared defaults + per-row overrides.
 - **Barcode intake** — scan (native browser `BarcodeDetector`) or type a code;
@@ -51,10 +52,11 @@ client) can query and act on your inventory.
   butter? / what's expiring? / can I make this recipe? / order what I'm short on."
   Point Home Assistant's MCP Client (or myMeal's agent) at it.
 
-## Assistant setup (optional)
+## Assistant setup (required for chat)
 
-The in-app chat works with **no configuration** (built-in rules assistant). For
-full natural-language chat and voice, set a provider:
+The chat assistant needs an LLM provider — set one and it can query **and** act
+(add / update / remove stock, edit the shopping list). Without a provider the
+chat shows setup guidance instead. Pick one:
 
 ```bash
 # Local Ollama (recommended for Home Assistant / privacy):

@@ -3,7 +3,7 @@
 ## Delivered
 - **Chat assistant, everywhere** — a floating assistant on every screen, backed
   by a provider-neutral LLM layer (`EDIBL_LLM_PROVIDER` = ollama | openai |
-  anthropic, or the built-in rules assistant with zero config). It uses the same
+  anthropic — a provider is required). It uses the same
   inventory tools the MCP server exposes. Built for Home Assistant: point it at a
   local Ollama or any OpenAI-compatible / Anthropic endpoint.
 - **Flexible bulk add** — one action to log many items (a grocery haul, a farm

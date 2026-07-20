@@ -175,28 +175,19 @@ def test_barcode_unknown(auth_client):
     assert r["found"] is False
 
 
-# --- assistant (rules backend, no LLM configured) ---------------------------
-def test_assistant_config_defaults_to_rules(auth_client):
+# --- assistant (requires an LLM provider) -----------------------------------
+def test_assistant_config_needs_provider(auth_client):
     cfg = auth_client.get("/api/v1/assistant/config").get_json()
-    assert cfg["enabled"] is False and cfg["provider"] == "rules"
+    assert cfg["enabled"] is False and cfg["provider"] == "none"
+    assert cfg["setup"]  # setup guidance present
 
 
-def test_assistant_chat_answers_do_i_have(auth_client):
-    _add(auth_client, "Whole milk", category="dairy", quantity=2)
-    r = auth_client.post("/api/v1/assistant/chat",
-                         json={"message": "do I have milk?"})
+def test_assistant_chat_without_provider_returns_setup(auth_client):
+    r = auth_client.post("/api/v1/assistant/chat", json={"message": "do I have milk?"})
     assert r.status_code == 200
     body = r.get_json()
-    assert "milk" in body["reply"].lower() and body["provider"] == "rules"
-    assert any(a["tool"] == "do_i_have" for a in body["actions"])
-
-
-def test_assistant_chat_expiring(auth_client):
-    _add(auth_client, "Cream", category="dairy", storageMethod="fresh",
-         expiryDate=_iso_days_ago(-1))  # expires tomorrow
-    r = auth_client.post("/api/v1/assistant/chat",
-                         json={"messages": [{"role": "user", "content": "what's expiring?"}]})
-    assert r.status_code == 200 and "Cream" in r.get_json()["reply"]
+    assert body["enabled"] is False and body["provider"] == "none"
+    assert body["actions"] == [] and "LLM" in body["reply"]
 
 
 def test_assistant_requires_message(auth_client):

@@ -30,6 +30,9 @@ The integration reads Edibl's REST API and exposes:
 - Sensors: **Items in stock**, **Expiring soon** (with an `items` attribute),
   **Expired**, **Products**, **Locations**, **Wasted products (learned)** (with a
   `suggestions` attribute).
+- A **To-do List** entity — your Edibl shopping list, two-way synced. Add items
+  by voice ("add milk to the shopping list") or from any dashboard, check them
+  off, and it updates Edibl (and vice-versa).
 - Service: **`edibl.add_to_shopping_list`** (`name`, `quantity`, `unit`).
 
 **Install:** HACS → ⋮ → **Custom repositories** → add
@@ -87,12 +90,19 @@ Supervisor conversation API) but is **completion-only** — perfect for receipt
 extraction and simple Q&A, not tool-based CRUD (HA can't expose Edibl's tools to
 it). A provider is required — without one the chat shows setup guidance.
 
-### Paste a receipt / order → auto-add
+### Paste a receipt / order → auto-add (text or photo)
 
-In **Bulk add**, paste a grocery receipt or delivery-order confirmation and hit
-**✨ Extract items** — the LLM pulls out the food items (name / quantity / unit /
-category), you review the rows, then **Add all**. Works with any configured
-provider, including `homeassistant`.
+In **Bulk add**, paste a grocery receipt / order confirmation and hit **✨ Extract
+from text**, or tap **📷 Photo** to snap the receipt — the LLM pulls out the food
+items (name / quantity / unit / category), you review the rows, then **Add all**.
+Text works with any provider (including `homeassistant`); **photo needs a
+vision-capable model** (gpt-4o, Claude, or `llava` on Ollama).
+
+## Backup & export
+
+Home Assistant already snapshots the add-on's storage in its own backups. For a
+portable copy, the **Data** page in Edibl exports a full JSON snapshot (and a
+stock CSV) and imports it back — additive, so it never deletes.
 
 ### B. HA Assist / voice (through MCP)
 

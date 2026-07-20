@@ -15,7 +15,7 @@ from .const import CONF_HOST, CONF_TOKEN, DOMAIN, SERVICE_ADD_TO_SHOPPING
 from .coordinator import EdiblCoordinator
 
 _LOGGER = logging.getLogger(__name__)
-PLATFORMS: list[Platform] = [Platform.SENSOR]
+PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.TODO]
 
 _ADD_SHOPPING_SCHEMA = vol.Schema(
     {

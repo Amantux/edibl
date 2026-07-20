@@ -70,6 +70,42 @@ def test_suggestions_merges_seeds_and_in_use(auth_client):
     assert "fresh" in s["freshness"]
 
 
+# --- export / import --------------------------------------------------------
+def test_export_snapshot_and_csv(auth_client):
+    loc = auth_client.post("/api/v1/locations",
+                           json={"name": "Fridge", "kind": "fridge"}).get_json()
+    _add(auth_client, "Milk", category="dairy", family="Milk", quantity=2, unit="l",
+         locationId=loc["id"], source="Costco")
+    auth_client.post("/api/v1/shopping", json={"name": "Eggs", "quantity": 12})
+    exp = auth_client.get("/api/v1/export").get_json()
+    assert exp["edibl"] == "1"
+    assert len(exp["stock"]) == 1 and len(exp["shopping"]) == 1 and len(exp["locations"]) == 1
+    csv = auth_client.get("/api/v1/export/stock.csv")
+    assert csv.status_code == 200
+    text = csv.get_data(as_text=True)
+    assert text.splitlines()[0].startswith("product,group,category")
+    assert "Milk" in text
+
+
+def test_import_creates_and_is_additive(auth_client):
+    snap = {
+        "products": [{"name": "Tofu", "category": "protein", "family": "Soy"}],
+        "locations": [{"name": "Pantry", "kind": "pantry"}],
+        "stock": [{"product": {"name": "Tofu", "category": "protein"},
+                   "quantity": 3, "unit": "block", "storageMethod": "refrigerated",
+                   "location": {"name": "Pantry"}}],
+        "shopping": [{"name": "Rice", "quantity": 1, "status": "needed"}],
+    }
+    imp = auth_client.post("/api/v1/import", json=snap).get_json()["imported"]
+    assert imp == {"products": 1, "locations": 1, "stock": 1, "shopping": 1}
+    items = auth_client.get("/api/v1/stock").get_json()["items"]
+    assert any(i["product"]["name"] == "Tofu" for i in items)
+    # re-import: additive — products/locations/shopping deduped, only stock appends
+    imp2 = auth_client.post("/api/v1/import", json=snap).get_json()["imported"]
+    assert imp2["products"] == 0 and imp2["locations"] == 0 and imp2["shopping"] == 0
+    assert imp2["stock"] == 1
+
+
 # --- agent-style CRUD via the REST surface ----------------------------------
 def test_stock_update_and_delete(auth_client):
     lot = _add(auth_client, "Butter", category="dairy", quantity=2, unit="stick")

@@ -61,19 +61,44 @@ onMounted(async () => {
   await load()
 })
 
+function applyExtracted(res, note) {
+  if (res.error) { flash(res.error); return }
+  if (!res.items?.length) { flash('No items found — check the input or add rows manually.'); return }
+  bulk.value.rows = res.items.map((i) => ({
+    name: i.name, quantity: i.quantity ?? 1, unit: i.unit || 'count',
+    category: i.category || '', storageMethod: '' }))
+  flash(`Extracted ${res.items.length} items ${note} — review and Add all.`)
+}
 async function extractReceipt() {
   if (!receiptText.value.trim()) return
   if (!assistantCfg.value.enabled) { flash('Set an LLM provider in the add-on options to extract receipts.'); return }
   extracting.value = true
+  try { applyExtracted(await api.post('/stock/extract', { text: receiptText.value }), 'from text') }
+  catch (e) { flash('Extract failed: ' + (e.message || 'error')) } finally { extracting.value = false }
+}
+function downscale(file, max, quality) {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => {
+      const scale = Math.min(1, max / Math.max(img.width, img.height))
+      const w = Math.round(img.width * scale), h = Math.round(img.height * scale)
+      const canvas = document.createElement('canvas'); canvas.width = w; canvas.height = h
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h)
+      resolve(canvas.toDataURL('image/jpeg', quality).split(',')[1])
+    }
+    img.onerror = reject
+    img.src = URL.createObjectURL(file)
+  })
+}
+async function extractPhoto(e) {
+  const file = e.target.files?.[0]; e.target.value = ''
+  if (!file) return
+  if (!assistantCfg.value.enabled) { flash('Set a provider with a vision model (gpt-4o / claude / llava) to read photos.'); return }
+  extracting.value = true
   try {
-    const res = await api.post('/stock/extract', { text: receiptText.value })
-    if (res.error) { flash(res.error); return }
-    if (!res.items?.length) { flash('No items found — check the text or add rows manually.'); return }
-    bulk.value.rows = res.items.map((i) => ({
-      name: i.name, quantity: i.quantity ?? 1, unit: i.unit || 'count',
-      category: i.category || '', storageMethod: '' }))
-    flash(`Extracted ${res.items.length} items — review and Add all.`)
-  } catch (e) { flash('Extract failed: ' + (e.message || 'error')) } finally { extracting.value = false }
+    const b64 = await downscale(file, 1600, 0.8)
+    applyExtracted(await api.post('/stock/extract', { image: b64, mediaType: 'image/jpeg' }), 'from photo')
+  } catch (err) { flash('Photo extract failed: ' + (err.message || 'error')) } finally { extracting.value = false }
 }
 
 function toggle(key) { expanded[key] = !expanded[key] }
@@ -305,12 +330,15 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
       <p class="muted" style="margin-top:0">Many items at once — a grocery haul, a farm box, or a butchered animal. Shared settings apply to every row.</p>
 
       <div class="receipt">
-        <label class="field"><span>✨ Paste a receipt or order (auto-extract)</span>
+        <label class="field"><span>✨ Paste a receipt / order — or snap a photo</span>
           <textarea v-model="receiptText" rows="3"
             :placeholder="assistantCfg.enabled ? 'Paste your grocery receipt or order confirmation…' : 'Set an LLM provider (add-on options) to auto-extract'" /></label>
-        <div class="row" style="justify-content:flex-end">
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <label class="secondary sm" :class="{ disabled: extracting || !assistantCfg.enabled }" style="cursor:pointer">📷 Photo
+            <input type="file" hidden accept="image/*" capture="environment"
+              :disabled="extracting || !assistantCfg.enabled" @change="extractPhoto" /></label>
           <button class="secondary sm" :disabled="extracting || !assistantCfg.enabled || !receiptText.trim()"
-            @click="extractReceipt">{{ extracting ? 'Extracting…' : '✨ Extract items' }}</button>
+            @click="extractReceipt">{{ extracting ? 'Extracting…' : '✨ Extract from text' }}</button>
         </div>
       </div>
       <div class="divider"></div>
@@ -382,4 +410,5 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
 .outcome-grid button { width: 100%; }
 .sm { font-size: .8rem; }
 .receipt textarea { width: 100%; resize: vertical; }
+.secondary.disabled { opacity: .5; pointer-events: none; }
 </style>

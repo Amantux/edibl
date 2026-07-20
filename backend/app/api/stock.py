@@ -313,12 +313,16 @@ def _bulk_create(shared, items, gid):
 @bp.post("/stock/extract")
 @login_required
 def extract():
-    """Turn a pasted receipt / order confirmation into a reviewable item list via
-    the configured LLM. Body: { text }. Returns { items, provider } — nothing is
-    added; the client reviews the items and POSTs them to /stock/bulk."""
+    """Turn a pasted receipt / order — as text OR a photo — into a reviewable item
+    list via the configured LLM. Body: { text } or { image (base64), mediaType }.
+    Returns { items, provider }; nothing is added (client reviews then bulk-adds)."""
     from ..services import assistant
     data = request.get_json(force=True) or {}
-    result = assistant.extract_items(data.get("text", ""))
+    image = data.get("image") or None
+    if image and "," in image[:64]:  # tolerate a data: URL prefix
+        image = image.split(",", 1)[1]
+    result = assistant.extract_items(text=data.get("text", ""), image=image,
+                                     media_type=data.get("mediaType", "image/jpeg"))
     return jsonify(result)
 
 

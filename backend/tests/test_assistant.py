@@ -117,6 +117,24 @@ def test_extract_without_provider(app):
     assert res["enabled"] is False and res["items"] == [] and res["error"]
 
 
+def test_extract_photo_via_vision(app, monkeypatch):
+    _configure(app, "openai")
+    app.config["LLM_MODEL"] = "gpt-4o"
+    script = [{"choices": [{"message": {
+        "content": '[{"name":"Bread","quantity":1,"unit":"loaf"}]'}}]}]
+    monkeypatch.setattr(httpx, "Client", lambda *a, **k: _FakeClient(script))
+    with app.app_context():
+        res = assistant.extract_items(image="ZmFrZWltYWdl", media_type="image/png")
+    assert res["items"] == [{"name": "Bread", "quantity": 1.0, "unit": "loaf"}]
+
+
+def test_photo_extract_rejected_for_homeassistant(app):
+    app.config["LLM_PROVIDER"] = "homeassistant"
+    with app.app_context():
+        res = assistant.extract_items(image="ZmFrZQ==")
+    assert res["items"] == [] and "vision" in res["error"].lower()
+
+
 def test_parse_items_handles_garbage(app):
     with app.app_context():
         assert assistant._parse_items("no json at all") == []

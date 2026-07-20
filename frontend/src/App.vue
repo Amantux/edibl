@@ -8,6 +8,7 @@ const nav = [
   { to: '/plan', icon: '🍽️', label: 'Meal plan' },
   { to: '/shopping', icon: '🛒', label: 'Shopping' },
   { to: '/locations', icon: '📍', label: 'Locations' },
+  { to: '/data', icon: '💾', label: 'Data' },
 ]
 </script>
 

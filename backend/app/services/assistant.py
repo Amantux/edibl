@@ -543,17 +543,68 @@ def _parse_items(text):
     return items
 
 
-def extract_items(text):
-    """LLM-extract items from receipt/order text. Returns {items, provider, enabled}.
-    No inventory is changed — the caller reviews then bulk-adds."""
+_EXTRACT_IMAGE_USER = "Extract the food/grocery items from this receipt or order photo."
+
+
+def _complete_vision(cfg, system, user, image_b64, media_type):
+    """One completion where the user turn includes an image. Requires a vision
+    model (gpt-4o / claude / llava). image_b64 is raw base64 (no data: prefix)."""
+    import httpx
+
+    provider = cfg["provider"]
+    with httpx.Client(timeout=cfg["timeout"]) as client:
+        if provider == "ollama":
+            r = client.post(cfg["base_url"] + "/api/chat", json={
+                "model": cfg["model"], "stream": False,
+                "messages": [{"role": "system", "content": system},
+                             {"role": "user", "content": user, "images": [image_b64]}]})
+            r.raise_for_status()
+            return r.json()["message"].get("content", "")
+        if provider == "openai":
+            headers = {"Authorization": f"Bearer {cfg['api_key']}"} if cfg["api_key"] else {}
+            data_url = f"data:{media_type};base64,{image_b64}"
+            r = client.post(cfg["base_url"] + "/chat/completions", headers=headers, json={
+                "model": cfg["model"],
+                "messages": [{"role": "system", "content": system},
+                             {"role": "user", "content": [
+                                 {"type": "text", "text": user},
+                                 {"type": "image_url", "image_url": {"url": data_url}}]}]})
+            r.raise_for_status()
+            return r.json()["choices"][0]["message"].get("content", "") or ""
+        if provider == "anthropic":
+            headers = {"x-api-key": cfg["api_key"], "anthropic-version": "2023-06-01"}
+            r = client.post(cfg["base_url"] + "/v1/messages", headers=headers, json={
+                "model": cfg["model"], "max_tokens": 2048, "system": system,
+                "messages": [{"role": "user", "content": [
+                    {"type": "image", "source": {"type": "base64",
+                     "media_type": media_type, "data": image_b64}},
+                    {"type": "text", "text": user}]}]})
+            r.raise_for_status()
+            return "".join(b.get("text", "") for b in r.json().get("content", [])
+                           if b.get("type") == "text")
+    raise ValueError("vision not supported for this provider")
+
+
+def extract_items(text=None, image=None, media_type="image/jpeg"):
+    """LLM-extract items from receipt/order *text or a photo*. Returns
+    {items, provider, enabled}. No inventory is changed — caller reviews + bulk-adds."""
     cfg = _cfg()
     if cfg["provider"] not in _PROVIDERS:
         return {"items": [], "enabled": False, "provider": "none", "error": SETUP_MESSAGE}
-    text = (text or "").strip()[:8000]
-    if not text:
-        return {"items": [], "enabled": True, "provider": cfg["provider"], "error": "empty text"}
     try:
-        reply = _complete(cfg, _EXTRACT_SYSTEM, text)
+        if image:
+            if cfg["provider"] == "homeassistant":
+                return {"items": [], "enabled": True, "provider": cfg["provider"],
+                        "error": "Photo extraction needs a vision model — use "
+                                 "ollama/openai/anthropic (e.g. gpt-4o, claude, llava)."}
+            reply = _complete_vision(cfg, _EXTRACT_SYSTEM, _EXTRACT_IMAGE_USER,
+                                     image, media_type or "image/jpeg")
+        else:
+            t = (text or "").strip()[:8000]
+            if not t:
+                return {"items": [], "enabled": True, "provider": cfg["provider"],
+                        "error": "empty text"}
+            reply = _complete(cfg, _EXTRACT_SYSTEM, t)
     except Exception as exc:  # noqa: BLE001
         _LOGGER.warning("extract via '%s' failed: %s", cfg["provider"], exc)
         return {"items": [], "enabled": True, "provider": cfg["provider"],

@@ -3,6 +3,8 @@ version: "1.0.0"
 slug: edibl
 description: Your kitchen's real food inventory — freshness, waste-learning, and a pantry chat assistant (Ollama / OpenAI / Anthropic).
 url: https://github.com/Amantux/edibl/tree/master/addon
+# Prebuilt by GitHub Actions and pulled from GHCR — no build on your device.
+image: ghcr.io/amantux/edibl-{arch}
 # armv7 is omitted: bcrypt/cryptography wheels are unreliable on 32-bit musl.
 arch:
   - amd64

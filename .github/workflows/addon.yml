@@ -1,0 +1,43 @@
+name: Build add-on
+
+# Build multi-arch Edibl add-on images and publish them to GHCR, so Home
+# Assistant just pulls a prebuilt image (no build on your device).
+on:
+  push:
+    branches: [master]
+    paths:
+      - "addon/**"
+      - "backend/**"
+      - "docker-entrypoint.sh"
+      - ".github/workflows/addon.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [aarch64, amd64]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ${{ matrix.arch }}
+        uses: home-assistant/builder@master
+        with:
+          args: |
+            --${{ matrix.arch }} \
+            --target /data/addon \
+            --addon

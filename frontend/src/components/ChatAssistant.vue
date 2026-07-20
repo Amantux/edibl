@@ -46,6 +46,18 @@ async function send(text) {
 }
 
 function toggle() { open.value = !open.value; if (open.value) scrollDown() }
+
+async function undoAction(a) {
+  if (!a.undo || a.undone || a.undoing) return
+  a.undoing = true
+  try {
+    await api.post('/assistant/undo', { undo: a.undo })
+    a.undone = true
+  } catch (e) {
+    msgs.value.push({ role: 'assistant', content: '⚠️ Undo failed: ' + (e.message || 'error') })
+    await scrollDown()
+  } finally { a.undoing = false }
+}
 </script>
 
 <template>
@@ -80,7 +92,13 @@ function toggle() { open.value = !open.value; if (open.value) scrollDown() }
         <div v-for="(m, i) in msgs" :key="i" class="msg" :class="m.role">
           <div class="bubble">{{ m.content }}</div>
           <div v-if="m.actions && m.actions.length" class="acts">
-            <span v-for="(a, j) in m.actions" :key="j" class="chip">✓ {{ a.tool.replace(/_/g, ' ') }}</span>
+            <div v-for="(a, j) in m.actions" :key="j" class="act" :class="{ mut: a.undoable, done: a.undone }">
+              <span class="tick">{{ a.undone ? '↩' : (a.undoable ? '✎' : '🔍') }}</span>
+              <span class="lbl">{{ a.label || a.tool.replace(/_/g, ' ') }}</span>
+              <button v-if="a.undoable && !a.undone" class="undo-btn" :disabled="a.undoing" @click="undoAction(a)">
+                {{ a.undoing ? '…' : 'Undo' }}</button>
+              <span v-else-if="a.undone" class="undone-tag">undone</span>
+            </div>
           </div>
         </div>
         <div v-if="busy" class="msg assistant"><div class="bubble typing">…</div></div>
@@ -130,9 +148,18 @@ function toggle() { open.value = !open.value; if (open.value) scrollDown() }
 .msg.user .bubble { background: var(--primary, #2f9e57); color: #fff; border-bottom-right-radius: 4px; }
 .msg.assistant .bubble { background: var(--surface, #2a2e34); border-bottom-left-radius: 4px; }
 .bubble.typing { letter-spacing: 2px; opacity: .6; }
-.acts { display: flex; flex-wrap: wrap; gap: 4px; }
-.chip { font-size: .68rem; padding: 1px 7px; border-radius: 999px;
-  background: rgba(47,158,87,.15); color: var(--primary, #2f9e57); }
+.acts { display: flex; flex-direction: column; gap: 4px; margin-top: 2px; }
+.act { display: flex; align-items: center; gap: 6px; font-size: .72rem;
+  padding: 3px 8px; border-radius: 8px; background: var(--surface, rgba(255,255,255,.04)); }
+.act.mut { background: rgba(47,158,87,.12); }
+.act.done { opacity: .55; }
+.act .tick { flex: none; }
+.act .lbl { flex: 1; color: var(--text, #ddd); }
+.act.done .lbl { text-decoration: line-through; }
+.undo-btn { flex: none; border: 1px solid var(--primary, #2f9e57); background: transparent;
+  color: var(--primary, #2f9e57); border-radius: 6px; padding: 1px 8px; font-size: .7rem; cursor: pointer; }
+.undo-btn:hover { background: rgba(47,158,87,.15); }
+.undone-tag { flex: none; font-size: .68rem; color: var(--muted, #999); }
 .pfoot { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--border, #333); }
 .pfoot input { flex: 1; }
 .tiny { font-size: .72rem; }

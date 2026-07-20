@@ -28,6 +28,7 @@ from ..extensions import db
 from ..models import (StockLot, Product, ShoppingItem, ConsumptionEvent, utcnow,
                       STORAGE_METHODS, OUTCOMES, LOSS_OUTCOMES)
 from ..services.estimation import estimate_expiry, product_insights, waste_insights
+from ..schemas.serializers import iso
 
 _LOGGER = logging.getLogger("edibl.assistant")
 
@@ -136,7 +137,22 @@ def h_add_stock(gid, name, quantity=1, unit="count", category="other",
     db.session.add(lot)
     db.session.commit()
     exp = expiry.date().isoformat() if expiry else "n/a"
-    return f"Added {quantity} {unit} of {name} ({storage_method}); best-by ~{exp}."
+    text = f"Added {quantity} {unit} of {name} ({storage_method}); best-by ~{exp}."
+    return text, {"op": "delete_lot", "lotId": lot.id}
+
+
+def _lot_snapshot(s):
+    """Everything needed to recreate a lot on undo."""
+    return {
+        "name": s.product.name if s.product else "",
+        "category": s.product.category if s.product else "other",
+        "family": s.product.family if s.product else "",
+        "location": s.location.name if s.location else "",
+        "quantity": s.quantity, "unit": s.unit, "storage_method": s.storage_method,
+        "state": s.state, "source": s.source, "notes": s.notes,
+        "purchase_date": iso(s.purchase_date), "expiry_date": iso(s.expiry_date),
+        "expiry_estimated": s.expiry_estimated, "attrs": s.attrs or {},
+    }
 
 
 def h_update_stock(gid, name, quantity=None, unit=None, location=None,
@@ -147,6 +163,10 @@ def h_update_stock(gid, name, quantity=None, unit=None, location=None,
     if not lots:
         return f"No stock matching '{name}' to update."
     s = lots[0]
+    prev = {"quantity": s.quantity, "unit": s.unit, "location_id": s.location_id,
+            "storage_method": s.storage_method, "state": s.state, "source": s.source,
+            "notes": s.notes, "expiry_date": iso(s.expiry_date),
+            "expiry_estimated": s.expiry_estimated, "finished": s.finished}
     if quantity is not None:
         s.quantity = float(quantity)
         if s.quantity <= 0:
@@ -171,7 +191,8 @@ def h_update_stock(gid, name, quantity=None, unit=None, location=None,
         except ValueError:
             pass
     db.session.commit()
-    return f"Updated {s.product.name}: now {s.quantity} {s.unit}."
+    text = f"Updated {s.product.name}: now {s.quantity} {s.unit}."
+    return text, {"op": "restore_lot", "lotId": s.id, "fields": prev}
 
 
 def h_delete_stock(gid, name):
@@ -181,9 +202,10 @@ def h_delete_stock(gid, name):
         return f"No stock matching '{name}' to remove."
     s = lots[0]
     label = f"{s.quantity} {s.unit} of {s.product.name}"
+    snap = _lot_snapshot(s)
     db.session.delete(s)
     db.session.commit()
-    return f"Removed {label} from stock."
+    return f"Removed {label} from stock.", {"op": "recreate_lot", "lot": snap}
 
 
 def h_grouped_stock(gid, query=""):
@@ -223,10 +245,13 @@ def h_record_consumption(gid, name, quantity=1, outcome="eaten"):
     if s.quantity <= 0:
         s.finished = True
         s.quantity = 0
-    db.session.add(ConsumptionEvent(
+    ev = ConsumptionEvent(
         product_id=s.product_id, quantity=amount, unit=s.unit,
         reason="used" if outcome == "eaten" else outcome,
-        outcome=outcome, days_kept=days_kept, group_id=gid))
+        outcome=outcome, days_kept=days_kept, group_id=gid)
+    db.session.add(ev)
+    db.session.flush()
+    event_id = ev.id
     db.session.commit()
     verb = {"eaten": "used", "spoiled": "tossed (spoiled)",
             "expired": "tossed (expired)", "discarded": "discarded"}.get(outcome, "used")
@@ -235,14 +260,16 @@ def h_record_consumption(gid, name, quantity=1, outcome="eaten"):
         tip = product_insights(gid, s.product_id).get("suggestion")
         if tip:
             msg += " " + tip
-    return msg
+    return msg, {"op": "unconsume", "lotId": s.id, "amount": amount, "eventId": event_id}
 
 
 def h_add_to_shopping_list(gid, name, quantity=1, unit="count"):
-    db.session.add(ShoppingItem(name=name, quantity=float(quantity or 1),
-                                unit=unit or "count", source="manual", group_id=gid))
+    item = ShoppingItem(name=name, quantity=float(quantity or 1),
+                        unit=unit or "count", source="manual", group_id=gid)
+    db.session.add(item)
     db.session.commit()
-    return f"Added {quantity} {unit} {name} to the shopping list."
+    return (f"Added {quantity} {unit} {name} to the shopping list.",
+            {"op": "delete_shopping", "itemId": item.id})
 
 
 def h_shopping_list(gid):
@@ -348,6 +375,16 @@ TOOLS = {
 }
 
 
+# Tools that change data (surfaced in the chat UI with an Undo control).
+_MUTATING = {"add_stock", "update_stock", "delete_stock",
+             "record_consumption", "add_to_shopping_list"}
+_READONLY_LABELS = {
+    "do_i_have": "Checked stock", "whats_in_stock": "Listed stock",
+    "expiring_soon": "Checked what's expiring", "grouped_stock": "Grouped stock",
+    "shopping_list": "Read the shopping list", "food_insights": "Checked insights",
+}
+
+
 def _run_tool(gid, name, args, actions):
     fn = TOOLS.get(name)
     if not fn:
@@ -358,8 +395,99 @@ def _run_tool(gid, name, args, actions):
         _LOGGER.warning("tool %s failed: %s", name, exc)
         db.session.rollback()
         return f"Tool error: {exc}"
-    actions.append({"tool": name, "args": args or {}})
-    return result
+    # Mutating handlers return (text, undo); read-only ones return just text.
+    if isinstance(result, tuple):
+        text, undo = result
+    else:
+        text, undo = result, None
+    label = text if name in _MUTATING else _READONLY_LABELS.get(name, name.replace("_", " "))
+    actions.append({"tool": name, "label": (label or "")[:160],
+                    "undoable": undo is not None, "undo": undo})
+    return text
+
+
+# --------------------------------------------------------------------------- #
+# Undo — reverse a single tool call the chat made. Everything is group-scoped;
+# the ops only reach the same CRUD the caller already has, so a client-held undo
+# descriptor grants no new powers.
+# --------------------------------------------------------------------------- #
+def _parse_iso(v):
+    if not v:
+        return None
+    try:
+        return datetime.fromisoformat(str(v).replace("Z", "").replace("+00:00", ""))
+    except (ValueError, TypeError):
+        return None
+
+
+def _owned(model, obj_id, gid):
+    obj = db.session.get(model, obj_id) if obj_id else None
+    return obj if (obj and obj.group_id == gid) else None
+
+
+def apply_undo(gid, undo):
+    """Reverse one action. Returns a short human message."""
+    op = (undo or {}).get("op")
+    if op == "delete_lot":  # undo an add
+        s = _owned(StockLot, undo.get("lotId"), gid)
+        if not s:
+            return "Nothing to undo — the added item is already gone."
+        name = s.product.name if s.product else "item"
+        db.session.delete(s)
+        db.session.commit()
+        return f"Undone — removed the {name} that was added."
+    if op == "restore_lot":  # undo an edit
+        s = _owned(StockLot, undo.get("lotId"), gid)
+        if not s:
+            return "Nothing to undo — that item no longer exists."
+        f = undo.get("fields") or {}
+        s.quantity = f.get("quantity", s.quantity)
+        s.unit = f.get("unit", s.unit)
+        s.location_id = f.get("location_id")
+        s.storage_method = f.get("storage_method", s.storage_method)
+        s.state = f.get("state", s.state)
+        s.source = f.get("source", s.source)
+        s.notes = f.get("notes", s.notes)
+        s.expiry_date = _parse_iso(f.get("expiry_date"))
+        s.expiry_estimated = bool(f.get("expiry_estimated"))
+        s.finished = bool(f.get("finished"))
+        db.session.commit()
+        return "Undone — the edit was reverted."
+    if op == "recreate_lot":  # undo a delete
+        lot = undo.get("lot") or {}
+        product = _resolve_product(gid, lot.get("name"), lot.get("category", "other"),
+                                   lot.get("family", ""))
+        s = StockLot(
+            product_id=product.id, location_id=_find_location(gid, lot.get("location")),
+            quantity=float(lot.get("quantity") or 1), unit=lot.get("unit") or "count",
+            storage_method=lot.get("storage_method") or "refrigerated",
+            state=lot.get("state") or "", source=lot.get("source") or "",
+            notes=lot.get("notes") or "", purchase_date=_parse_iso(lot.get("purchase_date")),
+            expiry_date=_parse_iso(lot.get("expiry_date")),
+            expiry_estimated=bool(lot.get("expiry_estimated")),
+            attrs=lot.get("attrs") or {}, group_id=gid)
+        db.session.add(s)
+        db.session.commit()
+        return f"Undone — restored {lot.get('name') or 'the removed item'}."
+    if op == "unconsume":  # undo a record_consumption
+        s = _owned(StockLot, undo.get("lotId"), gid)
+        if s:
+            s.quantity = round((s.quantity or 0) + float(undo.get("amount") or 0), 4)
+            if s.quantity > 0:
+                s.finished = False
+        ev = _owned(ConsumptionEvent, undo.get("eventId"), gid)
+        if ev:
+            db.session.delete(ev)
+        db.session.commit()
+        return "Undone — put it back and removed the consumption record."
+    if op == "delete_shopping":  # undo add_to_shopping_list
+        i = _owned(ShoppingItem, undo.get("itemId"), gid)
+        if i:
+            db.session.delete(i)
+            db.session.commit()
+            return "Undone — removed it from the shopping list."
+        return "Nothing to undo — already gone."
+    return "Nothing to undo."
 
 
 # --------------------------------------------------------------------------- #

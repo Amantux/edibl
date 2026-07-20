@@ -1,6 +1,14 @@
 # Changelog
 
-All notable changes to the Edibl add-on.
+All notable changes to the Edibl add-on. The patch version is **auto-bumped by
+CI** on every release push, so Home Assistant always sees an update.
+
+## 1.4.2
+
+- **Surfaced, undoable chat actions** — the chat now shows each tool call it made
+  (added / updated / removed stock, shopping edits, consumption) as a distinct
+  row, and mutating ones have an **Undo** button that reverses just that action.
+- CI now auto-bumps the add-on version on release pushes.
 
 ## 1.4.1
 

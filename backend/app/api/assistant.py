@@ -3,7 +3,7 @@ actions the MCP server exposes, available from a widget on every screen."""
 from flask import Blueprint, request, jsonify
 
 from ..auth import login_required, current_group
-from ..extensions import limiter
+from ..extensions import limiter, db
 from ..services import assistant
 
 bp = Blueprint("assistant", __name__)
@@ -32,3 +32,21 @@ def chat():
                 for m in messages if m.get("content")][-20:]
     result = assistant.run_chat(current_group().id, messages)
     return jsonify(result)
+
+
+@bp.post("/assistant/undo")
+@login_required
+@limiter.limit("60/minute")
+def undo():
+    """Reverse a single action the chat took. Body: { undo: <descriptor> } from a
+    chat response's actions[].undo. All ops are group-scoped."""
+    data = request.get_json(force=True) or {}
+    descriptor = data.get("undo")
+    if not isinstance(descriptor, dict) or not descriptor.get("op"):
+        return jsonify({"error": "undo descriptor required"}), 422
+    try:
+        message = assistant.apply_undo(current_group().id, descriptor)
+    except Exception as exc:  # noqa: BLE001
+        db.session.rollback()
+        return jsonify({"error": f"undo failed: {exc}"}), 400
+    return jsonify({"ok": True, "message": message})

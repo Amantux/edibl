@@ -3,7 +3,7 @@ loop with a mocked HTTP client to prove a tool call (e.g. add_stock) executes.""
 import httpx
 
 from app.extensions import db
-from app.models import Group, StockLot
+from app.models import Group, StockLot, ConsumptionEvent
 from app.services import assistant
 
 
@@ -175,3 +175,73 @@ def test_homeassistant_relay_chat(app, monkeypatch):
         db.session.flush()
         res = assistant.run_chat(g.id, [{"role": "user", "content": "do I have milk?"}])
     assert res["provider"] == "homeassistant" and "milk" in res["reply"].lower()
+
+
+# --- surfaced + undoable tool calls -----------------------------------------
+def _group(app):
+    g = Group(name="H")
+    db.session.add(g)
+    db.session.flush()
+    return g
+
+
+def test_run_tool_surfaces_undoable_action(app):
+    with app.app_context():
+        g = _group(app)
+        acts = []
+        assistant._run_tool(g.id, "add_stock",
+                            {"name": "Milk", "quantity": 2, "unit": "l", "category": "dairy"}, acts)
+        a = acts[-1]
+        assert a["undoable"] is True and a["undo"]["op"] == "delete_lot"
+        assert a["label"].startswith("Added")
+        msg = assistant.apply_undo(g.id, a["undo"])
+        assert "Undone" in msg
+        assert db.session.query(StockLot).filter_by(group_id=g.id, finished=False).count() == 0
+
+
+def test_readonly_action_not_undoable(app):
+    with app.app_context():
+        g = _group(app)
+        acts = []
+        assistant._run_tool(g.id, "whats_in_stock", {}, acts)
+        assert acts[-1]["undoable"] is False and acts[-1]["undo"] is None
+
+
+def test_undo_update_and_consume(app):
+    with app.app_context():
+        g = _group(app)
+        acts = []
+        assistant._run_tool(g.id, "add_stock",
+                            {"name": "Milk", "quantity": 4, "unit": "l", "category": "dairy"}, acts)
+        assistant._run_tool(g.id, "update_stock",
+                            {"name": "Milk", "quantity": 9, "freshness": "opened"}, acts)
+        assistant.apply_undo(g.id, acts[-1]["undo"])
+        lot = db.session.query(StockLot).filter_by(group_id=g.id).first()
+        db.session.refresh(lot)
+        assert lot.quantity == 4.0 and lot.state == ""
+        assistant._run_tool(g.id, "record_consumption",
+                            {"name": "Milk", "quantity": 1, "outcome": "eaten"}, acts)
+        assert db.session.query(ConsumptionEvent).count() == 1
+        assistant.apply_undo(g.id, acts[-1]["undo"])
+        db.session.refresh(lot)
+        assert lot.quantity == 4.0 and db.session.query(ConsumptionEvent).count() == 0
+
+
+def test_undo_endpoint(auth_client):
+    lot = auth_client.post("/api/v1/stock",
+                           json={"productName": "Butter", "category": "dairy",
+                                 "quantity": 2, "unit": "stick"}).get_json()
+    r = auth_client.post("/api/v1/assistant/undo",
+                         json={"undo": {"op": "delete_lot", "lotId": lot["id"]}})
+    assert r.status_code == 200 and r.get_json()["ok"] is True
+    assert auth_client.get(f"/api/v1/stock/{lot['id']}").status_code == 404
+
+
+def test_undo_endpoint_requires_op(auth_client):
+    assert auth_client.post("/api/v1/assistant/undo", json={}).status_code == 422
+
+
+def test_undo_endpoint_unknown_id_is_safe(auth_client):
+    r = auth_client.post("/api/v1/assistant/undo",
+                         json={"undo": {"op": "delete_lot", "lotId": "nope"}})
+    assert r.status_code == 200 and "Nothing to undo" in r.get_json()["message"]

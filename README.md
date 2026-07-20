@@ -17,6 +17,13 @@ client) can query and act on your inventory.
 - **Track real stock** across multiple sites (home, the lake house), nested
   locations (fridge / freezer / pantry / **wine cellar**), with quantities,
   storage method, cost, and freshness.
+- **Grouped, but tracked separately** — organic milk for drinking and filtered
+  milk for ice cream are distinct products (own shelf-lives, own buy-dates) that
+  roll up under one **Group** ("Milk"); every lot keeps its own expiry.
+- **Everything's user-driven** — categories, units, freshness, and groups are
+  free-form with autocomplete from what you already use; nothing is a fixed list.
+- **Full agent CRUD** — the chat assistant and MCP tools can add, look up,
+  **update, and remove** stock, not just query it.
 - **Auto-estimate expiry** from the food's category × storage method — leave the
   date blank and Edibl fills it in. Vacuum-sealed + frozen meat lasts *years*;
   fresh dairy days.

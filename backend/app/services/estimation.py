@@ -36,8 +36,17 @@ DEFAULT_SHELF_LIFE_ROWS = [
 ]
 
 
+# Storage-only fallback (days) — used for user-defined categories with no
+# category-specific profile, so custom categories still get a sane estimate.
+STORAGE_FALLBACK = {
+    "fresh": 5, "refrigerated": 10, "frozen": 240, "vacuum_sealed": 365,
+    "pantry": 180, "opened": 5,
+}
+
+
 def typical_days(category: str, storage_method: str):
-    """Look up typical shelf life: DB profile first, then the built-in table."""
+    """Look up typical shelf life: DB profile → built-in (category, storage) table
+    → storage-only fallback (so free-form categories still estimate)."""
     row = (
         db.session.query(ShelfLifeProfile)
         .filter_by(category=category, storage_method=storage_method)
@@ -45,7 +54,10 @@ def typical_days(category: str, storage_method: str):
     )
     if row:
         return row.typical_days
-    return DEFAULT_SHELF_LIFE.get((category, storage_method))
+    days = DEFAULT_SHELF_LIFE.get((category, storage_method))
+    if days is not None:
+        return days
+    return STORAGE_FALLBACK.get(storage_method)
 
 
 def _outcome(e):

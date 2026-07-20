@@ -1,7 +1,8 @@
 from flask import Blueprint, request, jsonify, abort
 
 from ..extensions import db
-from ..models import Product, CATEGORIES
+from ..models import (Product, StockLot, CATEGORIES, UNITS, FRESHNESS_LEVELS,
+                      STORAGE_METHODS)
 from ..auth import login_required, current_group
 from ..schemas.serializers import product_out
 from ..services.estimation import product_insights
@@ -21,8 +22,11 @@ def _apply(p, data):
                     "notes": "notes"}.items():
         if k in data and data[k] is not None:
             setattr(p, attr, data[k])
-    if data.get("category") in CATEGORIES:
-        p.category = data["category"]
+    # Category and the display group are free-form / user-driven.
+    if data.get("category"):
+        p.category = str(data["category"]).strip()
+    if "family" in data or "group" in data:
+        p.family = str(data.get("family") or data.get("group") or "").strip()
     if "defaultUnit" in data and data["defaultUnit"]:
         p.default_unit = data["defaultUnit"]
     if "shelfLifeDays" in data:
@@ -41,6 +45,35 @@ def list_products():
     if request.args.get("category"):
         q = q.filter(Product.category == request.args["category"])
     return jsonify([product_out(p) for p in q.order_by(Product.name.asc()).all()])
+
+
+@bp.get("/products/suggestions")
+@login_required
+def suggestions():
+    """Autocomplete fuel: seed suggestions merged with the values this household
+    actually uses — for categories, units, groups (families), freshness, product
+    names, and storage methods. Everything is free-form; these just help typing."""
+    gid = current_group().id
+    products = db.session.query(Product).filter_by(group_id=gid).all()
+    lots = db.session.query(StockLot).filter_by(group_id=gid).all()
+
+    def merged(seed, used):
+        seen, out = set(), []
+        for v in list(seed) + sorted(used):
+            v = (v or "").strip()
+            if v and v.lower() not in seen:
+                seen.add(v.lower())
+                out.append(v)
+        return out
+
+    return jsonify({
+        "categories": merged(CATEGORIES, {p.category for p in products}),
+        "units": merged(UNITS, {p.default_unit for p in products} | {s.unit for s in lots}),
+        "families": merged([], {p.family for p in products if p.family}),
+        "freshness": merged(FRESHNESS_LEVELS, {s.state for s in lots if s.state}),
+        "storageMethods": merged(STORAGE_METHODS, {s.storage_method for s in lots}),
+        "names": sorted({p.name for p in products}),
+    })
 
 
 @bp.get("/products/<product_id>/insights")

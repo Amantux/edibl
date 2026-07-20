@@ -4,7 +4,7 @@ from flask import Blueprint, request, jsonify, abort
 
 from ..extensions import db
 from ..models import (StockLot, Product, Location, ConsumptionEvent, utcnow,
-                      STORAGE_METHODS, LIFECYCLE_STATES, OUTCOMES, LOSS_OUTCOMES)
+                      STORAGE_METHODS, OUTCOMES, LOSS_OUTCOMES)
 from ..auth import login_required, current_group
 from ..schemas.serializers import stock_out, expiry_status
 from ..services.estimation import estimate_expiry, product_insights
@@ -56,13 +56,17 @@ def _resolve_product(data):
     name = (data.get("productName") or data.get("name") or "").strip()
     if not name:
         return None
+    family = (data.get("family") or data.get("group") or "").strip()
     p = db.session.query(Product).filter_by(group_id=gid, name=name).first()
     if not p:
-        p = Product(name=name, category=data.get("category") or "other",
-                    barcode=data.get("barcode") or "",
+        p = Product(name=name, category=(data.get("category") or "other").strip(),
+                    family=family, barcode=data.get("barcode") or "",
                     default_unit=data.get("unit") or "count", group_id=gid)
         db.session.add(p)
         db.session.flush()
+    elif family and not p.family:
+        # Let a new lot assign the grouping if the product doesn't have one yet.
+        p.family = family
     return p
 
 
@@ -70,9 +74,7 @@ def _build_lot(data, product, gid):
     storage = data.get("storageMethod") or "refrigerated"
     if storage not in STORAGE_METHODS:
         storage = "refrigerated"
-    state = data.get("state") or ""
-    if state not in LIFECYCLE_STATES:
-        state = ""
+    state = (data.get("freshness") or data.get("state") or "").strip()
     purchase = _parse_dt(data.get("purchaseDate")) or utcnow()
     expiry = _parse_dt(data.get("expiryDate"))
     estimated = False
@@ -114,6 +116,50 @@ def list_stock():
     return jsonify({"items": [stock_out(s) for s in lots], "total": len(lots)})
 
 
+@bp.get("/stock/grouped")
+@login_required
+def grouped():
+    """Stock rolled up by group (a product's `family`, else its name) so multiple
+    buy-dates / related products (organic vs filtered milk) read as one group while
+    each lot keeps its own expiry. Each group lists its underlying lots."""
+    gid = current_group().id
+    lots = (db.session.query(StockLot)
+            .filter_by(group_id=gid, finished=False)
+            .order_by(StockLot.expiry_date.is_(None).asc(),
+                      StockLot.expiry_date.asc()).all())
+    groups = {}
+    for s in lots:
+        if not s.product:
+            continue
+        key = s.product.family or s.product.name
+        g = groups.get(key)
+        if not g:
+            g = {"group": key, "category": s.product.category,
+                 "totalQuantity": 0.0, "unit": s.unit, "lotCount": 0,
+                 "products": set(), "expiring": 0, "expired": 0,
+                 "nextExpiry": None, "nextExpiryStatus": "unknown", "lots": []}
+            groups[key] = g
+        g["totalQuantity"] = round(g["totalQuantity"] + (s.quantity or 0), 3)
+        g["lotCount"] += 1
+        g["products"].add(s.product.name)
+        st = expiry_status(s.expiry_date)
+        if st == "expiring":
+            g["expiring"] += 1
+        elif st == "expired":
+            g["expired"] += 1
+        if s.expiry_date and (g["nextExpiry"] is None):
+            g["nextExpiry"] = s.expiry_date.isoformat()
+            g["nextExpiryStatus"] = st
+        g["lots"].append(stock_out(s))
+    out = []
+    for g in groups.values():
+        g["products"] = sorted(g["products"])
+        g["productCount"] = len(g["products"])
+        out.append(g)
+    out.sort(key=lambda g: (g["nextExpiry"] is None, g["nextExpiry"] or "", g["group"]))
+    return jsonify({"groups": out, "total": len(out)})
+
+
 @bp.post("/stock")
 @login_required
 def create():
@@ -151,8 +197,8 @@ def update(lot_id):
         s.location_id = data["locationId"] or None
     if "storageMethod" in data and data["storageMethod"] in STORAGE_METHODS:
         s.storage_method = data["storageMethod"]
-    if "state" in data and data["state"] in LIFECYCLE_STATES:
-        s.state = data["state"]
+    if "freshness" in data or "state" in data:
+        s.state = (data.get("freshness") or data.get("state") or "").strip()
     for k, attr in {"expiryDate": "expiry_date", "openedDate": "opened_date",
                     "purchaseDate": "purchase_date"}.items():
         if k in data:
@@ -189,9 +235,7 @@ def consume(lot_id):
         legacy = (data.get("reason") or "used").strip().lower()
         outcome = {"used": "eaten", "expired": "expired",
                    "discarded": "discarded"}.get(legacy, "eaten")
-    state = (data.get("state") or s.state or "").strip()
-    if state not in LIFECYCLE_STATES:
-        state = ""
+    state = (data.get("freshness") or data.get("state") or s.state or "").strip()
     days_kept = _days_kept(s.purchase_date)
 
     if s.quantity <= 0:

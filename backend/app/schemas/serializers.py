@@ -49,6 +49,7 @@ def location_out(loc, with_counts=True):
 def product_out(p):
     return {
         "id": p.id, "name": p.name, "brand": p.brand, "category": p.category,
+        "family": p.family or "",
         "barcode": p.barcode, "defaultUnit": p.default_unit,
         "shelfLifeDays": p.shelf_life_days, "notes": p.notes,
         "createdAt": iso(p.created_at),
@@ -59,12 +60,16 @@ def stock_out(s):
     return {
         "id": s.id,
         "product": {"id": s.product.id, "name": s.product.name,
-                    "category": s.product.category, "brand": s.product.brand}
+                    "category": s.product.category, "brand": s.product.brand,
+                    "family": s.product.family or ""}
         if s.product else None,
+        # Convenience grouping key: the product's family, else its name.
+        "groupKey": (s.product.family or s.product.name) if s.product else "",
         "location": {"id": s.location.id, "name": s.location.name, "kind": s.location.kind}
         if s.location else None,
         "quantity": s.quantity, "unit": s.unit, "storageMethod": s.storage_method,
-        "state": s.state or "",
+        # "freshness" is the user-facing name; "state" kept for back-compat.
+        "freshness": s.state or "", "state": s.state or "",
         "purchaseDate": iso(s.purchase_date), "openedDate": iso(s.opened_date),
         "expiryDate": iso(s.expiry_date), "expiryEstimated": s.expiry_estimated,
         "daysToExpiry": _days_to_expiry(s.expiry_date),

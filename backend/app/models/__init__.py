@@ -108,6 +108,9 @@ class Location(IDMixin, TimestampMixin, db.Model):
 # --------------------------------------------------------------------------- #
 # Catalog: what a product IS
 # --------------------------------------------------------------------------- #
+# Categories and units are user-driven / free-form. These are only *suggestions*
+# for autocomplete — any string is accepted (see /products/suggestions, which
+# also merges in the values you actually use).
 CATEGORIES = (
     "produce", "dairy", "meat", "seafood", "bakery", "frozen", "beverage",
     "wine", "spirits", "beer", "dry_goods", "condiment", "snack", "other",
@@ -119,9 +122,12 @@ class Product(IDMixin, TimestampMixin, db.Model):
     __tablename__ = "products"
     name: Mapped[str] = mapped_column(String(255))
     brand: Mapped[str] = mapped_column(String(255), default="")
-    category: Mapped[str] = mapped_column(String(24), default="other")
+    category: Mapped[str] = mapped_column(String(64), default="other")
+    # Free-text display grouping, e.g. "Milk" for both Organic milk and Filtered
+    # milk. Distinct products (own shelf-life + lots) that read as one group.
+    family: Mapped[str] = mapped_column(String(255), default="", index=True)
     barcode: Mapped[str] = mapped_column(String(64), default="", index=True)
-    default_unit: Mapped[str] = mapped_column(String(16), default="count")
+    default_unit: Mapped[str] = mapped_column(String(32), default="count")
     # Optional per-product override of the category shelf-life table (days).
     shelf_life_days: Mapped[int] = mapped_column(nullable=True)
     notes: Mapped[str] = mapped_column(Text, default="")
@@ -137,11 +143,12 @@ STORAGE_METHODS = (
     "fresh", "refrigerated", "frozen", "vacuum_sealed", "pantry", "opened",
 )
 
-# Perishable lifecycle / condition of a lot right now (mainly for fruit & veg).
-# "" = not tracked. These feed personalized shelf-life learning + suggestions.
-LIFECYCLE_STATES = (
-    "", "unripe", "ripe", "overripe", "opened", "spoiling",
+# Observed freshness / condition of a lot right now. Free-form + user-driven;
+# these are only suggestions. "" = not tracked. Feeds shelf-life learning.
+FRESHNESS_LEVELS = (
+    "fresh", "ripe", "unripe", "overripe", "opened", "spoiling", "use soon",
 )
+LIFECYCLE_STATES = FRESHNESS_LEVELS  # back-compat alias
 
 # How a lot (or part of one) left inventory. "Good" outcomes (eaten) teach us the
 # item lasted at least that long; "loss" outcomes (spoiled/expired/discarded) are
@@ -156,10 +163,11 @@ class StockLot(IDMixin, TimestampMixin, db.Model):
     product_id: Mapped[str] = mapped_column(String(36), ForeignKey("products.id"))
     location_id: Mapped[str] = mapped_column(String(36), ForeignKey("locations.id"), nullable=True)
     quantity: Mapped[float] = mapped_column(Float, default=1)
-    unit: Mapped[str] = mapped_column(String(16), default="count")
+    unit: Mapped[str] = mapped_column(String(32), default="count")
     storage_method: Mapped[str] = mapped_column(String(24), default="refrigerated")
-    # Current ripeness / condition (LIFECYCLE_STATES); "" when not tracked.
-    state: Mapped[str] = mapped_column(String(16), default="")
+    # Observed freshness / condition (free-form; FRESHNESS_LEVELS are suggestions);
+    # "" when not tracked. Exposed as "freshness" in the API.
+    state: Mapped[str] = mapped_column(String(32), default="")
     purchase_date: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     opened_date: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     expiry_date: Mapped[datetime] = mapped_column(DateTime, nullable=True)
@@ -224,14 +232,14 @@ class ConsumptionEvent(IDMixin, db.Model):
     __tablename__ = "consumption_events"
     product_id: Mapped[str] = mapped_column(String(36), ForeignKey("products.id"), nullable=True)
     quantity: Mapped[float] = mapped_column(Float, default=0)
-    unit: Mapped[str] = mapped_column(String(16), default="count")
+    unit: Mapped[str] = mapped_column(String(32), default="count")
     reason: Mapped[str] = mapped_column(String(24), default="used")  # legacy: used/expired/discarded
     # Richer lifecycle label (OUTCOMES) + how long the lot was kept before this
-    # event + its ripeness state at the time. These drive personalized shelf-life
+    # event + its freshness at the time. These drive personalized shelf-life
     # learning and per-item suggestions.
     outcome: Mapped[str] = mapped_column(String(16), default="eaten")
     days_kept: Mapped[int] = mapped_column(nullable=True)
-    state: Mapped[str] = mapped_column(String(16), default="")
+    state: Mapped[str] = mapped_column(String(32), default="")
     at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     group_id: Mapped[str] = mapped_column(String(36), ForeignKey("groups.id"))
     group = relationship("Group", back_populates="consumption")
@@ -241,7 +249,7 @@ __all__ = [
     "db", "gen_uuid", "utcnow",
     "Group", "User", "ApiToken", "TOKEN_PREFIX", "generate_raw_token", "hash_token",
     "Location", "LOCATION_KINDS", "Product", "CATEGORIES", "UNITS",
-    "StockLot", "STORAGE_METHODS", "LIFECYCLE_STATES", "OUTCOMES",
+    "StockLot", "STORAGE_METHODS", "FRESHNESS_LEVELS", "LIFECYCLE_STATES", "OUTCOMES",
     "GOOD_OUTCOMES", "LOSS_OUTCOMES",
     "ShelfLifeProfile", "ShoppingItem", "ConsumptionEvent", "PlannedItem",
 ]

@@ -61,11 +61,12 @@ def _ensure_columns():
     from sqlalchemy import inspect, text
 
     wanted = {
-        "stock_lots": {"state": "VARCHAR(16) DEFAULT ''"},
+        "products": {"family": "VARCHAR(255) DEFAULT ''"},
+        "stock_lots": {"state": "VARCHAR(32) DEFAULT ''"},
         "consumption_events": {
             "outcome": "VARCHAR(16) DEFAULT 'eaten'",
             "days_kept": "INTEGER",
-            "state": "VARCHAR(16) DEFAULT ''",
+            "state": "VARCHAR(32) DEFAULT ''",
         },
     }
     insp = inspect(db.engine)

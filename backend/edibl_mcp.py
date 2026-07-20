@@ -45,6 +45,18 @@ def _post(path, json=None):
     return r.json()
 
 
+def _put(path, json=None):
+    r = _HTTP.put(path, json=json or {})
+    r.raise_for_status()
+    return r.json()
+
+
+def _delete(path):
+    r = _HTTP.delete(path)
+    r.raise_for_status()
+    return True
+
+
 # --------------------------------------------------------------------------- #
 # Query the lay of the land
 # --------------------------------------------------------------------------- #
@@ -142,22 +154,95 @@ def order_shortfall() -> dict:
 # --------------------------------------------------------------------------- #
 # Act on inventory
 # --------------------------------------------------------------------------- #
+def _location_id(location):
+    if not location:
+        return None
+    locs = _get("/locations")
+    match = next((loc for loc in locs if loc["name"].lower() == location.lower()), None)
+    return match["id"] if match else None
+
+
+def _find_lot(name):
+    """Soonest-to-expire active lot whose product name contains `name`."""
+    items = _get("/stock").get("items", [])
+    q = name.lower()
+    matches = [i for i in items if i.get("product") and q in i["product"]["name"].lower()]
+    return matches[0] if matches else None
+
+
 @mcp.tool()
 def add_stock(name: str, quantity: float = 1, unit: str = "count",
               category: str = "other", storage_method: str = "refrigerated",
-              location: str = "") -> str:
-    """Add something you just bought/stored. Expiry is auto-estimated from the
-    category + storage method (e.g. vacuum_sealed + frozen meat lasts a long time)."""
+              location: str = "", freshness: str = "", source: str = "",
+              family: str = "") -> str:
+    """Add something you just bought/stored. Categories/units/freshness are free-form.
+    `family` is the display group (e.g. 'Milk' for both organic and filtered milk);
+    `source` records where it came from. Expiry is auto-estimated."""
     body = {"productName": name, "quantity": quantity, "unit": unit,
-            "category": category, "storageMethod": storage_method}
-    if location:
-        locs = _get("/locations")
-        match = next((loc for loc in locs if loc["name"].lower() == location.lower()), None)
-        if match:
-            body["locationId"] = match["id"]
+            "category": category, "storageMethod": storage_method,
+            "freshness": freshness, "source": source, "family": family}
+    loc = _location_id(location)
+    if loc:
+        body["locationId"] = loc
     lot = _post("/stock", body)
     exp = lot.get("expiryDate", "")[:10] if lot.get("expiryDate") else "n/a"
     return f"Added {quantity} {unit} of {name} ({storage_method}); best-by ~{exp}."
+
+
+@mcp.tool()
+def update_stock(name: str, quantity: float = None, unit: str = "",
+                 location: str = "", storage_method: str = "", freshness: str = "",
+                 expiry: str = "", source: str = "", notes: str = "") -> str:
+    """Edit the soonest-to-expire lot matching `name`. Only the fields you pass
+    change (quantity, unit, location, storageMethod, freshness, expiry ISO date,
+    source, notes)."""
+    lot = _find_lot(name)
+    if not lot:
+        return f"No stock matching '{name}'."
+    body = {}
+    if quantity is not None:
+        body["quantity"] = quantity
+    if unit:
+        body["unit"] = unit
+    if storage_method:
+        body["storageMethod"] = storage_method
+    if freshness:
+        body["freshness"] = freshness
+    if expiry:
+        body["expiryDate"] = expiry
+    if source:
+        body["source"] = source
+    if notes:
+        body["notes"] = notes
+    if location:
+        body["locationId"] = _location_id(location)
+    _put(f"/stock/{lot['id']}", body)
+    return f"Updated {lot['product']['name']}."
+
+
+@mcp.tool()
+def delete_stock(name: str) -> str:
+    """Remove the soonest-to-expire lot matching `name` (discard, no history — use
+    record_consumption instead to log that it was eaten/spoiled)."""
+    lot = _find_lot(name)
+    if not lot:
+        return f"No stock matching '{name}'."
+    _delete(f"/stock/{lot['id']}")
+    return f"Removed {lot['quantity']} {lot['unit']} of {lot['product']['name']}."
+
+
+@mcp.tool()
+def grouped_stock(query: str = "") -> list:
+    """Stock rolled up by group (product family, else name) — e.g. organic and
+    filtered milk shown together under 'Milk', each lot keeping its own expiry."""
+    groups = _get("/stock/grouped").get("groups", [])
+    if query:
+        q = query.lower()
+        groups = [g for g in groups if q in g["group"].lower()]
+    return [{"group": g["group"], "totalQuantity": g["totalQuantity"], "unit": g["unit"],
+             "lots": g["lotCount"], "products": g["products"],
+             "nextExpiry": g["nextExpiry"], "expiring": g["expiring"]}
+            for g in groups]
 
 
 @mcp.tool()

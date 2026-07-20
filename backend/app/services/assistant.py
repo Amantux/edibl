@@ -54,13 +54,16 @@ def _match_lots(gid, name):
     return lots
 
 
-def _resolve_product(gid, name, category="other"):
+def _resolve_product(gid, name, category="other", family=""):
     name = (name or "").strip()
     p = db.session.query(Product).filter_by(group_id=gid, name=name).first()
     if not p:
-        p = Product(name=name, category=category or "other", group_id=gid)
+        p = Product(name=name, category=(category or "other").strip(),
+                    family=(family or "").strip(), group_id=gid)
         db.session.add(p)
         db.session.flush()
+    elif family and not p.family:
+        p.family = family.strip()
     return p
 
 
@@ -104,31 +107,101 @@ def h_expiring_soon(gid, days=5):
         for d, s in out[:30])
 
 
+def _find_location(gid, location):
+    if not location:
+        return None
+    from ..models import Location
+    loc = (db.session.query(Location)
+           .filter(Location.group_id == gid, Location.name.ilike(location)).first())
+    return loc.id if loc else None
+
+
 def h_add_stock(gid, name, quantity=1, unit="count", category="other",
-                storage_method="refrigerated", location="", state=""):
+                storage_method="refrigerated", location="", freshness="",
+                source="", family=""):
     if storage_method not in STORAGE_METHODS:
         storage_method = "refrigerated"
-    product = _resolve_product(gid, name, category)
+    product = _resolve_product(gid, name, category, family)
     purchase = utcnow()
     expiry, estimated = estimate_expiry(purchase, product.category, storage_method,
                                         product.shelf_life_days,
                                         group_id=gid, product_id=product.id)
-    loc_id = None
-    if location:
-        from ..models import Location
-        loc = (db.session.query(Location)
-               .filter(Location.group_id == gid,
-                       Location.name.ilike(location)).first())
-        loc_id = loc.id if loc else None
-    lot = StockLot(product_id=product.id, location_id=loc_id,
+    lot = StockLot(product_id=product.id, location_id=_find_location(gid, location),
                    quantity=float(quantity or 1), unit=unit or "count",
-                   storage_method=storage_method, state=state or "",
-                   purchase_date=purchase, expiry_date=expiry,
+                   storage_method=storage_method, state=freshness or "",
+                   source=source or "", purchase_date=purchase, expiry_date=expiry,
                    expiry_estimated=estimated, group_id=gid)
     db.session.add(lot)
     db.session.commit()
     exp = expiry.date().isoformat() if expiry else "n/a"
     return f"Added {quantity} {unit} of {name} ({storage_method}); best-by ~{exp}."
+
+
+def h_update_stock(gid, name, quantity=None, unit=None, location=None,
+                   storage_method=None, freshness=None, expiry=None,
+                   source=None, notes=None):
+    """Edit the soonest-to-expire lot matching `name`."""
+    lots = _match_lots(gid, name)
+    if not lots:
+        return f"No stock matching '{name}' to update."
+    s = lots[0]
+    if quantity is not None:
+        s.quantity = float(quantity)
+        if s.quantity <= 0:
+            s.finished = True
+    if unit:
+        s.unit = unit
+    if storage_method and storage_method in STORAGE_METHODS:
+        s.storage_method = storage_method
+    if freshness is not None:
+        s.state = freshness.strip()
+    if source is not None:
+        s.source = source
+    if notes is not None:
+        s.notes = notes
+    if location is not None:
+        s.location_id = _find_location(gid, location)
+    if expiry:
+        try:
+            from datetime import datetime as _dt
+            s.expiry_date = _dt.fromisoformat(str(expiry).replace("Z", "").replace("+00:00", ""))
+            s.expiry_estimated = False
+        except ValueError:
+            pass
+    db.session.commit()
+    return f"Updated {s.product.name}: now {s.quantity} {s.unit}."
+
+
+def h_delete_stock(gid, name):
+    """Remove the soonest-to-expire lot matching `name` (discard, no history)."""
+    lots = _match_lots(gid, name)
+    if not lots:
+        return f"No stock matching '{name}' to remove."
+    s = lots[0]
+    label = f"{s.quantity} {s.unit} of {s.product.name}"
+    db.session.delete(s)
+    db.session.commit()
+    return f"Removed {label} from stock."
+
+
+def h_grouped_stock(gid, query=""):
+    """Stock grouped by product family (organic + filtered milk read as 'Milk')."""
+    lots = _active(gid)
+    if query:
+        ql = query.lower()
+        lots = [s for s in lots if s.product and ql in (s.product.family or s.product.name).lower()]
+    groups = {}
+    for s in lots:
+        if not s.product:
+            continue
+        key = s.product.family or s.product.name
+        g = groups.setdefault(key, {"qty": 0.0, "unit": s.unit, "lots": 0})
+        g["qty"] = round(g["qty"] + (s.quantity or 0), 2)
+        g["lots"] += 1
+    if not groups:
+        return "Nothing in stock." if not query else f"Nothing grouped under '{query}'."
+    return "\n".join(f"{k}: {g['qty']} {g['unit']} across {g['lots']} lot(s)"
+                     for k, g in sorted(groups.items()))
 
 
 def h_record_consumption(gid, name, quantity=1, outcome="eaten"):
@@ -216,10 +289,38 @@ TOOLS = {
                       "category": {"type": "string"},
                       "storage_method": {"type": "string"},
                       "location": {"type": "string"},
-                      "state": {"type": "string",
-                                "description": "ripeness: unripe/ripe/overripe"}},
+                      "freshness": {"type": "string",
+                                    "description": "condition: fresh/ripe/unripe/overripe"},
+                      "family": {"type": "string",
+                                 "description": "display group, e.g. Milk"},
+                      "source": {"type": "string",
+                                 "description": "where it came from, e.g. Costco, farm"}},
                    "required": ["name"]},
                   "Add something bought or stored. Expiry is auto-estimated."),
+    "update_stock": (h_update_stock,
+                     {"type": "object", "properties": {
+                         "name": {"type": "string"},
+                         "quantity": {"type": "number"},
+                         "unit": {"type": "string"},
+                         "location": {"type": "string"},
+                         "storage_method": {"type": "string"},
+                         "freshness": {"type": "string"},
+                         "expiry": {"type": "string", "description": "ISO date"},
+                         "source": {"type": "string"},
+                         "notes": {"type": "string"}},
+                      "required": ["name"]},
+                     "Edit the soonest-to-expire lot matching a name (qty, location, "
+                     "expiry, freshness, etc.)."),
+    "delete_stock": (h_delete_stock,
+                     {"type": "object", "properties": {
+                         "name": {"type": "string"}}, "required": ["name"]},
+                     "Remove the soonest-to-expire lot matching a name (discard, "
+                     "no consumption history — use record_consumption to log why)."),
+    "grouped_stock": (h_grouped_stock,
+                      {"type": "object", "properties": {
+                          "query": {"type": "string"}}},
+                      "Stock grouped by product family (e.g. organic + filtered "
+                      "milk shown together under 'Milk')."),
     "record_consumption": (h_record_consumption,
                            {"type": "object", "properties": {
                                "name": {"type": "string"},

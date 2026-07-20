@@ -48,9 +48,13 @@ def ready():
 def meta():
     """Enum reference data for the UI (categories, units, storage methods…)."""
     from ..models import (CATEGORIES, UNITS, STORAGE_METHODS, LOCATION_KINDS,
-                          LIFECYCLE_STATES, OUTCOMES)
+                          FRESHNESS_LEVELS, OUTCOMES)
+    fresh = [s for s in FRESHNESS_LEVELS if s]
     return jsonify({
+        # Categories / units / freshness are user-driven; these are seed
+        # suggestions. See /products/suggestions for the values actually in use.
         "categories": list(CATEGORIES), "units": list(UNITS),
         "storageMethods": list(STORAGE_METHODS), "locationKinds": list(LOCATION_KINDS),
-        "lifecycleStates": [s for s in LIFECYCLE_STATES if s], "outcomes": list(OUTCOMES),
+        "freshnessLevels": fresh, "lifecycleStates": fresh,  # alias
+        "outcomes": list(OUTCOMES),
     })

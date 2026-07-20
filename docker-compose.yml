@@ -1,0 +1,24 @@
+services:
+  edibl:
+    build: .
+    container_name: edibl
+    ports:
+      - "7746:7746"
+      # MCP (AI tooling). Loopback-only by default; set EDIBL_MCP_BIND=0.0.0.0 in
+      # .env to expose on the LAN (then set EDIBL_MCP_SERVER_TOKEN).
+      - "${EDIBL_MCP_BIND:-127.0.0.1}:7767:7767"
+    environment:
+      EDIBL_SECRET_KEY: "${EDIBL_SECRET_KEY:?set EDIBL_SECRET_KEY to a long random string}"
+      EDIBL_DISABLE_AUTH: "false"
+      EDIBL_PROXY_HOPS: "0"
+      EDIBL_MCP_ENABLED: "${EDIBL_MCP_ENABLED:-true}"
+      # Bridge to sibling apps (optional):
+      # EDIBL_MYMEAL_URL: "http://mymeal:8000"
+      # EDIBL_MYMEAL_TOKEN: "${EDIBL_MYMEAL_TOKEN}"
+      # EDIBL_HOMEHOARD_URL: "http://homehoard:7745"
+      # EDIBL_MCP_SERVER_TOKEN: "${EDIBL_MCP_SERVER_TOKEN}"
+    volumes:
+      - edibl-data:/data
+    restart: unless-stopped
+volumes:
+  edibl-data:

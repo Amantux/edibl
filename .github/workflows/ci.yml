@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  backend-tests:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install & test
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+          pytest -q
+
+  lint:
+    name: Lint (ruff + eslint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Ruff
+        run: pip install "ruff==0.15.12" && ruff check backend
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: ESLint
+        working-directory: frontend
+        run: npm ci && npm run lint
+
+  frontend-build:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build
+        working-directory: frontend
+        run: npm ci && npm run build
+
+  smoke:
+    name: Container smoke (build → readiness → shutdown)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: edibl:ci
+      - name: Run + wait for readiness + smoke + clean shutdown
+        run: |
+          set -euo pipefail
+          docker run -d --name edibl-ci -p 7746:7746 \
+            -e EDIBL_SECRET_KEY="$(openssl rand -base64 48)" edibl:ci
+          ok=""
+          for i in $(seq 1 45); do
+            if curl -fsS http://127.0.0.1:7746/api/v1/ready >/dev/null 2>&1; then ok=1; break; fi
+            sleep 2
+          done
+          if [ -z "$ok" ]; then docker logs edibl-ci; exit 1; fi
+          curl -fsS http://127.0.0.1:7746/api/v1/ready
+          uid=$(docker exec edibl-ci sh -c "awk '/^Uid:/{print \$2}' /proc/1/status")
+          test "$uid" = "1000"
+          docker stop -t 15 edibl-ci
+          test "$(docker inspect -f '{{.State.ExitCode}}' edibl-ci)" = "0"
+      - name: Logs on failure
+        if: failure()
+        run: docker logs edibl-ci || true

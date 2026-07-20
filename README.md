@@ -38,7 +38,8 @@ client) can query and act on your inventory.
   endpoint, or **Anthropic**. It can look things up *and* act — add, update, and
   remove stock and shopping-list items by chat. (Requires a configured provider.)
 - **Flexible bulk add** — log a whole grocery haul, a farm box, or a butchered
-  animal in one action, with shared defaults + per-row overrides.
+  animal in one action, with shared defaults + per-row overrides. **Paste a
+  receipt or order** and an LLM extracts the items for you to review and add.
 - **Barcode intake** — scan (native browser `BarcodeDetector`) or type a code;
   known products auto-fill, unknown ones can enrich from Open Food Facts.
 - **Wine & alcohol** specialty view (vintage / varietal / region).
@@ -65,11 +66,14 @@ EDIBL_LLM_PROVIDER=ollama  EDIBL_LLM_BASE_URL=http://localhost:11434  EDIBL_LLM_
 EDIBL_LLM_PROVIDER=openai  EDIBL_LLM_API_KEY=sk-...  EDIBL_LLM_MODEL=gpt-4o-mini
 # Anthropic:
 EDIBL_LLM_PROVIDER=anthropic  EDIBL_LLM_API_KEY=sk-ant-...  EDIBL_LLM_MODEL=claude-opus-4-8
+# As a Home Assistant add-on, reuse HA's own conversation agent (completion-only):
+EDIBL_LLM_PROVIDER=homeassistant
 ```
 
-The assistant uses the same inventory tools as the MCP server, so it can look
-things up and make changes (add stock, record what you ate/tossed, edit the
-shopping list). Optional barcode enrichment: `EDIBL_BARCODE_LOOKUP=1`.
+`ollama` / `openai` / `anthropic` support full chat CRUD (the same tools as the
+MCP server: add / update / remove stock, edit the shopping list) and receipt
+extraction. `homeassistant` reuses HA's configured chat agent for extraction and
+simple Q&A (completion-only). Optional barcode enrichment: `EDIBL_BARCODE_LOOKUP=1`.
 
 ## Quick start
 

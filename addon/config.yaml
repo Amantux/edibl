@@ -1,5 +1,5 @@
 name: Edibl
-version: "1.2.0"
+version: "1.3.0"
 slug: edibl
 description: Your kitchen's real food inventory — freshness, waste-learning, and a pantry chat assistant (Ollama / OpenAI / Anthropic).
 url: https://github.com/Amantux/edibl/tree/master/addon
@@ -18,7 +18,9 @@ ingress_port: 7746
 panel_icon: mdi:food-apple
 panel_title: Edibl
 hassio_api: false
-homeassistant_api: false
+# Lets the `homeassistant` LLM provider call HA's conversation agent (and reuse
+# whatever chat/Ollama model HA already has configured).
+homeassistant_api: true
 # The Edibl MCP server (SSE). Left unmapped by default; set a token and map the
 # port if you want Home Assistant's MCP Client (or another agent) to reach it.
 ports:
@@ -40,7 +42,7 @@ options:
   mcp_server_token: ""
 schema:
   disable_auth: bool
-  llm_provider: "list(|ollama|openai|anthropic)"
+  llm_provider: "list(|ollama|openai|anthropic|homeassistant)"
   llm_base_url: str
   llm_api_key: password
   llm_model: str

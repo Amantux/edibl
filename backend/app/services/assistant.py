@@ -18,6 +18,8 @@ the network provider loops follow each vendor's documented tool-calling shape.
 """
 import json
 import logging
+import os
+import re
 from datetime import datetime
 
 from flask import current_app
@@ -367,6 +369,9 @@ _DEFAULTS = {
     "ollama": ("http://localhost:11434", "llama3.1"),
     "openai": ("https://api.openai.com/v1", "gpt-4o-mini"),
     "anthropic": ("https://api.anthropic.com", "claude-opus-4-8"),
+    # Reuse Home Assistant's own configured conversation agent via the Supervisor
+    # API (no separate LLM config). Requires homeassistant_api on the add-on.
+    "homeassistant": ("http://supervisor/core", ""),
 }
 
 
@@ -374,17 +379,24 @@ def _cfg():
     c = current_app.config
     provider = c.get("LLM_PROVIDER") or ""
     base, model = _DEFAULTS.get(provider, ("", ""))
+    api_key = c.get("LLM_API_KEY") or ""
+    if provider == "homeassistant" and not api_key:
+        # Add-ons receive a Supervisor token in the environment.
+        api_key = os.environ.get("SUPERVISOR_TOKEN", "")
     return {
         "provider": provider,
         "base_url": c.get("LLM_BASE_URL") or base,
-        "api_key": c.get("LLM_API_KEY") or "",
+        "api_key": api_key,
         "model": c.get("LLM_MODEL") or model,
         "timeout": c.get("LLM_TIMEOUT", 60),
         "max_steps": c.get("LLM_MAX_STEPS", 6),
     }
 
 
-_PROVIDERS = ("ollama", "openai", "anthropic")
+_PROVIDERS = ("ollama", "openai", "anthropic", "homeassistant")
+# Providers that support function/tool calling (full chat CRUD). Home Assistant's
+# conversation API cannot expose Edibl's tools, so it's completion-only.
+_TOOL_PROVIDERS = ("ollama", "openai", "anthropic")
 
 SETUP_MESSAGE = (
     "The chat assistant needs an LLM. In the Edibl add-on options (or via "
@@ -398,6 +410,9 @@ def config_public():
     enabled = cfg["provider"] in _PROVIDERS
     return {"enabled": enabled, "provider": cfg["provider"] or "none",
             "model": cfg["model"] if enabled else None,
+            # Whether the provider can run Edibl's tools (full chat CRUD) vs
+            # completion-only (Home Assistant conversation relay + extraction).
+            "tools": cfg["provider"] in _TOOL_PROVIDERS,
             "setup": None if enabled else SETUP_MESSAGE}
 
 
@@ -412,7 +427,9 @@ def run_chat(gid, messages):
                 "model": None, "enabled": False}
     actions = []
     try:
-        if provider == "anthropic":
+        if provider == "homeassistant":
+            reply = _relay_homeassistant(messages, cfg)
+        elif provider == "anthropic":
             reply = _loop_anthropic(gid, messages, cfg, actions)
         else:
             reply = _loop_openai_style(gid, messages, cfg, actions)
@@ -424,6 +441,124 @@ def run_chat(gid, messages):
                 "model": cfg["model"], "enabled": True}
     return {"reply": reply, "actions": actions, "provider": provider,
             "model": cfg["model"], "enabled": True}
+
+
+# --------------------------------------------------------------------------- #
+# Single-shot completion (no tools) — powers receipt extraction and the Home
+# Assistant conversation relay. Works across every provider.
+# --------------------------------------------------------------------------- #
+def _complete(cfg, system, user):
+    """Return the model's text for one system+user prompt (no tool calling)."""
+    import httpx
+
+    provider = cfg["provider"]
+    with httpx.Client(timeout=cfg["timeout"]) as client:
+        if provider == "ollama":
+            r = client.post(cfg["base_url"] + "/api/chat", json={
+                "model": cfg["model"], "stream": False,
+                "messages": [{"role": "system", "content": system},
+                             {"role": "user", "content": user}]})
+            r.raise_for_status()
+            return r.json()["message"].get("content", "")
+        if provider == "openai":
+            headers = {"Authorization": f"Bearer {cfg['api_key']}"} if cfg["api_key"] else {}
+            r = client.post(cfg["base_url"] + "/chat/completions", headers=headers, json={
+                "model": cfg["model"],
+                "messages": [{"role": "system", "content": system},
+                             {"role": "user", "content": user}]})
+            r.raise_for_status()
+            return r.json()["choices"][0]["message"].get("content", "") or ""
+        if provider == "anthropic":
+            headers = {"x-api-key": cfg["api_key"], "anthropic-version": "2023-06-01"}
+            r = client.post(cfg["base_url"] + "/v1/messages", headers=headers, json={
+                "model": cfg["model"], "max_tokens": 2048, "system": system,
+                "messages": [{"role": "user", "content": user}]})
+            r.raise_for_status()
+            return "".join(b.get("text", "") for b in r.json().get("content", [])
+                           if b.get("type") == "text")
+        if provider == "homeassistant":
+            headers = {"Authorization": f"Bearer {cfg['api_key']}"}
+            r = client.post(cfg["base_url"] + "/api/conversation/process", headers=headers,
+                            json={"text": f"{system}\n\n{user}", "language": "en"})
+            r.raise_for_status()
+            data = r.json()
+            return (((data.get("response") or {}).get("speech") or {})
+                    .get("plain") or {}).get("speech", "")
+    return ""
+
+
+def _relay_homeassistant(messages, cfg):
+    """Pass the latest user message to Home Assistant's conversation agent. HA's
+    conversation API can't run Edibl's tools, so this is a chat relay, not CRUD."""
+    last = next((m.get("content", "") for m in reversed(messages)
+                 if m.get("role") == "user"), "")
+    reply = _complete(cfg, "You are Edibl's kitchen assistant.", last)
+    return reply or "(no reply from Home Assistant)"
+
+
+# --------------------------------------------------------------------------- #
+# Receipt / order-form extraction
+# --------------------------------------------------------------------------- #
+_EXTRACT_SYSTEM = (
+    "You extract FOOD/GROCERY items from a pasted receipt or order confirmation. "
+    "Return ONLY a JSON array (no prose, no markdown) of objects with keys: "
+    "\"name\" (string, the item), \"quantity\" (number), \"unit\" (string like "
+    "count/g/kg/ml/l/pack), and optional \"category\" (e.g. dairy, produce, meat). "
+    "Merge obvious duplicates. Skip prices, taxes, totals, discounts, store info, "
+    "and non-food items. If nothing food-like is present, return []."
+)
+
+
+def _parse_items(text):
+    """Best-effort parse of a model's reply into a clean item list."""
+    if not text:
+        return []
+    raw = text.strip()
+    if "```" in raw:  # strip markdown fences
+        raw = re.sub(r"```[a-zA-Z]*", "", raw).replace("```", "")
+    start, end = raw.find("["), raw.rfind("]")
+    if start == -1 or end == -1 or end < start:
+        return []
+    try:
+        data = json.loads(raw[start:end + 1])
+    except (json.JSONDecodeError, ValueError):
+        return []
+    items = []
+    for d in data if isinstance(data, list) else []:
+        if not isinstance(d, dict):
+            continue
+        name = str(d.get("name") or d.get("item") or "").strip()
+        if not name:
+            continue
+        try:
+            qty = float(d.get("quantity") or d.get("qty") or 1)
+        except (TypeError, ValueError):
+            qty = 1
+        item = {"name": name, "quantity": qty,
+                "unit": str(d.get("unit") or "count").strip() or "count"}
+        cat = str(d.get("category") or "").strip()
+        if cat:
+            item["category"] = cat
+        items.append(item)
+    return items
+
+
+def extract_items(text):
+    """LLM-extract items from receipt/order text. Returns {items, provider, enabled}.
+    No inventory is changed — the caller reviews then bulk-adds."""
+    cfg = _cfg()
+    if cfg["provider"] not in _PROVIDERS:
+        return {"items": [], "enabled": False, "provider": "none", "error": SETUP_MESSAGE}
+    text = (text or "").strip()[:8000]
+    if not text:
+        return {"items": [], "enabled": True, "provider": cfg["provider"], "error": "empty text"}
+    try:
+        reply = _complete(cfg, _EXTRACT_SYSTEM, text)
+    except Exception as exc:  # noqa: BLE001
+        _LOGGER.warning("extract via '%s' failed: %s", cfg["provider"], exc)
+        return {"items": [], "enabled": True, "provider": cfg["provider"],
+                "error": f"provider unreachable: {exc}"}
+    return {"items": _parse_items(reply), "enabled": True, "provider": cfg["provider"]}
 
 
 # --------------------------------------------------------------------------- #

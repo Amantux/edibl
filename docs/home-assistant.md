@@ -66,20 +66,33 @@ The chat widget (bottom-right in Edibl) uses a provider-neutral backend. In the
 add-on options (or env vars if standalone):
 
 ```
-# Local Ollama (install the HA "Ollama" add-on, pull a model):
+# Reuse the SAME Ollama that Home Assistant uses — just point at its host:
 llm_provider: ollama
-llm_base_url: http://homeassistant.local:11434
+llm_base_url: http://homeassistant.local:11434   # the HA "Ollama" add-on's server
 llm_model:    llama3.1
 
 # OpenAI (or any OpenAI-compatible endpoint):
 llm_provider: openai
 llm_api_key:  sk-...
 llm_model:    gpt-4o-mini
+
+# Reuse Home Assistant's OWN configured conversation agent (no LLM config here):
+llm_provider: homeassistant
 ```
 
-It uses the same inventory tools as the MCP server, so it can look things up and
-act (add / update / remove stock, record eaten/tossed, edit the shopping list).
-A provider is required — without one the chat shows setup guidance.
+`ollama` / `openai` / `anthropic` support full chat CRUD (add / update / remove
+stock, edit the shopping list) — the same tools as the MCP server. The
+**`homeassistant`** provider reuses whatever chat agent HA already has (via the
+Supervisor conversation API) but is **completion-only** — perfect for receipt
+extraction and simple Q&A, not tool-based CRUD (HA can't expose Edibl's tools to
+it). A provider is required — without one the chat shows setup guidance.
+
+### Paste a receipt / order → auto-add
+
+In **Bulk add**, paste a grocery receipt or delivery-order confirmation and hit
+**✨ Extract items** — the LLM pulls out the food items (name / quantity / unit /
+category), you review the rows, then **Add all**. Works with any configured
+provider, including `homeassistant`.
 
 ### B. HA Assist / voice (through MCP)
 

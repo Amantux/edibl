@@ -93,3 +93,67 @@ def test_provider_error_does_not_500(app, monkeypatch):
         db.session.flush()
         result = assistant.run_chat(g.id, [{"role": "user", "content": "hi"}])
     assert result["provider"] == "openai:error" and "unreachable" in result["reply"]
+
+
+# --- receipt / order extraction ---------------------------------------------
+def test_extract_items_parses_llm_json(app, monkeypatch):
+    _configure(app, "ollama")
+    reply = ("Sure!\n```json\n"
+             '[{"name":"Organic Milk","quantity":2,"unit":"l","category":"dairy"},'
+             '{"name":"Bananas","quantity":6,"unit":"count"}]\n```')
+    script = [{"message": {"role": "assistant", "content": reply}}]
+    monkeypatch.setattr(httpx, "Client", lambda *a, **k: _FakeClient(script))
+    with app.app_context():
+        res = assistant.extract_items("2 ORGANIC MILK 3.99\nBANANAS x6 2.10\nTOTAL 6.09")
+    assert res["enabled"] is True and res["provider"] == "ollama"
+    names = [i["name"] for i in res["items"]]
+    assert names == ["Organic Milk", "Bananas"]
+    assert res["items"][0]["quantity"] == 2.0 and res["items"][0]["category"] == "dairy"
+
+
+def test_extract_without_provider(app):
+    with app.app_context():
+        res = assistant.extract_items("some receipt")
+    assert res["enabled"] is False and res["items"] == [] and res["error"]
+
+
+def test_parse_items_handles_garbage(app):
+    with app.app_context():
+        assert assistant._parse_items("no json at all") == []
+        assert assistant._parse_items('[{"name":"","quantity":1}]') == []  # blank name dropped
+
+
+def test_extract_endpoint(auth_client, monkeypatch):
+    app = auth_client.application
+    app.config["LLM_PROVIDER"] = "ollama"
+    app.config["LLM_BASE_URL"] = "http://x"
+    app.config["LLM_MODEL"] = "m"
+    script = [{"message": {"role": "assistant",
+                           "content": '[{"name":"Eggs","quantity":12,"unit":"count"}]'}}]
+    monkeypatch.setattr(httpx, "Client", lambda *a, **k: _FakeClient(script))
+    r = auth_client.post("/api/v1/stock/extract", json={"text": "EGGS 12ct 4.50"})
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["items"] == [{"name": "Eggs", "quantity": 12.0, "unit": "count"}]
+
+
+# --- Home Assistant conversation provider -----------------------------------
+def test_homeassistant_enabled_but_completion_only(app):
+    app.config["LLM_PROVIDER"] = "homeassistant"
+    with app.app_context():
+        cfg = assistant.config_public()
+    assert cfg["enabled"] is True and cfg["provider"] == "homeassistant"
+    assert cfg["tools"] is False  # completion-only (no Edibl tool CRUD)
+
+
+def test_homeassistant_relay_chat(app, monkeypatch):
+    app.config["LLM_PROVIDER"] = "homeassistant"
+    app.config["LLM_API_KEY"] = "supervisor-token"
+    ha_response = {"response": {"speech": {"plain": {"speech": "You have 2 litres of milk."}}}}
+    monkeypatch.setattr(httpx, "Client", lambda *a, **k: _FakeClient([ha_response]))
+    with app.app_context():
+        g = Group(name="H")
+        db.session.add(g)
+        db.session.flush()
+        res = assistant.run_chat(g.id, [{"role": "user", "content": "do I have milk?"}])
+    assert res["provider"] == "homeassistant" and "milk" in res["reply"].lower()

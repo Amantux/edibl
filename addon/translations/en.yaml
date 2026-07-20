@@ -8,8 +8,10 @@ configuration:
   llm_provider:
     name: Chat assistant provider
     description: >-
-      Which LLM backend powers the in-app pantry chat. Required for the chat —
-      ollama / openai / anthropic. Left blank, the chat shows setup guidance.
+      Which LLM backend powers the chat + receipt extraction. ollama / openai /
+      anthropic support full chat CRUD. "homeassistant" reuses HA's own
+      conversation agent (no extra config) but is completion-only — great for
+      receipt extraction, not tool-based CRUD. Blank shows setup guidance.
   llm_base_url:
     name: LLM base URL
     description: >-

@@ -310,6 +310,18 @@ def _bulk_create(shared, items, gid):
     return created, None
 
 
+@bp.post("/stock/extract")
+@login_required
+def extract():
+    """Turn a pasted receipt / order confirmation into a reviewable item list via
+    the configured LLM. Body: { text }. Returns { items, provider } — nothing is
+    added; the client reviews the items and POSTs them to /stock/bulk."""
+    from ..services import assistant
+    data = request.get_json(force=True) or {}
+    result = assistant.extract_items(data.get("text", ""))
+    return jsonify(result)
+
+
 @bp.post("/stock/bulk")
 @login_required
 def bulk_add():

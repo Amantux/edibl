@@ -11,6 +11,9 @@ const filter = ref({ view: 'all' })
 const expanded = reactive({})
 const showAdd = ref(false)
 const showBulk = ref(false)
+const assistantCfg = ref({ enabled: false })
+const receiptText = ref('')
+const extracting = ref(false)
 const consumeFor = ref(null)
 const consumeQty = ref(null)
 const toast = ref('')
@@ -54,8 +57,24 @@ async function load() {
 onMounted(async () => {
   locations.value = await api.get('/locations')
   await loadSuggest()
+  try { assistantCfg.value = await api.get('/assistant/config') } catch (e) { /* optional */ }
   await load()
 })
+
+async function extractReceipt() {
+  if (!receiptText.value.trim()) return
+  if (!assistantCfg.value.enabled) { flash('Set an LLM provider in the add-on options to extract receipts.'); return }
+  extracting.value = true
+  try {
+    const res = await api.post('/stock/extract', { text: receiptText.value })
+    if (res.error) { flash(res.error); return }
+    if (!res.items?.length) { flash('No items found — check the text or add rows manually.'); return }
+    bulk.value.rows = res.items.map((i) => ({
+      name: i.name, quantity: i.quantity ?? 1, unit: i.unit || 'count',
+      category: i.category || '', storageMethod: '' }))
+    flash(`Extracted ${res.items.length} items — review and Add all.`)
+  } catch (e) { flash('Extract failed: ' + (e.message || 'error')) } finally { extracting.value = false }
+}
 
 function toggle(key) { expanded[key] = !expanded[key] }
 function flash(msg) { if (!msg) return; toast.value = msg; setTimeout(() => (toast.value = ''), 6000) }
@@ -129,7 +148,8 @@ async function submitBulk() {
   const shared = { ...bulk.value.shared }
   for (const k of ['locationId', 'category', 'family', 'source']) if (!shared[k]) delete shared[k]
   const res = await api.post('/stock/bulk', { shared, items: rows })
-  showBulk.value = false; bulk.value = blankBulk(); flash(`Added ${res.created} items.`); await refresh()
+  showBulk.value = false; bulk.value = blankBulk(); receiptText.value = ''
+  flash(`Added ${res.created} items.`); await refresh()
 }
 
 // consume with outcome + freshness
@@ -283,6 +303,18 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
     <div class="card modal">
       <h2>⧉ Bulk add</h2>
       <p class="muted" style="margin-top:0">Many items at once — a grocery haul, a farm box, or a butchered animal. Shared settings apply to every row.</p>
+
+      <div class="receipt">
+        <label class="field"><span>✨ Paste a receipt or order (auto-extract)</span>
+          <textarea v-model="receiptText" rows="3"
+            :placeholder="assistantCfg.enabled ? 'Paste your grocery receipt or order confirmation…' : 'Set an LLM provider (add-on options) to auto-extract'" /></label>
+        <div class="row" style="justify-content:flex-end">
+          <button class="secondary sm" :disabled="extracting || !assistantCfg.enabled || !receiptText.trim()"
+            @click="extractReceipt">{{ extracting ? 'Extracting…' : '✨ Extract items' }}</button>
+        </div>
+      </div>
+      <div class="divider"></div>
+
       <div class="row">
         <label class="field" style="flex:1"><span>Default storage</span>
           <input v-model="bulk.shared.storageMethod" list="dl-storage" /></label>
@@ -349,4 +381,5 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
 .outcome-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
 .outcome-grid button { width: 100%; }
 .sm { font-size: .8rem; }
+.receipt textarea { width: 100%; resize: vertical; }
 </style>

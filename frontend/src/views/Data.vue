@@ -65,6 +65,53 @@ async function discoverMyMeal() {
   } catch (e) { mmMsg.value = '⚠️ ' + (e.message || 'error') } finally { mmBusy.value = false }
 }
 function useCandidate(cnd) { mmForm.value.url = cnd.url; mmMsg.value = `Filled in “${cnd.name}” — Save, then Test.` }
+
+// ── Access & keys: mint/list/revoke tokens + connect-link sharing ────────────
+const tokens = ref([])
+const newTokenName = ref('')
+const minted = ref(null)            // { token, name } — raw token, shown once
+const connectUrl = ref('')          // address other apps use to reach this Edibl
+const keysBusy = ref(false)
+const keysMsg = ref('')
+async function loadTokens() { try { tokens.value = await api.get('/tokens') } catch (e) { /* auth off / optional */ } }
+async function mintToken() {
+  keysBusy.value = true; keysMsg.value = ''
+  try {
+    const r = await api.post('/tokens', { name: newTokenName.value || 'Connected app' })
+    minted.value = { token: r.token, name: r.name }
+    newTokenName.value = ''
+    await loadTokens()
+  } catch (e) { keysMsg.value = '⚠️ ' + (e.message || 'could not create token') } finally { keysBusy.value = false }
+}
+async function revokeToken(id) {
+  if (!confirm('Revoke this token? Anything using it loses access.')) return
+  try { await api.del('/tokens/' + id); await loadTokens() } catch (e) { keysMsg.value = '⚠️ ' + (e.message || 'revoke failed') }
+}
+function encodeConnect(app, url, token) {
+  return app + '-connect:' + btoa(unescape(encodeURIComponent(JSON.stringify({ app, url, token, v: 1 }))))
+}
+function decodeConnect(str, expectApp) {
+  const m = /^([a-z]+)-connect:(.+)$/.exec((str || '').trim())
+  if (!m) return null
+  try {
+    const obj = JSON.parse(decodeURIComponent(escape(atob(m[2]))))
+    return (!expectApp || obj.app === expectApp) ? obj : null
+  } catch (e) { return null }
+}
+const ediblConnectLink = computed(() =>
+  minted.value ? encodeConnect('edibl', connectUrl.value || (typeof window !== 'undefined' ? window.location.origin : ''), minted.value.token) : '')
+async function copyText(text, label) {
+  try { await navigator.clipboard.writeText(text); keysMsg.value = `✓ ${label} copied.` }
+  catch (e) { keysMsg.value = 'Copy failed — select the text and copy manually.' }
+}
+// Paste a myMeal connect link into the myMeal card (fills URL + token at once).
+function pasteMymealConnect(str) {
+  const obj = decodeConnect(str, 'mymeal')
+  if (!obj) { mmMsg.value = '⚠️ That doesn’t look like a myMeal connect link.'; return }
+  mmForm.value.url = obj.url || mmForm.value.url
+  mmForm.value.token = obj.token || ''
+  mmMsg.value = '✓ Filled from the connect link — Save, then Test.'
+}
 const mmDiag = ref('')
 async function diagnoseMyMeal() {
   mmBusy.value = true; mmDiag.value = ''
@@ -73,7 +120,10 @@ async function diagnoseMyMeal() {
   } catch (e) { mmDiag.value = 'Error: ' + (e.message || 'failed') } finally { mmBusy.value = false }
 }
 
-onMounted(() => { loadSettings(); loadMyMeal() })
+onMounted(() => {
+  loadSettings(); loadMyMeal(); loadTokens()
+  if (typeof window !== 'undefined') connectUrl.value = window.location.origin
+})
 async function loadSettings() {
   try {
     s.value = await api.get('/assistant/settings')
@@ -219,6 +269,9 @@ async function importFile(e) {
         <button v-for="cnd in mmCandidates" :key="cnd.slug" class="chip" style="cursor:pointer;border:none"
           @click="useCandidate(cnd)">{{ cnd.name }} · {{ cnd.hostname }}:{{ cnd.port }}{{ cnd.running ? '' : ' (stopped)' }}</button>
       </div>
+      <label class="field"><span>Paste a myMeal <strong>connect link</strong> (fills URL + token)</span>
+        <input placeholder="mymeal-connect:… — from myMeal → Settings → Access &amp; keys"
+          @change="(e)=>{ pasteMymealConnect(e.target.value); e.target.value='' }" /></label>
       <label class="field"><span>myMeal URL</span>
         <input v-model="mmForm.url" placeholder="http://mymeal:8000 or an add-on hostname" /></label>
       <label class="field"><span>API token {{ mm.hasToken ? '— saved, leave blank to keep' : '(optional)' }}</span>
@@ -231,6 +284,42 @@ async function importFile(e) {
       </div>
     </div>
     <div v-else class="muted">Loading…</div>
+  </div>
+
+  <!-- Access & keys -->
+  <div class="card">
+    <h2>🔑 Access &amp; keys</h2>
+    <p class="muted" style="margin-top:0">Long-lived tokens for other apps or Home Assistant to reach Edibl's API — needed only when Edibl runs <strong>standalone</strong> or is reached across the network (behind HA Ingress, siblings connect without a key). Generate one, then hand it to the other app with a <strong>connect link</strong>.</p>
+
+    <label class="field"><span>Address other apps use to reach Edibl</span>
+      <input v-model="connectUrl" placeholder="https://edibl.example.com" /></label>
+    <div class="row" style="align-items:flex-end;gap:8px">
+      <label class="field" style="flex:1"><span>New token name (what's it for?)</span>
+        <input v-model="newTokenName" placeholder="e.g. myMeal, HA MCP" @keyup.enter="mintToken" /></label>
+      <button :disabled="keysBusy" @click="mintToken" style="height:38px">Generate</button>
+    </div>
+
+    <div v-if="minted" style="border:1px solid var(--primary,#2f9e57);border-radius:8px;padding:10px 12px;margin-top:10px;background:rgba(47,158,87,.10)">
+      <p style="margin:0 0 6px"><strong>New token “{{ minted.name }}” — copy it now, it won't be shown again.</strong></p>
+      <code style="display:block;word-break:break-all;background:var(--surface-raised,#f6f6f6);padding:6px 8px;border-radius:6px;font-size:.8rem">{{ minted.token }}</code>
+      <div class="row wrap" style="gap:8px;margin-top:8px">
+        <button class="secondary sm" @click="copyText(minted.token, 'Token')">Copy token</button>
+        <button class="sm" @click="copyText(ediblConnectLink, 'Connect link')">🔗 Copy connect link</button>
+        <button class="ghost sm" @click="minted=null">Done</button>
+      </div>
+      <p class="muted" style="font-size:.78rem;margin:8px 0 0">Paste the connect link into the other app's Edibl connection (fills its URL + token in one step).</p>
+    </div>
+
+    <table v-if="tokens.length" style="width:100%;margin-top:12px;font-size:.9rem">
+      <thead><tr><th style="text-align:left">Name</th><th style="text-align:left">Hint</th><th></th></tr></thead>
+      <tbody>
+        <tr v-for="t in tokens" :key="t.id">
+          <td>{{ t.name }}</td><td class="muted"><code>{{ t.hint }}…</code></td>
+          <td style="text-align:right"><button class="ghost sm" @click="revokeToken(t.id)">Revoke</button></td>
+        </tr>
+      </tbody>
+    </table>
+    <p v-if="keysMsg" class="muted" style="font-size:.85rem;margin-top:8px">{{ keysMsg }}</p>
   </div>
 
   <div class="card">

@@ -3,6 +3,15 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.5.12
+
+- **Access & keys + connect links.** Settings gains a token manager — generate a
+  named API key (shown once, copy, revoke) — plus a one-click **connect link**
+  that bundles Edibl's address + the key. Paste a myMeal connect link into the
+  myMeal card to fill its URL *and* token in one step. This is for **standalone /
+  cross-network** setups; behind Home Assistant Ingress siblings still connect
+  with no key at all.
+
 ## 1.5.11
 
 - **Config UX.** The Settings → Chat assistant card gains **↩ Reset to add-on

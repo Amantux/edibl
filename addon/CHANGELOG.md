@@ -3,6 +3,15 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.5.3
+
+- **Zero-URL integration setup, matched to HomeHoard** — the add-on now registers
+  its auto-discovery whenever it runs under the Supervisor (previously only in
+  auth-disabled mode), falls back to the container hostname if the Supervisor
+  doesn't report one, and the config flow **probes the add-on before offering the
+  discovered card** so it never creates a dead entry. Add the "Edibl" card and
+  you're done — no URL, no token, no port mapping.
+
 ## 1.5.2
 
 - **Connect to a myMeal add-on in one click** — the Settings → myMeal card can

@@ -39,10 +39,16 @@ The integration reads Edibl's REST API and exposes:
 `https://github.com/Amantux/edibl` as an **Integration** → install **Edibl** →
 restart HA → **Settings → Devices & Services → Add Integration → Edibl**.
 
-**Auto-discovery:** if you run the **add-on**, the integration is discovered
-automatically — you'll get a "New devices discovered / Edibl" prompt; just click
-**Add** (no URL or token needed, and no port to map — HA reaches the add-on
-internally). Install the integration in HACS first (below) so the prompt appears.
+**Auto-discovery (no URL needed):** if you run the **add-on**, the integration is
+discovered automatically — you'll get a "New devices discovered / Edibl" prompt;
+just click **Add** (no URL or token, and no port to map — HA reaches the add-on
+internally, and it works whether or not auth is enabled). The add-on registers
+with the Supervisor on every start and the integration probes it before offering
+setup, so a stopped add-on won't create a dead entry.
+
+Install the integration in HACS **first** (below) so a handler exists when the
+prompt fires. If you installed the add-on before the integration, just **restart
+the add-on** afterwards and the "Edibl" discovery card appears.
 
 **Manual connect** (standalone Edibl, or if you prefer): enter the Edibl URL. For
 the add-on, map its port `7746` and use `http://homeassistant.local:7746`. The API

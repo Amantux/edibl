@@ -33,6 +33,10 @@ class EdiblConfigFlow(ConfigFlow, domain=DOMAIN):
         self._discovered_host = f"http://{host}:{port}"
         await self.async_set_unique_id("edibl_addon")
         self._abort_if_unique_id_configured(updates={CONF_HOST: self._discovered_host})
+        # Confirm the add-on is actually reachable before offering setup, so the
+        # discovered card never creates a dead entry (matches HomeHoard).
+        if await self._reachable(self._discovered_host) is False:
+            return self.async_abort(reason="cannot_connect")
         return await self.async_step_hassio_confirm()
 
     async def async_step_hassio_confirm(
@@ -71,6 +75,15 @@ class EdiblConfigFlow(ConfigFlow, domain=DOMAIN):
             }
         )
         return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
+
+    async def _reachable(self, host: str) -> bool:
+        """True if the add-on answers on its public status endpoint (no auth)."""
+        session = async_get_clientsession(self.hass)
+        try:
+            async with session.get(f"{host}/api/v1/status", timeout=_TIMEOUT) as resp:
+                return resp.status == 200
+        except (aiohttp.ClientError, TimeoutError):
+            return False
 
     async def _validate(self, host: str, token: str) -> str | None:
         """Return None on success, else an error key."""

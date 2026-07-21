@@ -9,6 +9,7 @@ hostname:7746 (no host port mapping needed).
 """
 import json
 import os
+import socket
 import sys
 import time
 import urllib.request
@@ -34,6 +35,10 @@ def main():
         try:
             info = _api("GET", "/addons/self/info")
             host = (info.get("data") or {}).get("hostname")
+            if not host:
+                # Fall back to the container hostname, which HA core can also
+                # reach on the internal add-on network (matches homehoard).
+                host = os.environ.get("HOSTNAME") or socket.gethostname()
             if not host:
                 raise RuntimeError("no hostname from Supervisor")
             _api("POST", "/discovery", {"service": "edibl",

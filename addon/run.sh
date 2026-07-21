@@ -27,9 +27,11 @@ export EDIBL_MCP_SERVER_TOKEN="$(gets mcp_server_token)"
 # Behind HA ingress the requests come from the trusted supervisor proxy.
 export EDIBL_PROXY_HOPS="1"
 
-# Auto-discover the Edibl integration in Home Assistant. Only in single-tenant
-# mode — discovery carries no token, so with auth on the integration would 401.
-if [ -n "${SUPERVISOR_TOKEN:-}" ] && [ "$EDIBL_DISABLE_AUTH" = "true" ]; then
+# Auto-discover the Edibl integration in Home Assistant whenever we run under the
+# Supervisor (matches the HomeHoard add-on). The integration probes the discovered
+# add-on before offering setup, so an unreachable instance is aborted cleanly
+# rather than creating a broken entry.
+if [ -n "${SUPERVISOR_TOKEN:-}" ]; then
   python3 /register-discovery.py &
 fi
 

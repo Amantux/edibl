@@ -44,6 +44,7 @@ options:
   llm_base_url: ""
   llm_api_key: ""
   llm_model: ""
+  llm_agent_id: ""
   barcode_lookup: false
   mcp_enabled: true
   mcp_server_token: ""
@@ -53,6 +54,7 @@ schema:
   llm_base_url: str
   llm_api_key: password
   llm_model: str
+  llm_agent_id: str
   barcode_lookup: bool
   mcp_enabled: bool
   mcp_server_token: password

@@ -810,7 +810,9 @@ def settings_public():
         "provider": cfg["provider"] or "",
         "baseUrl": ov.get("llm_base_url", ""),
         "model": ov.get("llm_model", ""),
-        "agentId": ov.get("llm_agent_id", ""),
+        # Show the effective agent id so an add-on/env value is visible in the UI
+        # (not only a UI override) — the two config surfaces then agree.
+        "agentId": ov.get("llm_agent_id") or current_app.config.get("LLM_AGENT_ID", ""),
         "hasApiKey": bool(cfg["api_key"]),
         "enabled": cfg["provider"] in _PROVIDERS,
         "tools": cfg["provider"] in _TOOL_PROVIDERS,

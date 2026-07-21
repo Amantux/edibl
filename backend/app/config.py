@@ -52,6 +52,10 @@ class Config:
     LLM_BASE_URL = os.environ.get("EDIBL_LLM_BASE_URL", "").strip().rstrip("/")
     LLM_API_KEY = os.environ.get("EDIBL_LLM_API_KEY", "").strip()
     LLM_MODEL = os.environ.get("EDIBL_LLM_MODEL", "").strip()
+    # Only for the `homeassistant` provider: which HA conversation agent to target
+    # (e.g. conversation.ollama). Blank = HA's default agent. Also settable in the
+    # UI, which overrides this — the effective value is UI > this env/option.
+    LLM_AGENT_ID = os.environ.get("EDIBL_LLM_AGENT_ID", "").strip()
     LLM_TIMEOUT = int(os.environ.get("EDIBL_LLM_TIMEOUT", "60"))
     LLM_MAX_STEPS = int(os.environ.get("EDIBL_LLM_MAX_STEPS", "6"))
 

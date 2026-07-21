@@ -23,10 +23,11 @@ Data is stored in the add-on's persistent `/data` (survives updates).
 | Option | Meaning |
 |---|---|
 | `disable_auth` | Keep **on** behind Ingress (HA authenticates you). |
-| `llm_provider` | `ollama` / `openai` / `anthropic` — **required** for the chat assistant. |
+| `llm_provider` | `ollama` / `openai` / `anthropic` / `homeassistant` — **required** for the chat assistant. |
 | `llm_base_url` | e.g. `http://homeassistant.local:11434` for the HA **Ollama** add-on. |
 | `llm_api_key` | Only for `openai` / `anthropic`. |
 | `llm_model` | `llama3.1`, `gpt-4o-mini`, `claude-opus-4-8`, … |
+| `llm_agent_id` | Only for `homeassistant`: which HA conversation agent to use (e.g. `conversation.ollama`). Blank = HA's default. |
 | `barcode_lookup` | Enrich unknown barcodes from Open Food Facts (online). |
 | `mcp_enabled` | Run the MCP tool server (for HA's MCP Client / other agents). |
 | `mcp_server_token` | Bearer token to protect the MCP endpoint if you map port 7767. |

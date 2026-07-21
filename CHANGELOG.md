@@ -3,6 +3,17 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.5.10
+
+- **Config syncs both ways.** The Home Assistant conversation-agent id is now a
+  real add-on option (`llm_agent_id`) and env var — previously it could only be
+  set in the app's Settings page, so the `homeassistant` provider was
+  half-configurable from the add-on. The Settings page now also *shows* an
+  add-on/env-set agent id (not just a UI override), so the two surfaces agree.
+- **Standalone made explicit.** Added a documented `.env.example` covering every
+  `EDIBL_*` setting for standalone Docker, with the auth differences between
+  running on your own vs behind Home Assistant Ingress called out.
+
 ## 1.5.9
 
 - **"Find myMeal" now actually finds it.** Looking up a *sibling* add-on's real

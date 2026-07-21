@@ -402,3 +402,13 @@ def test_mymeal_tool_degrades_when_unreachable(app, monkeypatch):
         db.session.commit()
         out = assistant._run_tool(g.id, "mymeal_list_recipes", {}, [])
     assert "reach myMeal" in out
+
+
+# --- agent id syncs from the add-on option / env (was a dead _cfg fallback) ---
+def test_agent_id_from_addon_option_reaches_cfg_and_settings(app):
+    app.config["LLM_PROVIDER"] = "homeassistant"
+    app.config["LLM_AGENT_ID"] = "conversation.ollama"
+    with app.app_context():
+        assert assistant._cfg()["agent_id"] == "conversation.ollama"
+        # settings_public reflects it too, so the UI and add-on option agree.
+        assert assistant.settings_public()["agentId"] == "conversation.ollama"

@@ -3,6 +3,14 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.5.6
+
+- **Fix "Find myMeal".** Discovery relied solely on the Supervisor's per-add-on
+  info API, which the default add-on role can't read for a *sibling* add-on — so
+  it found nothing. It now also probes the internal add-on hostnames
+  (`mymeal` / `local-mymeal:7850`) and returns only instances that actually
+  answer, so it works without extra permissions or port mapping.
+
 ## 1.5.5
 
 - **Reverse a consumption over the API** — new `POST /stock/<lot>/unconsume`, and

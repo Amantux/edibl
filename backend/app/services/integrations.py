@@ -131,28 +131,57 @@ def _internal_port(info):
     return 8000
 
 
+MYMEAL_DEFAULT_PORT = 7850
+MYMEAL_HEALTH_PATH = "/api/v1/status"  # public status endpoint on myMeal
+_PROBE_TIMEOUT = 2.0  # short: we may try several hosts, most refusing fast
+
+
+def _mymeal_reachable(host, port):
+    """True if a myMeal-like service answers here. A status < 500 counts (a
+    401/403 still means 'something is there' — it just wants auth)."""
+    import httpx
+    try:
+        r = httpx.get(f"http://{host}:{port}{MYMEAL_HEALTH_PATH}", timeout=_PROBE_TIMEOUT)
+        return r.status_code < 500
+    except Exception:  # noqa: BLE001 — absence is the normal case, not an error
+        return False
+
+
 def discover_mymeal():
-    """Find myMeal running as a Home Assistant add-on and return how to reach it on
-    the internal add-on network (hostname:port). Best-effort; requires the Supervisor."""
-    data = _supervisor_get("/addons")
-    if data is None:
-        return {"available": False, "candidates": []}
-    addons = (data.get("data") or {}).get("addons", [])
-    candidates = []
-    for a in addons:
+    """Find a companion myMeal on the internal add-on network. Gathers candidate
+    hosts from the Supervisor add-on list (when permitted) PLUS fixed internal
+    hostnames, then returns only those whose status endpoint actually answers —
+    so it works even when the Supervisor denies cross-add-on info queries (the
+    default add-on role can't read a *sibling* add-on's /info), and the returned
+    candidates are guaranteed reachable, not just listed."""
+    seen, candidates = set(), []
+
+    def consider(host, port, slug="", name="", running=None):
+        if not host or f"{host}:{port}" in seen:
+            return
+        seen.add(f"{host}:{port}")
+        if _mymeal_reachable(host, port):
+            candidates.append({"slug": slug, "name": name or slug or "myMeal",
+                               "hostname": host, "port": port,
+                               "url": f"http://{host}:{port}", "running": running})
+
+    for a in ((_supervisor_get("/addons") or {}).get("data") or {}).get("addons", []):
         name, slug = (a.get("name") or ""), (a.get("slug") or "")
         if "meal" not in f"{name} {slug}".lower():
             continue
         info = (_supervisor_get(f"/addons/{slug}/info") or {}).get("data") or {}
-        host = info.get("hostname")
-        if not host:
-            continue
-        port = _internal_port(info)
-        candidates.append({
-            "slug": slug, "name": name or slug, "hostname": host, "port": port,
-            "url": f"http://{host}:{port}",
-            "running": a.get("state") == "started",
-        })
+        running = a.get("state") == "started"
+        port = _internal_port(info) if info else MYMEAL_DEFAULT_PORT
+        # Supervisor-reported hostname (needs manager role); else guess from slug.
+        consider(info.get("hostname") or a.get("hostname"), port, slug, name, running)
+        if slug:
+            consider(f"local-{slug}", port, slug, name, running)
+            consider(slug.replace("_", "-"), port, slug, name, running)
+
+    # Fixed fallbacks — reachable on the add-on network with no Supervisor access.
+    for host in ("local-mymeal", "mymeal", "homeassistant.local"):
+        consider(host, MYMEAL_DEFAULT_PORT)
+
     return {"available": True, "candidates": candidates}
 
 

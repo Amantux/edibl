@@ -3,6 +3,12 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.5.7
+
+- **Troubleshoot discovery** — the Settings → myMeal card has a **🔧 Diagnose**
+  button (and a read-only `GET /integrations/mymeal/discover/debug` endpoint) that
+  shows exactly which hosts "Find myMeal" tried and what each returned. No secrets.
+
 ## 1.5.6
 
 - **Fix "Find myMeal".** Discovery relied solely on the Supervisor's per-add-on

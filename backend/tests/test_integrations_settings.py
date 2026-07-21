@@ -87,3 +87,19 @@ def test_mymeal_discover_finds_addon_via_supervisor(auth_client, monkeypatch):
     assert r["available"] is True and len(r["candidates"]) == 1
     c = r["candidates"][0]
     assert c["url"] == "http://local-mymeal:8000" and c["running"] is True
+
+
+def test_mymeal_discover_debug_reports_tried_hosts(auth_client, monkeypatch):
+    from app.services import integrations as integ
+    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+    monkeypatch.setattr(
+        integ, "_probe_mymeal",
+        lambda host, port: {"reachable": host == "mymeal",
+                            "status": 200 if host == "mymeal" else None,
+                            "error": None if host == "mymeal" else "ConnectError"})
+    r = auth_client.get("/api/v1/integrations/mymeal/discover/debug").get_json()
+    assert r["supervisorToken"] is False
+    assert r["supervisorAddonsQuery"] == "no-supervisor-token"
+    urls = [t["url"] for t in r["tried"]]
+    assert "http://mymeal:7850" in urls and "http://local-mymeal:7850" in urls
+    assert r["found"] == ["http://mymeal:7850"]

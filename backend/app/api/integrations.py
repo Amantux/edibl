@@ -78,6 +78,14 @@ def discover_mymeal():
     return jsonify(integ.discover_mymeal())
 
 
+@bp.get("/integrations/mymeal/discover/debug")
+@login_required
+def discover_mymeal_debug():
+    """Read-only diagnostics for 'Find myMeal': what the Supervisor returned and
+    every candidate host tried, with per-host probe results. No secrets."""
+    return jsonify(integ.discover_mymeal_debug())
+
+
 @bp.post("/integrations/mymeal/plan")
 @login_required
 def ingest_plan():

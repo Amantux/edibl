@@ -65,6 +65,13 @@ async function discoverMyMeal() {
   } catch (e) { mmMsg.value = '⚠️ ' + (e.message || 'error') } finally { mmBusy.value = false }
 }
 function useCandidate(cnd) { mmForm.value.url = cnd.url; mmMsg.value = `Filled in “${cnd.name}” — Save, then Test.` }
+const mmDiag = ref('')
+async function diagnoseMyMeal() {
+  mmBusy.value = true; mmDiag.value = ''
+  try {
+    mmDiag.value = JSON.stringify(await api.get('/integrations/mymeal/discover/debug'), null, 2)
+  } catch (e) { mmDiag.value = 'Error: ' + (e.message || 'failed') } finally { mmBusy.value = false }
+}
 
 onMounted(() => { loadSettings(); loadMyMeal() })
 async function loadSettings() {
@@ -191,7 +198,9 @@ async function importFile(e) {
     <div v-if="mm">
       <div class="row wrap" style="margin-bottom:10px">
         <button class="secondary sm" :disabled="mmBusy" @click="discoverMyMeal">🔍 Find myMeal add-on</button>
+        <button class="secondary sm" :disabled="mmBusy" @click="diagnoseMyMeal" title="Show what discovery tried (for troubleshooting)">🔧 Diagnose</button>
       </div>
+      <pre v-if="mmDiag" style="max-height:220px;overflow:auto;background:var(--surface-raised,#f6f6f6);padding:10px;border-radius:6px;font-size:.78rem;margin-bottom:10px">{{ mmDiag }}</pre>
       <div v-if="mmCandidates.length" class="row wrap" style="margin-bottom:10px;gap:6px">
         <button v-for="cnd in mmCandidates" :key="cnd.slug" class="chip" style="cursor:pointer;border:none"
           @click="useCandidate(cnd)">{{ cnd.name }} · {{ cnd.hostname }}:{{ cnd.port }}{{ cnd.running ? '' : ' (stopped)' }}</button>

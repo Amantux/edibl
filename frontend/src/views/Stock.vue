@@ -1,10 +1,13 @@
 <script setup>
-import { ref, computed, reactive, onMounted } from 'vue'
+import { ref, computed, reactive, onMounted, nextTick } from 'vue'
 import { api } from '../api'
 
 const groups = ref([])            // grouped view (all stock)
 const flatItems = ref([])         // freezer / wine views
 const suggest = ref({ categories: [], units: [], families: [], freshness: [], storageMethods: [], names: [] })
+const products = ref([])          // known products -> smart prefill on name match
+const showMore = ref(false)       // progressive disclosure in the Add modal
+const nameInput = ref(null)
 const locations = ref([])
 const loading = ref(true)
 const filter = ref({ view: 'all' })
@@ -54,9 +57,30 @@ async function load() {
   }
   loading.value = false
 }
+const productMap = computed(() => {
+  const m = {}
+  for (const p of products.value) m[(p.name || '').trim().toLowerCase()] = p
+  return m
+})
+async function loadProducts() { try { products.value = await api.get('/products') } catch (e) { /* optional */ } }
+async function openAdd() {
+  showAdd.value = true; showMore.value = false
+  await nextTick(); nameInput.value?.focus()
+}
+// Fill in what we already know about a named product (category/group/unit), so a
+// repeat item needs only a name + quantity. Only fills blanks — never clobbers.
+function applyProductDefaults() {
+  const p = productMap.value[(form.value.productName || '').trim().toLowerCase()]
+  if (!p) return
+  if (!form.value.category) form.value.category = p.category || ''
+  if (!form.value.family) form.value.family = p.family || ''
+  if ((!form.value.unit || form.value.unit === 'count') && p.defaultUnit) form.value.unit = p.defaultUnit
+}
+
 onMounted(async () => {
   locations.value = await api.get('/locations')
   await loadSuggest()
+  await loadProducts()
   try { assistantCfg.value = await api.get('/assistant/config') } catch (e) { /* optional */ }
   await load()
 })
@@ -110,16 +134,28 @@ function nextExp(g) {
   return d < 0 ? 'expired' : d + 'd'
 }
 
-async function add() {
+async function submitAdd(keepOpen) {
   if (!form.value.productName.trim()) return
   const body = { ...form.value }
   for (const k of ['expiryDate', 'locationId', 'barcode', 'freshness', 'family', 'source', 'category']) {
     if (!body[k]) delete body[k]
   }
   await api.post('/stock', body)
-  showAdd.value = false; form.value = blankForm(); await refresh()
+  if (keepOpen) {
+    // Keep the "haul" context (location / storage / category / group / unit /
+    // source); reset only the item-specific fields, and refocus for the next one.
+    Object.assign(form.value, { productName: '', quantity: 1, barcode: '',
+      expiryDate: '', freshness: '' })
+    flash('Added — keep going.')
+    refresh()  // background; don't block the next entry
+    await nextTick(); nameInput.value?.focus()
+  } else {
+    showAdd.value = false; form.value = blankForm(); await refresh()
+  }
 }
-async function refresh() { await loadSuggest(); await load() }
+const add = () => submitAdd(false)
+const addAnother = () => submitAdd(true)
+async function refresh() { await loadSuggest(); await loadProducts(); await load() }
 
 // barcode lookup / scan
 async function lookupBarcode() {
@@ -132,6 +168,7 @@ async function lookupBarcode() {
       form.value.productName = form.value.productName || hit.name || ''
       if (hit.category) form.value.category = hit.category
       if (hit.family) form.value.family = hit.family
+      applyProductDefaults()
       flash(res.found ? `Known: ${hit.name}` : `Found “${hit.name}” — check details.`)
     } else flash('Barcode not recognized — fill it in and it’ll be remembered.')
   } catch (e) { /* offline optional */ }
@@ -200,7 +237,7 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
   <div class="page-head"><h1>{{ title }}</h1><span class="badge">{{ count }}</span>
     <div class="grow"></div>
     <button class="secondary" @click="showBulk = true">⧉ Bulk add</button>
-    <button @click="showAdd = true">＋ Add stock</button></div>
+    <button @click="openAdd">＋ Add stock</button></div>
 
   <div v-if="toast" class="toast">{{ toast }}</div>
 
@@ -269,7 +306,7 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
   </div>
 
   <div v-else class="empty"><div class="ico">🥫</div><p>No stock here yet.</p>
-    <button style="margin-top:10px" @click="showAdd = true">Add your first item</button></div>
+    <button style="margin-top:10px" @click="openAdd">Add your first item</button></div>
 
   <datalist id="dl-names"><option v-for="n in suggest.names" :key="n" :value="n" /></datalist>
   <datalist id="dl-cats"><option v-for="c in suggest.categories" :key="c" :value="c" /></datalist>
@@ -279,46 +316,57 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
   <datalist id="dl-storage"><option v-for="s in suggest.storageMethods" :key="s" :value="s" /></datalist>
 
   <!-- Add stock -->
-  <div v-if="showAdd" class="modal-backdrop" @click.self="showAdd = false">
+  <div v-if="showAdd" class="modal-backdrop" @click.self="showAdd = false; stopScan()">
     <div class="card modal">
       <h2>Add stock</h2>
-      <div class="row">
-        <label class="field" style="flex:1"><span>Barcode (optional)</span>
-          <input v-model="form.barcode" placeholder="scan or type" @keyup.enter="lookupBarcode" @blur="lookupBarcode" /></label>
-        <button type="button" class="secondary" style="align-self:flex-end;height:38px" @click="startScan">📷 Scan</button>
-      </div>
-      <div v-if="scanning" class="scanbox"><video ref="scanVideo" muted playsinline></video>
-        <button type="button" class="ghost sm" @click="stopScan">Stop</button></div>
       <label class="field"><span>What is it?</span>
-        <input v-model="form.productName" list="dl-names" placeholder="e.g. Organic milk" autofocus /></label>
+        <input ref="nameInput" v-model="form.productName" list="dl-names" placeholder="e.g. Organic milk"
+          @change="applyProductDefaults" @keyup.enter="add" /></label>
       <div class="row">
-        <label class="field" style="flex:1"><span>Group (shows together, e.g. Milk)</span>
-          <input v-model="form.family" list="dl-fam" placeholder="optional" /></label>
-        <label class="field" style="flex:1"><span>Category</span>
-          <input v-model="form.category" list="dl-cats" placeholder="e.g. dairy" /></label>
-      </div>
-      <div class="row">
-        <label class="field" style="width:110px"><span>Quantity</span><input type="number" min="0" v-model.number="form.quantity" /></label>
+        <label class="field" style="width:110px"><span>Quantity</span>
+          <input type="number" min="0" v-model.number="form.quantity" @keyup.enter="add" /></label>
         <label class="field" style="width:120px"><span>Unit</span>
           <input v-model="form.unit" list="dl-units" /></label>
-        <label class="field" style="flex:1"><span>Storage</span>
-          <input v-model="form.storageMethod" list="dl-storage" /></label>
-      </div>
-      <div class="row">
         <label class="field" style="flex:1"><span>Location</span>
           <select v-model="form.locationId"><option value="">Unassigned</option>
             <option v-for="l in locations" :key="l.id" :value="l.id">{{ l.name }}</option></select></label>
-        <label class="field" style="width:150px"><span>Freshness</span>
-          <input v-model="form.freshness" list="dl-fresh" placeholder="optional" /></label>
       </div>
-      <div class="row">
-        <label class="field" style="flex:1"><span>Source (where from)</span>
-          <input v-model="form.source" placeholder="e.g. Costco, farm share" /></label>
-        <label class="field" style="flex:1"><span>Expiry (blank = estimate)</span><input type="date" v-model="form.expiryDate" /></label>
-      </div>
-      <p class="muted" style="font-size:.8rem;margin-top:-4px">Leave expiry blank — Edibl estimates it and learns from your history.</p>
-      <div class="row" style="justify-content:flex-end;margin-top:6px">
+
+      <button type="button" class="ghost sm morebtn" @click="showMore = !showMore">
+        {{ showMore ? '▾ Fewer options' : '▸ More options — category, storage, expiry, barcode…' }}</button>
+
+      <template v-if="showMore">
+        <div class="row">
+          <label class="field" style="flex:1"><span>Category</span>
+            <input v-model="form.category" list="dl-cats" placeholder="e.g. dairy" /></label>
+          <label class="field" style="flex:1"><span>Group (shows together, e.g. Milk)</span>
+            <input v-model="form.family" list="dl-fam" placeholder="optional" /></label>
+        </div>
+        <div class="row">
+          <label class="field" style="flex:1"><span>Storage</span>
+            <input v-model="form.storageMethod" list="dl-storage" /></label>
+          <label class="field" style="width:150px"><span>Freshness</span>
+            <input v-model="form.freshness" list="dl-fresh" placeholder="optional" /></label>
+        </div>
+        <div class="row">
+          <label class="field" style="flex:1"><span>Source (where from)</span>
+            <input v-model="form.source" placeholder="e.g. Costco, farm share" /></label>
+          <label class="field" style="flex:1"><span>Expiry (blank = estimate)</span>
+            <input type="date" v-model="form.expiryDate" /></label>
+        </div>
+        <div class="row">
+          <label class="field" style="flex:1"><span>Barcode</span>
+            <input v-model="form.barcode" placeholder="scan or type" @keyup.enter="lookupBarcode" @blur="lookupBarcode" /></label>
+          <button type="button" class="secondary" style="align-self:flex-end;height:38px" @click="startScan">📷 Scan</button>
+        </div>
+        <div v-if="scanning" class="scanbox"><video ref="scanVideo" muted playsinline></video>
+          <button type="button" class="ghost sm" @click="stopScan">Stop</button></div>
+      </template>
+
+      <p class="muted" style="font-size:.8rem;margin-top:4px">Leave expiry blank — Edibl estimates it and learns from your history.</p>
+      <div class="row" style="justify-content:flex-end;margin-top:6px;gap:8px">
         <button class="secondary" @click="showAdd=false; stopScan()">Cancel</button>
+        <button class="secondary" :disabled="!form.productName.trim()" @click="addAnother">Add &amp; another</button>
         <button :disabled="!form.productName.trim()" @click="add">Add</button></div>
     </div>
   </div>
@@ -411,4 +459,6 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
 .sm { font-size: .8rem; }
 .receipt textarea { width: 100%; resize: vertical; }
 .secondary.disabled { opacity: .5; pointer-events: none; }
+.morebtn { padding: 4px 0; margin: 2px 0 6px; color: var(--muted, #999); }
+.morebtn:hover { color: var(--text, #eee); }
 </style>

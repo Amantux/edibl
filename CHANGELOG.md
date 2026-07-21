@@ -3,6 +3,15 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.5.8
+
+- **Smoother add-stock.** The Add form now leads with just the essentials — name,
+  quantity, unit, location — with everything else tucked under **More options**.
+  Typing a name you've used before **auto-fills its category, group, and unit**,
+  and a new **Add & another** button keeps the form open (holding your location /
+  storage / category) so a grocery haul goes in fast. Name field is focused and
+  Enter submits.
+
 ## 1.5.7
 
 - **Troubleshoot discovery** — the Settings → myMeal card has a **🔧 Diagnose**

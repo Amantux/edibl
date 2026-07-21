@@ -46,6 +46,15 @@ def set_llm(gid, provider=None, base_url=None, api_key=None, model=None, agent_i
     db.session.commit()
 
 
+def clear_llm(gid):
+    """Drop all LLM overrides so the effective config falls back to the add-on /
+    env defaults (the 'reset to add-on default' action)."""
+    (db.session.query(Setting)
+     .filter(Setting.group_id == gid, Setting.key.in_(LLM_KEYS))
+     .delete(synchronize_session=False))
+    db.session.commit()
+
+
 def get_mymeal_overrides(gid):
     d = _all(gid)
     return {k: d[k] for k in MYMEAL_KEYS if k in d}

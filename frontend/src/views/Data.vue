@@ -117,6 +117,15 @@ async function save() {
   } catch (e) { saved.value = '⚠️ ' + (e.message || 'save failed') } finally { saving.value = false }
 }
 
+async function resetSettings() {
+  saving.value = true; saved.value = ''
+  try {
+    s.value = await api.del('/assistant/settings')
+    setForm(s.value)
+    saved.value = '↩ Reset — now using the add-on / env config.'
+  } catch (e) { saved.value = '⚠️ ' + (e.message || 'reset failed') } finally { saving.value = false }
+}
+
 function triggerBlob(blob, filename) {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a'); a.href = url; a.download = filename; a.click()
@@ -148,8 +157,11 @@ async function importFile(e) {
     <div v-if="s">
       <p class="muted" style="margin-top:0">Pick the LLM that powers the chat &amp; receipt extraction. Set it here, or in Home Assistant → <strong>Settings → Add-ons → Edibl → Configuration</strong> — either is remembered.
         <span v-if="s.source==='addon'"> Currently from the add-on config.</span>
-        <span v-else-if="s.source==='ui'"> Currently set here.</span>
+        <span v-else-if="s.source==='ui'"> Currently set here (overrides the add-on config).</span>
       </p>
+      <p class="muted" style="font-size:.8rem;margin-top:-6px">
+        Saved here, changes apply immediately. Changing the add-on
+        <strong>Configuration</strong> tab instead needs an add-on restart to take effect.</p>
       <div class="row wrap" style="gap:8px;margin-bottom:12px">
         <span class="badge" :class="s.enabled ? 'fresh' : 'expired'">{{ s.enabled ? 'connected' : 'not configured' }}</span>
         <span v-if="s.enabled" class="chip">{{ s.tools ? 'full chat CRUD' : 'completion-only' }}</span>
@@ -186,6 +198,8 @@ async function importFile(e) {
 
       <div class="row" style="justify-content:flex-end;align-items:center;gap:10px;margin-top:6px">
         <span v-if="saved" class="muted" style="font-size:.85rem">{{ saved }}</span>
+        <button v-if="s.source==='ui'" class="ghost sm" :disabled="saving" @click="resetSettings"
+          title="Discard the value set here and use the add-on / env config">↩ Reset to add-on default</button>
         <button :disabled="saving" @click="save">{{ saving ? 'Saving…' : 'Save' }}</button>
       </div>
     </div>

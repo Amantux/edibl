@@ -48,6 +48,14 @@ def put_settings():
     return jsonify(assistant.save_settings(current_group().id, **kwargs))
 
 
+@bp.delete("/assistant/settings")
+@login_required
+def reset_settings():
+    """Clear the UI overrides so the assistant falls back to the add-on/env
+    default (the 'Reset to add-on default' action)."""
+    return jsonify(assistant.reset_settings(current_group().id))
+
+
 @bp.post("/assistant/models")
 @login_required
 @limiter.limit("30/minute")

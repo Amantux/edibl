@@ -412,3 +412,12 @@ def test_agent_id_from_addon_option_reaches_cfg_and_settings(app):
         assert assistant._cfg()["agent_id"] == "conversation.ollama"
         # settings_public reflects it too, so the UI and add-on option agree.
         assert assistant.settings_public()["agentId"] == "conversation.ollama"
+
+
+def test_reset_settings_clears_ui_override(auth_client, app):
+    app.config["LLM_PROVIDER"] = ""  # no add-on provider configured
+    auth_client.put("/api/v1/assistant/settings",
+                    json={"provider": "ollama", "baseUrl": "http://ollama.test"})
+    assert auth_client.get("/api/v1/assistant/settings").get_json()["source"] == "ui"
+    r = auth_client.delete("/api/v1/assistant/settings").get_json()
+    assert r["source"] == "none" and r["provider"] == ""  # fell back to add-on/env

@@ -3,6 +3,14 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.5.11
+
+- **Config UX.** The Settings → Chat assistant card gains **↩ Reset to add-on
+  default** (clears the values set in the app so it falls back to the add-on / env
+  config), and a note that changes here are instant while add-on *Configuration*
+  changes need an add-on restart. Standalone `docker-compose.yml` now loads your
+  `.env` so every setting there reaches the container.
+
 ## 1.5.10
 
 - **Config syncs both ways.** The Home Assistant conversation-agent id is now a

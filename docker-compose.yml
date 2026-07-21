@@ -7,10 +7,18 @@ services:
       # MCP (AI tooling). Loopback-only by default; set EDIBL_MCP_BIND=0.0.0.0 in
       # .env to expose on the LAN (then set EDIBL_MCP_SERVER_TOKEN).
       - "${EDIBL_MCP_BIND:-127.0.0.1}:7767:7767"
+    # Copy .env.example -> .env and edit it; every EDIBL_* value there is passed
+    # to the container. The `environment:` block below sets sane standalone
+    # defaults and always wins over .env.
+    env_file:
+      - path: .env
+        required: false
     environment:
       EDIBL_SECRET_KEY: "${EDIBL_SECRET_KEY:?set EDIBL_SECRET_KEY to a long random string}"
-      EDIBL_DISABLE_AUTH: "false"
-      EDIBL_PROXY_HOPS: "0"
+      # Standalone defaults; override in .env. (Behind a trusted proxy that
+      # authenticates for you, set DISABLE_AUTH=true and PROXY_HOPS to its depth.)
+      EDIBL_DISABLE_AUTH: "${EDIBL_DISABLE_AUTH:-false}"
+      EDIBL_PROXY_HOPS: "${EDIBL_PROXY_HOPS:-0}"
       EDIBL_MCP_ENABLED: "${EDIBL_MCP_ENABLED:-true}"
       # Bridge to sibling apps (optional):
       # EDIBL_MYMEAL_URL: "http://mymeal:8000"

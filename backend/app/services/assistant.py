@@ -835,6 +835,14 @@ def save_settings(gid, provider=None, base_url=None, api_key=None, model=None, a
     return settings_public()
 
 
+def reset_settings(gid):
+    """Clear the UI overrides so the assistant falls back to the add-on/env
+    config (source becomes 'addon'/'none' again)."""
+    from .settings import clear_llm
+    clear_llm(gid)
+    return settings_public()
+
+
 def _fetch_models(cfg):
     """Query the provider for its available models. Best-effort; raises on error."""
     import httpx

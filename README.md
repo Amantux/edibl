@@ -6,7 +6,17 @@
   <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FAmantux%2Fedibl">
     <img src="https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg" alt="Add the Edibl add-on repository to your Home Assistant.">
   </a>
+  <a href="https://my.home-assistant.io/redirect/hacs_repository/?owner=Amantux&repository=edibl&category=integration">
+    <img src="https://my.home-assistant.io/badges/hacs_repository.svg" alt="Add the Edibl integration to HACS via My Home Assistant.">
+  </a>
 </p>
+
+[![HA validate](https://github.com/Amantux/edibl/actions/workflows/ha-validate.yml/badge.svg)](https://github.com/Amantux/edibl/actions/workflows/ha-validate.yml)
+[![CI](https://github.com/Amantux/edibl/actions/workflows/ci.yml/badge.svg)](https://github.com/Amantux/edibl/actions/workflows/ci.yml)
+[![HACS: custom](https://img.shields.io/badge/HACS-custom-41BDF5.svg)](https://hacs.xyz/docs/faq/custom_repositories)
+[![Home Assistant add-on](https://img.shields.io/badge/Home%20Assistant-add--on-41BDF5.svg?logo=home-assistant&logoColor=white)](https://www.home-assistant.io/addons/)
+[![Min HA version](https://img.shields.io/badge/Home%20Assistant-%E2%89%A5%202024.4.0-41BDF5.svg)](https://www.home-assistant.io/)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 
 # Edibl 🥑
 

@@ -1,15 +1,18 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { api, apiUrl, getToken } from '../api'
 
 const importing = ref(false)
 const result = ref('')
 const s = ref(null)                       // /assistant/settings view
-const form = ref({ provider: '', baseUrl: '', model: '', apiKey: '' })
+const form = ref({ provider: '', baseUrl: '', model: '', apiKey: '', agentId: '' })
 const saving = ref(false)
 const saved = ref('')
+const models = ref([])
+const modelsMsg = ref('')
+const loadingModels = ref(false)
 
-const providerLabels = { '': '— none (disabled) —', ollama: 'Ollama (local)',
+const providerLabels = { '': '— none (disabled) —', ollama: 'Ollama',
   openai: 'OpenAI-compatible', anthropic: 'Anthropic',
   homeassistant: "Home Assistant's agent" }
 
@@ -17,19 +20,42 @@ onMounted(loadSettings)
 async function loadSettings() {
   try {
     s.value = await api.get('/assistant/settings')
-    form.value = { provider: s.value.provider, baseUrl: s.value.baseUrl, model: s.value.model, apiKey: '' }
-  } catch (e) { s.value = { providers: [''], defaults: {}, needsKey: {} } }
+    setForm(s.value)
+    if (canList.value) loadModels()
+  } catch (e) { s.value = { providers: [''], defaults: {}, needsKey: {}, canListModels: {} } }
+}
+function setForm(v) {
+  form.value = { provider: v.provider, baseUrl: v.baseUrl, model: v.model, apiKey: '', agentId: v.agentId || '' }
 }
 const def = computed(() => (s.value?.defaults || {})[form.value.provider] || {})
 const needsKey = computed(() => (s.value?.needsKey || {})[form.value.provider])
+const showKey = computed(() => ['ollama', 'openai', 'anthropic'].includes(form.value.provider))
+const canList = computed(() => (s.value?.canListModels || {})[form.value.provider])
+
+watch(() => form.value.provider, () => { models.value = []; modelsMsg.value = ''; if (canList.value) loadModels() })
+
+async function loadModels() {
+  if (!canList.value) return
+  loadingModels.value = true; modelsMsg.value = ''
+  try {
+    const body = { provider: form.value.provider, baseUrl: form.value.baseUrl }
+    if (form.value.apiKey) body.apiKey = form.value.apiKey
+    const r = await api.post('/assistant/models', body)
+    models.value = r.models || []
+    if (r.error) modelsMsg.value = 'Could not list models: ' + r.error
+    else if (!models.value.length) modelsMsg.value = 'No models found on this server.'
+    else modelsMsg.value = `${models.value.length} models available`
+  } catch (e) { modelsMsg.value = 'Could not reach the server.' } finally { loadingModels.value = false }
+}
 
 async function save() {
   saving.value = true; saved.value = ''
   try {
-    const body = { provider: form.value.provider, baseUrl: form.value.baseUrl, model: form.value.model }
+    const body = { provider: form.value.provider, baseUrl: form.value.baseUrl,
+      model: form.value.model, agentId: form.value.agentId }
     if (form.value.apiKey) body.apiKey = form.value.apiKey
     s.value = await api.put('/assistant/settings', body)
-    form.value = { provider: s.value.provider, baseUrl: s.value.baseUrl, model: s.value.model, apiKey: '' }
+    setForm(s.value)
     saved.value = '✓ Saved — the chat assistant will use this.'
   } catch (e) { saved.value = '⚠️ ' + (e.message || 'save failed') } finally { saving.value = false }
 }
@@ -78,18 +104,28 @@ async function importFile(e) {
         </select></label>
 
       <template v-if="form.provider && form.provider !== 'homeassistant'">
-        <div class="row wrap">
-          <label class="field" style="flex:1;min-width:200px"><span>Base URL</span>
-            <input v-model="form.baseUrl" :placeholder="def.baseUrl || ''" /></label>
-          <label class="field" style="flex:1;min-width:160px"><span>Model</span>
-            <input v-model="form.model" :placeholder="def.model || ''" /></label>
-        </div>
-        <label v-if="needsKey" class="field"><span>API key {{ s.hasApiKey ? '(saved — leave blank to keep)' : '' }}</span>
-          <input v-model="form.apiKey" type="password" :placeholder="s.hasApiKey ? '•••••••••• saved' : 'sk-…'" /></label>
+        <label class="field"><span>Base URL</span>
+          <input v-model="form.baseUrl" :placeholder="def.baseUrl || ''" @change="canList && loadModels()" /></label>
+
+        <label v-if="showKey" class="field">
+          <span>API key {{ needsKey ? '' : '(optional)' }} {{ s.hasApiKey ? '— saved, leave blank to keep' : '' }}</span>
+          <input v-model="form.apiKey" type="password" :placeholder="s.hasApiKey ? '•••••••••• saved' : (needsKey ? 'sk-…' : 'only if your Ollama needs one')" /></label>
+
+        <label class="field"><span>Model
+            <button v-if="canList" class="ghost sm" type="button" style="float:right;padding:0 6px"
+              :disabled="loadingModels" @click="loadModels">{{ loadingModels ? '…' : '↻ Load models' }}</button></span>
+          <input v-model="form.model" list="assistant-models" :placeholder="def.model || 'model name'" />
+          <datalist id="assistant-models"><option v-for="m in models" :key="m" :value="m" /></datalist></label>
+        <p v-if="modelsMsg" class="muted" style="font-size:.8rem;margin-top:-6px">{{ modelsMsg }}</p>
       </template>
-      <p v-else-if="form.provider === 'homeassistant'" class="muted" style="font-size:.85rem;margin-top:-4px">
-        Reuses Home Assistant's own conversation agent — no URL or key needed. Completion-only (great for receipt extraction; full chat-CRUD needs ollama/openai/anthropic).
-      </p>
+
+      <template v-else-if="form.provider === 'homeassistant'">
+        <p class="muted" style="font-size:.85rem;margin-top:-4px">
+          Reuses Home Assistant's own conversation agent — no URL or key needed. Completion-only (great for receipt extraction; full chat-CRUD needs ollama/openai/anthropic).
+        </p>
+        <label class="field"><span>Conversation agent (optional)</span>
+          <input v-model="form.agentId" placeholder="e.g. conversation.ollama — blank = HA default" /></label>
+      </template>
 
       <div class="row" style="justify-content:flex-end;align-items:center;gap:10px;margin-top:6px">
         <span v-if="saved" class="muted" style="font-size:.85rem">{{ saved }}</span>

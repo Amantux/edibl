@@ -40,10 +40,26 @@ def put_settings():
         kwargs["base_url"] = str(data["baseUrl"] or "")
     if "model" in data:
         kwargs["model"] = str(data["model"] or "")
+    if "agentId" in data:
+        kwargs["agent_id"] = str(data["agentId"] or "")
     # Only update the key when a non-empty value is supplied (don't clobber it).
     if data.get("apiKey"):
         kwargs["api_key"] = str(data["apiKey"])
     return jsonify(assistant.save_settings(current_group().id, **kwargs))
+
+
+@bp.post("/assistant/models")
+@login_required
+@limiter.limit("30/minute")
+def list_models():
+    """List models available on the (optionally overridden) provider — the UI polls
+    this to populate the model picker. Body: { provider?, baseUrl?, apiKey? }."""
+    data = request.get_json(silent=True) or {}
+    provider = data.get("provider")
+    if provider is not None and str(provider) not in assistant.PROVIDER_CHOICES:
+        return jsonify({"error": "unknown provider"}), 422
+    return jsonify(assistant.list_models(
+        provider=provider, base_url=data.get("baseUrl"), api_key=data.get("apiKey")))
 
 
 @bp.post("/assistant/chat")

@@ -529,9 +529,19 @@ def _cfg():
         "base_url": ov.get("llm_base_url") or c.get("LLM_BASE_URL") or base,
         "api_key": api_key,
         "model": ov.get("llm_model") or c.get("LLM_MODEL") or model,
+        "agent_id": ov.get("llm_agent_id") or c.get("LLM_AGENT_ID") or "",
         "timeout": c.get("LLM_TIMEOUT", 60),
         "max_steps": c.get("LLM_MAX_STEPS", 6),
     }
+
+
+def _ollama_headers(cfg):
+    """Ollama now supports auth (e.g. Ollama cloud / a secured instance). Send the
+    key as a bearer token when one is configured."""
+    h = {"Content-Type": "application/json"}
+    if cfg.get("api_key"):
+        h["Authorization"] = f"Bearer {cfg['api_key']}"
+    return h
 
 
 _PROVIDERS = ("ollama", "openai", "anthropic", "homeassistant")
@@ -571,22 +581,74 @@ def settings_public():
         "provider": cfg["provider"] or "",
         "baseUrl": ov.get("llm_base_url", ""),
         "model": ov.get("llm_model", ""),
+        "agentId": ov.get("llm_agent_id", ""),
         "hasApiKey": bool(cfg["api_key"]),
         "enabled": cfg["provider"] in _PROVIDERS,
         "tools": cfg["provider"] in _TOOL_PROVIDERS,
         "source": source,
         "providers": list(PROVIDER_CHOICES),
+        # Ollama supports an optional key; openai/anthropic require one.
         "needsKey": {"openai": True, "anthropic": True, "ollama": False,
                      "homeassistant": False},
+        "canListModels": {"ollama": True, "openai": True, "anthropic": True,
+                          "homeassistant": False},
         "defaults": {p: {"baseUrl": b, "model": m} for p, (b, m) in _DEFAULTS.items()},
     }
 
 
-def save_settings(gid, provider=None, base_url=None, api_key=None, model=None):
+def save_settings(gid, provider=None, base_url=None, api_key=None, model=None, agent_id=None):
     """Persist UI overrides for the chat provider, then return the new view."""
     from .settings import set_llm
-    set_llm(gid, provider=provider, base_url=base_url, api_key=api_key, model=model)
+    set_llm(gid, provider=provider, base_url=base_url, api_key=api_key,
+            model=model, agent_id=agent_id)
     return settings_public()
+
+
+def _fetch_models(cfg):
+    """Query the provider for its available models. Best-effort; raises on error."""
+    import httpx
+
+    p = cfg["provider"]
+    with httpx.Client(timeout=min(cfg["timeout"], 15)) as client:
+        if p == "ollama":
+            r = client.get(cfg["base_url"] + "/api/tags", headers=_ollama_headers(cfg))
+            r.raise_for_status()
+            return sorted(m["name"] for m in r.json().get("models", []) if m.get("name"))
+        if p == "openai":
+            h = {"Authorization": f"Bearer {cfg['api_key']}"} if cfg["api_key"] else {}
+            r = client.get(cfg["base_url"] + "/models", headers=h)
+            r.raise_for_status()
+            return sorted(m["id"] for m in r.json().get("data", []) if m.get("id"))
+        if p == "anthropic":
+            h = {"x-api-key": cfg["api_key"], "anthropic-version": "2023-06-01"}
+            r = client.get(cfg["base_url"] + "/v1/models", headers=h)
+            r.raise_for_status()
+            return sorted(m["id"] for m in r.json().get("data", []) if m.get("id"))
+    return []
+
+
+def list_models(provider=None, base_url=None, api_key=None):
+    """List models available on the (optionally overridden) provider — lets the UI
+    populate a model picker before saving. Returns {models, provider, error?}."""
+    saved = _cfg()
+    provider = provider or saved["provider"]
+    if provider not in _PROVIDERS:
+        return {"models": [], "provider": provider or "none", "error": "no provider set"}
+    b, _m = _DEFAULTS.get(provider, ("", ""))
+    same = provider == saved["provider"]
+    cfg = {
+        "provider": provider,
+        "base_url": base_url or (saved["base_url"] if same else "") or b,
+        "api_key": api_key or (saved["api_key"] if same else ""),
+        "timeout": saved["timeout"],
+    }
+    if provider == "homeassistant":
+        return {"models": [], "provider": provider,
+                "error": "Models are managed in Home Assistant's Ollama integration."}
+    try:
+        return {"models": _fetch_models(cfg), "provider": provider}
+    except Exception as exc:  # noqa: BLE001
+        return {"models": [], "provider": provider, "error": str(exc)}
 
 
 def run_chat(gid, messages):
@@ -627,7 +689,7 @@ def _complete(cfg, system, user):
     provider = cfg["provider"]
     with httpx.Client(timeout=cfg["timeout"]) as client:
         if provider == "ollama":
-            r = client.post(cfg["base_url"] + "/api/chat", json={
+            r = client.post(cfg["base_url"] + "/api/chat", headers=_ollama_headers(cfg), json={
                 "model": cfg["model"], "stream": False,
                 "messages": [{"role": "system", "content": system},
                              {"role": "user", "content": user}]})
@@ -651,8 +713,11 @@ def _complete(cfg, system, user):
                            if b.get("type") == "text")
         if provider == "homeassistant":
             headers = {"Authorization": f"Bearer {cfg['api_key']}"}
+            body = {"text": f"{system}\n\n{user}", "language": "en"}
+            if cfg.get("agent_id"):  # target a specific HA conversation agent
+                body["agent_id"] = cfg["agent_id"]
             r = client.post(cfg["base_url"] + "/api/conversation/process", headers=headers,
-                            json={"text": f"{system}\n\n{user}", "language": "en"})
+                            json=body)
             r.raise_for_status()
             data = r.json()
             return (((data.get("response") or {}).get("speech") or {})
@@ -727,7 +792,7 @@ def _complete_vision(cfg, system, user, image_b64, media_type):
     provider = cfg["provider"]
     with httpx.Client(timeout=cfg["timeout"]) as client:
         if provider == "ollama":
-            r = client.post(cfg["base_url"] + "/api/chat", json={
+            r = client.post(cfg["base_url"] + "/api/chat", headers=_ollama_headers(cfg), json={
                 "model": cfg["model"], "stream": False,
                 "messages": [{"role": "system", "content": system},
                              {"role": "user", "content": user, "images": [image_b64]}]})

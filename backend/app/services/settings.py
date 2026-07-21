@@ -7,7 +7,7 @@ and is remembered either way.
 from ..extensions import db
 from ..models import Setting
 
-LLM_KEYS = ("llm_provider", "llm_base_url", "llm_api_key", "llm_model")
+LLM_KEYS = ("llm_provider", "llm_base_url", "llm_api_key", "llm_model", "llm_agent_id")
 
 
 def _all(gid):
@@ -29,7 +29,7 @@ def _set(gid, key, value):
         db.session.add(Setting(group_id=gid, key=key, value=value))
 
 
-def set_llm(gid, provider=None, base_url=None, api_key=None, model=None):
+def set_llm(gid, provider=None, base_url=None, api_key=None, model=None, agent_id=None):
     """Upsert LLM settings. Any arg left as None is untouched; a string (incl. '')
     is stored. Empty strings fall back to the env default at read time."""
     if provider is not None:
@@ -38,6 +38,8 @@ def set_llm(gid, provider=None, base_url=None, api_key=None, model=None):
         _set(gid, "llm_base_url", base_url.strip())
     if model is not None:
         _set(gid, "llm_model", model.strip())
+    if agent_id is not None:
+        _set(gid, "llm_agent_id", agent_id.strip())
     if api_key is not None:
         _set(gid, "llm_api_key", api_key)
     db.session.commit()

@@ -65,8 +65,14 @@ automation:
 
 ### A. Edibl's own chat box (simplest)
 
+> **Using Ollama?** In Edibl's **Settings** page pick `ollama`, enter your server
+> URL, hit **↻ Load models** to pick from what's installed, and save. If your
+> Ollama needs a key (secured / cloud), put it in the API-key field. Prefer to
+> reuse HA's conversation agent instead? Pick `homeassistant` and (optionally)
+> enter its agent id, e.g. `conversation.ollama`.
+
 The chat widget (bottom-right in Edibl) uses a provider-neutral backend. In the
-add-on options (or env vars if standalone):
+Settings page, the add-on options, or env vars:
 
 ```
 # Reuse the SAME Ollama that Home Assistant uses — just point at its host:

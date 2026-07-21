@@ -3,6 +3,15 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.4.5
+
+- **Better Ollama support** — send Ollama's API key (for secured / cloud Ollama)
+  on every call; the Settings page can **list and pick models** polled straight
+  from your Ollama server (and from OpenAI / Anthropic).
+- **Use your Home Assistant conversation agent** — the `homeassistant` provider
+  now takes an optional agent id (e.g. `conversation.ollama`) so it targets your
+  Ollama conversation agent instead of the default.
+
 ## 1.4.4
 
 - **Configure the chat provider from the UI** — the Settings page now has an

@@ -282,3 +282,49 @@ def test_settings_clear_falls_back_to_env(auth_client):
     auth_client.put("/api/v1/assistant/settings", json={"provider": "ollama"})
     auth_client.put("/api/v1/assistant/settings", json={"provider": ""})
     assert auth_client.get("/api/v1/assistant/config").get_json()["provider"] == "anthropic"
+
+
+# --- Ollama key, model polling, HA agent id ---------------------------------
+class _FakeGetClient:
+    """A fake httpx client exposing .get for the /models listing tests."""
+    def __init__(self, data):
+        self._d = data
+    def __enter__(self):
+        return self
+    def __exit__(self, *a):
+        return False
+    def get(self, url, headers=None, params=None):
+        return _FakeResp(self._d)
+
+
+def test_ollama_headers_include_key():
+    assert assistant._ollama_headers({"api_key": "tok"})["Authorization"] == "Bearer tok"
+    assert "Authorization" not in assistant._ollama_headers({"api_key": ""})
+
+
+def test_list_models_ollama(auth_client, monkeypatch):
+    monkeypatch.setattr(
+        httpx, "Client",
+        lambda *a, **k: _FakeGetClient({"models": [{"name": "llama3.1"}, {"name": "mistral"}]}))
+    auth_client.put("/api/v1/assistant/settings",
+                    json={"provider": "ollama", "baseUrl": "http://ha:11434"})
+    r = auth_client.post("/api/v1/assistant/models", json={})
+    body = r.get_json()
+    assert body["provider"] == "ollama" and body["models"] == ["llama3.1", "mistral"]
+
+
+def test_list_models_homeassistant_unsupported(auth_client):
+    body = auth_client.post("/api/v1/assistant/models",
+                            json={"provider": "homeassistant"}).get_json()
+    assert body["models"] == [] and "Home Assistant" in body["error"]
+
+
+def test_list_models_rejects_unknown_provider(auth_client):
+    assert auth_client.post("/api/v1/assistant/models",
+                            json={"provider": "grok"}).status_code == 422
+
+
+def test_settings_persist_agent_id(auth_client):
+    auth_client.put("/api/v1/assistant/settings",
+                    json={"provider": "homeassistant", "agentId": "conversation.ollama"})
+    assert auth_client.get("/api/v1/assistant/settings").get_json()["agentId"] == "conversation.ollama"

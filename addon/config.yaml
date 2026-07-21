@@ -17,8 +17,11 @@ ingress: true
 ingress_port: 7746
 panel_icon: mdi:food-apple
 panel_title: Edibl
-# Needed to register auto-discovery with the Supervisor at startup.
+# Needed to register auto-discovery with the Supervisor at startup, and to look
+# up a sibling add-on (e.g. myMeal) by its real internal hostname. Listing/
+# reading OTHER add-ons requires the `manager` role — the default role is denied.
 hassio_api: true
+hassio_role: manager
 # Lets the `homeassistant` LLM provider call HA's conversation agent (and reuse
 # whatever chat/Ollama model HA already has configured).
 homeassistant_api: true

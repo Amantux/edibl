@@ -199,11 +199,16 @@ def discover_mymeal_debug():
     token is present, whether the add-on list was readable, which add-ons matched,
     and every candidate host tried with its probe result. Contains no secrets."""
     token = bool(os.environ.get("SUPERVISOR_TOKEN"))
+    # /addons/self/info is readable by the DEFAULT role, so it isolates the two
+    # failure modes: if self works but /addons doesn't, it's a role problem
+    # (needs hassio_role: manager); if self also fails, it's token/network.
+    self_info = (_supervisor_get("/addons/self/info") or {}).get("data") or {}
     addons_env = _supervisor_get("/addons")
     if not token:
         addons_state = "no-supervisor-token"
     elif addons_env is None:
-        addons_state = "denied-or-unreachable"
+        addons_state = ("denied-need-manager-role" if self_info
+                        else "denied-or-unreachable")
     else:
         addons_state = "ok"
     matched = [{"slug": a.get("slug"), "name": a.get("name"), "state": a.get("state")}
@@ -212,6 +217,7 @@ def discover_mymeal_debug():
     tried = [{"url": f"http://{host}:{port}", **_probe_mymeal(host, port)}
              for host, port, _s, _n, _r in _mymeal_candidate_hosts()]
     return {"supervisorToken": token, "supervisorAddonsQuery": addons_state,
+            "selfHostname": self_info.get("hostname"),
             "matchedAddons": matched, "tried": tried,
             "found": [t["url"] for t in tried if t["reachable"]]}
 

@@ -3,6 +3,17 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.5.9
+
+- **"Find myMeal" now actually finds it.** Looking up a *sibling* add-on's real
+  internal hostname requires the Supervisor **`manager`** role — the default role
+  is denied, so discovery was blind (and myMeal's container isn't named
+  `mymeal`/`local-mymeal`, so guessing failed too). The add-on now requests
+  `hassio_role: manager`. **Updating will ask you to re-approve the add-on's
+  permissions in Home Assistant.** The 🔧 Diagnose output also now reports the
+  add-on's own hostname and distinguishes a role denial from a token/network
+  problem.
+
 ## 1.5.8
 
 - **Smoother add-stock.** The Add form now leads with just the essentials — name,

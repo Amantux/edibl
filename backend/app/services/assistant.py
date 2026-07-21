@@ -25,9 +25,10 @@ from datetime import datetime
 from flask import current_app
 
 from ..extensions import db
-from ..models import (StockLot, Product, ShoppingItem, ConsumptionEvent, utcnow,
-                      STORAGE_METHODS, OUTCOMES, LOSS_OUTCOMES)
+from ..models import (StockLot, Product, ShoppingItem, ConsumptionEvent,
+                      InventoryEvent, utcnow, STORAGE_METHODS, OUTCOMES)
 from ..services.estimation import estimate_expiry, product_insights, waste_insights
+from ..services.inventory import add_lot, consume_lot, open_lot, reverse_event
 from ..schemas.serializers import iso
 
 _LOGGER = logging.getLogger("edibl.assistant")
@@ -146,11 +147,11 @@ def h_add_stock(gid, name, quantity=1, unit="count", category="other",
                    storage_method=storage_method, state=freshness or "",
                    source=source or "", purchase_date=purchase, expiry_date=expiry,
                    expiry_estimated=estimated, group_id=gid)
-    db.session.add(lot)
-    db.session.commit()
+    # Same command layer REST uses — the add is logged to the ledger identically.
+    res = add_lot(lot, actor_user_id=None, source_app="assistant", provenance="assistant")
     exp = expiry.date().isoformat() if expiry else "n/a"
     text = f"Added {quantity} {unit} of {name} ({storage_method}); best-by ~{exp}."
-    return text, {"op": "delete_lot", "lotId": lot.id}
+    return text, {"op": "delete_lot", "lotId": res.lot.id}
 
 
 def _lot_snapshot(s):
@@ -241,38 +242,30 @@ def h_grouped_stock(gid, query=""):
 
 
 def h_record_consumption(gid, name, quantity=1, outcome="eaten"):
-    outcome = (outcome or "eaten").lower()
-    if outcome not in OUTCOMES:
-        outcome = "eaten"
     lots = _match_lots(gid, name)
     if not lots:
         return f"No stock matching '{name}' to update."
     s = lots[0]
-    amount = min(float(quantity or 1), s.quantity)
-    s.quantity = round(s.quantity - amount, 4)
-    days_kept = None
-    if s.purchase_date:
-        pd = s.purchase_date.replace(tzinfo=None) if s.purchase_date.tzinfo else s.purchase_date
-        days_kept = max((datetime.utcnow() - pd).days, 0)
-    if s.quantity <= 0:
-        s.finished = True
-        s.quantity = 0
-    ev = ConsumptionEvent(
-        product_id=s.product_id, quantity=amount, unit=s.unit,
-        reason="used" if outcome == "eaten" else outcome,
-        outcome=outcome, days_kept=days_kept, group_id=gid)
-    db.session.add(ev)
-    db.session.flush()
-    event_id = ev.id
-    db.session.commit()
-    verb = {"eaten": "used", "spoiled": "tossed (spoiled)",
-            "expired": "tossed (expired)", "discarded": "discarded"}.get(outcome, "used")
-    msg = f"Recorded {amount} {s.unit} of {s.product.name} {verb}."
-    if outcome in LOSS_OUTCOMES:
-        tip = product_insights(gid, s.product_id).get("suggestion")
-        if tip:
-            msg += " " + tip
-    return msg, {"op": "unconsume", "lotId": s.id, "amount": amount, "eventId": event_id}
+    # Same command layer REST uses — identical decrement/finish/ledger semantics.
+    res = consume_lot(s, amount=quantity, outcome=outcome, source_app="assistant")
+    if res.extra.get("consumedAmount", 0) <= 0:
+        return f"Nothing left to record for '{name}'."
+    msg = res.summary + "."
+    tip = res.extra.get("insight")
+    if tip:
+        msg += " " + tip
+    # Undo goes through the ledger: reverse the consume event (append-only, idempotent).
+    return msg, res.undo
+
+
+def h_open_stock(gid, name):
+    """Open a package (orthogonal to using it up) — the soonest-to-expire match."""
+    lots = _match_lots(gid, name)
+    if not lots:
+        return f"No stock matching '{name}' to open."
+    s = lots[0]
+    res = open_lot(s, actor_user_id=None, source_app="assistant")
+    return res.summary + ".", res.undo
 
 
 def h_add_to_shopping_list(gid, name, quantity=1, unit="count"):
@@ -370,6 +363,11 @@ TOOLS = {
                                            "enum": list(OUTCOMES)}},
                             "required": ["name"]},
                            "Record that food was eaten, spoiled, expired, or discarded."),
+    "open_stock": (h_open_stock,
+                   {"type": "object", "properties": {
+                       "name": {"type": "string"}}, "required": ["name"]},
+                   "Mark a package opened (e.g. an opened carton) — separate from "
+                   "using it up. Affects freshness, not quantity."),
     "add_to_shopping_list": (h_add_to_shopping_list,
                              {"type": "object", "properties": {
                                  "name": {"type": "string"},
@@ -389,7 +387,7 @@ TOOLS = {
 
 # Tools that change data (surfaced in the chat UI with an Undo control).
 _MUTATING = {"add_stock", "update_stock", "delete_stock",
-             "record_consumption", "add_to_shopping_list"}
+             "record_consumption", "open_stock", "add_to_shopping_list"}
 _READONLY_LABELS = {
     "do_i_have": "Checked stock", "whats_in_stock": "Listed stock",
     "expiring_soon": "Checked what's expiring", "grouped_stock": "Grouped stock",
@@ -686,7 +684,13 @@ def apply_undo(gid, undo):
         db.session.add(s)
         db.session.commit()
         return f"Undone — restored {lot.get('name') or 'the removed item'}."
-    if op == "unconsume":  # undo a record_consumption
+    if op == "reverse_event":  # undo via the ledger (append-only, idempotent)
+        ev = _owned(InventoryEvent, undo.get("eventId"), gid)
+        if not ev:
+            return "Nothing to undo — that action is already reversed."
+        res = reverse_event(ev, actor_user_id=None, source_app="assistant")
+        return f"Undone — {res.summary.lower()}."
+    if op == "unconsume":  # undo a record_consumption (legacy descriptor)
         s = _owned(StockLot, undo.get("lotId"), gid)
         if s:
             s.quantity = round((s.quantity or 0) + float(undo.get("amount") or 0), 4)

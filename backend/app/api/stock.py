@@ -3,11 +3,12 @@ from datetime import datetime
 from flask import Blueprint, request, jsonify, abort
 
 from ..extensions import db
-from ..models import (StockLot, Product, Location, ConsumptionEvent, utcnow,
-                      STORAGE_METHODS, OUTCOMES, LOSS_OUTCOMES)
+from ..models import (StockLot, Product, Location, ConsumptionEvent, InventoryEvent,
+                      utcnow, STORAGE_METHODS, PACKAGE_STATES, QUANTITY_KINDS)
 from ..auth import login_required, current_group, current_user
 from ..schemas.serializers import stock_out, expiry_status
 from ..services.estimation import estimate_expiry, product_insights
+from ..services import inventory
 
 bp = Blueprint("stock", __name__)
 
@@ -21,12 +22,25 @@ def _parse_dt(v):
         return None
 
 
-def _days_kept(purchase):
-    """Whole days from purchase to now, tolerating tz-naive stored dates."""
-    if not purchase:
-        return None
-    p = purchase.replace(tzinfo=None) if purchase.tzinfo else purchase
-    return max((datetime.utcnow() - p).days, 0)
+def _lot_quantity(s):
+    """The lot's amount as a dimension/kind-aware Quantity."""
+    from ..services.quantity import Quantity
+    return Quantity(value=s.quantity, unit=s.unit,
+                    kind=getattr(s, "quantity_kind", "exact") or "exact")
+
+
+def _group_summary(g):
+    """Dimension-safe, package-aware human summary, e.g.
+    "2 cartons: 1 open, 1 sealed" or "unknown amount". Never an invalid total."""
+    from ..services.quantity import aggregate
+    parts = [q.describe() for q in aggregate(g["_qtys"])]
+    amount = ", ".join(parts) if parts else "none"
+    pkg = []
+    if g["openCount"]:
+        pkg.append(f"{g['openCount']} open")
+    if g["sealedCount"]:
+        pkg.append(f"{g['sealedCount']} sealed")
+    return f"{amount}: {', '.join(pkg)}" if pkg else amount
 
 
 def _get(lot_id):
@@ -70,6 +84,30 @@ def _resolve_product(data):
     return p
 
 
+def _package_state(data):
+    """Package state is orthogonal to storage. Honour an explicit `packageState`;
+    otherwise derive it — an opened date, or the legacy storage_method "opened",
+    means the package is open. Defaults to sealed."""
+    ps = (data.get("packageState") or "").strip().lower()
+    if ps in PACKAGE_STATES:
+        return ps
+    if data.get("openedDate") or (data.get("storageMethod") == "opened"):
+        return "opened"
+    return "sealed"
+
+
+def _quantity_kind(data):
+    """How sure we are of the amount. Explicit `quantityKind` wins; a quantity of
+    None/"" with no kind is treated as `presence` (we have it, amount unmeasured) —
+    NEVER silently coerced to 1. A given number is `exact` unless told otherwise."""
+    qk = (data.get("quantityKind") or "").strip().lower()
+    if qk in QUANTITY_KINDS:
+        return qk
+    if data.get("quantity") in (None, ""):
+        return "presence" if "quantity" in data else "exact"
+    return "exact"
+
+
 def _build_lot(data, product, gid):
     storage = data.get("storageMethod") or "refrigerated"
     if storage not in STORAGE_METHODS:
@@ -84,13 +122,20 @@ def _build_lot(data, product, gid):
         expiry, estimated = estimate_expiry(purchase, product.category, storage,
                                             product.shelf_life_days,
                                             group_id=gid, product_id=product.id)
+    kind = _quantity_kind(data)
+    # A presence/unknown lot carries NO meaningful number: store 0 as an internal
+    # placeholder (never the misleading default 1); quantity_kind is the source of
+    # truth and the serializer surfaces null, not a fake amount.
+    qty = float(data.get("quantity") or 1) if kind in ("exact", "estimated", "approximate") else 0.0
     return StockLot(
         product_id=product.id, location_id=data.get("locationId") or None,
-        quantity=float(data.get("quantity") or 1), unit=data.get("unit") or product.default_unit,
-        storage_method=storage, state=state, purchase_date=purchase, expiry_date=expiry,
-        expiry_estimated=estimated, cost=data.get("cost"), source=data.get("source", ""),
-        lot_code=data.get("lotCode", ""), notes=data.get("notes", ""),
-        attrs=data.get("attrs") or {}, group_id=gid,
+        quantity=qty, unit=data.get("unit") or product.default_unit,
+        storage_method=storage, package_state=_package_state(data),
+        quantity_kind=kind,
+        state=state, purchase_date=purchase, opened_date=_parse_dt(data.get("openedDate")),
+        expiry_date=expiry, expiry_estimated=estimated, cost=data.get("cost"),
+        source=data.get("source", ""), lot_code=data.get("lotCode", ""),
+        notes=data.get("notes", ""), attrs=data.get("attrs") or {}, group_id=gid,
         created_by=current_user().id,
     )
 
@@ -138,11 +183,20 @@ def grouped():
             g = {"group": key, "category": s.product.category,
                  "totalQuantity": 0.0, "unit": s.unit, "lotCount": 0,
                  "products": set(), "expiring": 0, "expired": 0,
-                 "nextExpiry": None, "nextExpiryStatus": "unknown", "lots": []}
+                 "nextExpiry": None, "nextExpiryStatus": "unknown", "lots": [],
+                 "openCount": 0, "sealedCount": 0, "_qtys": []}
             groups[key] = g
-        g["totalQuantity"] = round(g["totalQuantity"] + (s.quantity or 0), 3)
+        # Only real amounts contribute to the numeric total; presence/unknown lots
+        # count as lots + show in `summary`, but never inflate the number.
+        if (s.quantity_kind or "exact") in ("exact", "estimated", "approximate"):
+            g["totalQuantity"] = round(g["totalQuantity"] + (s.quantity or 0), 3)
         g["lotCount"] += 1
         g["products"].add(s.product.name)
+        if (s.package_state or "sealed") == "opened":
+            g["openCount"] += 1
+        else:
+            g["sealedCount"] += 1
+        g["_qtys"].append(_lot_quantity(s))
         st = expiry_status(s.expiry_date)
         if st == "expiring":
             g["expiring"] += 1
@@ -152,10 +206,14 @@ def grouped():
             g["nextExpiry"] = s.expiry_date.isoformat()
             g["nextExpiryStatus"] = st
         g["lots"].append(stock_out(s))
+    from ..services.quantity import aggregate
     out = []
     for g in groups.values():
         g["products"] = sorted(g["products"])
         g["productCount"] = len(g["products"])
+        g["summary"] = _group_summary(g)
+        g["amounts"] = [q.as_dict() for q in aggregate(g["_qtys"])]
+        del g["_qtys"]
         out.append(g)
     out.sort(key=lambda g: (g["nextExpiry"] is None, g["nextExpiry"] or "", g["group"]))
     return jsonify({"groups": out, "total": len(out)})
@@ -172,9 +230,11 @@ def create():
     if not _valid_location(gid, data.get("locationId")):
         return jsonify({"error": "unknown location"}), 422
     lot = _build_lot(data, product, gid)
-    db.session.add(lot)
-    db.session.commit()
-    return jsonify(stock_out(lot)), 201
+    res = inventory.add_lot(
+        lot, actor_user_id=current_user().id, source_app=data.get("sourceApp", "web"),
+        provenance=data.get("provenance") or "manual", confidence=data.get("confidence"),
+        idempotency_key=data.get("idempotencyKey"))
+    return jsonify({**stock_out(res.lot), "eventId": res.event.id if res.event else None}), 201
 
 
 @bp.get("/stock/<lot_id>")
@@ -216,77 +276,75 @@ def update(lot_id):
     return jsonify(stock_out(s))
 
 
+@bp.post("/stock/<lot_id>/open")
+@login_required
+def open_lot(lot_id):
+    """Mark a package opened — an orthogonal facet, so a frozen lot can also be
+    open. Idempotent (opening an open package is a no-op). Records an `open` event."""
+    s = _get(lot_id)
+    data = request.get_json(silent=True) or {}
+    res = inventory.open_lot(s, actor_user_id=current_user().id,
+                             source_app=data.get("sourceApp", "web"),
+                             idempotency_key=data.get("idempotencyKey"))
+    return jsonify({**stock_out(res.lot), "eventId": res.event.id if res.event else None,
+                    "summary": res.summary})
+
+
 @bp.post("/stock/<lot_id>/consume")
 @login_required
 def consume(lot_id):
     """Resolve some/all of a lot with an *outcome* — eaten (default), spoiled,
-    expired, discarded. Records a ConsumptionEvent with how long it was kept and
-    its ripeness state; this feeds runout prediction AND personalized shelf-life
-    learning (losses shorten future estimates for the product)."""
+    expired, discarded. Amount omitted ⇒ the whole lot. Records a ConsumptionEvent
+    (shelf-life learning) AND an InventoryEvent (the ledger, for reversal). Shared
+    with the assistant via the inventory command layer so behaviour can't diverge."""
     s = _get(lot_id)
     data = request.get_json(force=True) or {}
-    amount = data.get("quantity")
-    amount = float(amount) if amount is not None else s.quantity  # default: all
-    amount = min(amount, s.quantity)
-    s.quantity = round(s.quantity - amount, 4)
-
-    outcome = (data.get("outcome") or "").strip().lower()
-    if outcome not in OUTCOMES:
-        # Back-compat: fall back to the legacy `reason` field.
-        legacy = (data.get("reason") or "used").strip().lower()
-        outcome = {"used": "eaten", "expired": "expired",
-                   "discarded": "discarded"}.get(legacy, "eaten")
-    state = (data.get("freshness") or data.get("state") or s.state or "").strip()
-    days_kept = _days_kept(s.purchase_date)
-
-    if s.quantity <= 0:
-        s.finished = True
-        s.quantity = 0
-    ev = ConsumptionEvent(
-        product_id=s.product_id, quantity=amount, unit=s.unit,
-        reason="used" if outcome == "eaten" else outcome,
-        outcome=outcome, days_kept=days_kept, state=state,
-        group_id=current_group().id)
-    db.session.add(ev)
-    db.session.commit()
-    insight = None
-    if outcome in LOSS_OUTCOMES:
-        insight = product_insights(current_group().id, s.product_id).get("suggestion") or None
-    # consumptionId + consumedAmount let a caller reverse this exact consumption
-    # via POST /stock/<lot_id>/unconsume (powers cross-app undo).
-    return jsonify({**stock_out(s), "insight": insight,
-                    "consumptionId": ev.id, "consumedAmount": amount})
+    res = inventory.consume_lot(
+        s, amount=data.get("quantity"), outcome=data.get("outcome"),
+        freshness=(data.get("freshness") or data.get("state")),
+        reason=data.get("reason"), actor_user_id=current_user().id,
+        source_app=data.get("sourceApp", "web"),
+        idempotency_key=data.get("idempotencyKey"))
+    # consumptionId + consumedAmount preserve the existing cross-app undo contract;
+    # eventId is the new ledger handle for POST /inventory/events/<id>/reverse.
+    return jsonify({**stock_out(res.lot), "insight": res.extra.get("insight"),
+                    "consumptionId": res.extra.get("consumptionId"),
+                    "consumedAmount": res.extra.get("consumedAmount"),
+                    "eventId": res.event.id if res.event else None})
 
 
 @bp.post("/stock/<lot_id>/unconsume")
 @login_required
 def unconsume(lot_id):
-    """Reverse a consumption on this lot: add `amount` back and delete the
-    ConsumptionEvent. Powers one-tap undo of a record-consumption action,
-    including from a sibling app. Body: {consumptionId?, amount}."""
+    """Back-compat reversal of a consumption on this lot. Now delegates to the
+    ledger: finds the InventoryEvent for the given `consumptionId` and reverses it
+    (append-only, idempotent). Body: {consumptionId?, amount}. The `amount`-only
+    fallback remains for callers that can't reference an event."""
     s = _get(lot_id)
     data = request.get_json(force=True) or {}
-    ev_id = data.get("consumptionId")
+    ce_id = data.get("consumptionId")
+    if ce_id:
+        # Locate the consume event that recorded this ConsumptionEvent.
+        ev = (db.session.query(InventoryEvent)
+              .filter_by(group_id=current_group().id, type="consume")
+              .filter(InventoryEvent.state_changes["consumption_event_id"].as_string() == ce_id)
+              .first())
+        if ev is None:
+            # Already reversed, or pre-ledger data — no-op / legacy fallback below.
+            ce = db.session.get(ConsumptionEvent, ce_id)
+            if ce and ce.group_id == current_group().id and ce.product_id == s.product_id:
+                s.quantity = round((s.quantity or 0) + float(ce.quantity or 0), 4)
+                if s.quantity > 0:
+                    s.finished = False
+                db.session.delete(ce)
+                db.session.commit()
+            return jsonify(stock_out(s))
+        if ev.src_position_id != s.id:
+            abort(409)
+        res = inventory.reverse_event(ev, actor_user_id=current_user().id,
+                                      source_app=data.get("sourceApp", "web"))
+        return jsonify(stock_out(res.lot or s))
 
-    # Preferred path: reverse a specific ConsumptionEvent. Idempotent — if the
-    # event is already gone (a retry, a double-tap on one-tap undo) this is a
-    # no-op, NEVER a second restore. The event carries the authoritative amount.
-    if ev_id:
-        ev = db.session.get(ConsumptionEvent, ev_id)
-        if not ev or ev.group_id != current_group().id:
-            return jsonify(stock_out(s))  # already undone / not ours — no-op
-        if ev.product_id != s.product_id:
-            abort(409)  # event belongs to a different product than this lot
-        s.quantity = round((s.quantity or 0) + float(ev.quantity or 0), 4)
-        if s.quantity > 0:
-            s.finished = False
-        db.session.delete(ev)
-        db.session.commit()
-        return jsonify(stock_out(s))
-
-    # Fallback (no event id): restore a caller-supplied amount to the caller's own
-    # lot. Not idempotent by nature, so this path is only for callers that can't
-    # reference an event.
     try:
         amount = float(data.get("amount") or 0)
     except (TypeError, ValueError):
@@ -297,6 +355,45 @@ def unconsume(lot_id):
             s.finished = False
         db.session.commit()
     return jsonify(stock_out(s))
+
+
+@bp.get("/inventory/events")
+@login_required
+def list_events():
+    """The inventory ledger for this household, newest first. Optional filters:
+    `positionId` (events touching a lot), `type`, `limit` (default 100, max 500)."""
+    from ..schemas.serializers import event_out
+    gid = current_group().id
+    q = db.session.query(InventoryEvent).filter_by(group_id=gid)
+    if request.args.get("type"):
+        q = q.filter(InventoryEvent.type == request.args["type"])
+    pid = request.args.get("positionId")
+    if pid:
+        q = q.filter((InventoryEvent.src_position_id == pid)
+                     | (InventoryEvent.dst_position_id == pid))
+    limit = min(int(request.args.get("limit", 100) or 100), 500)
+    events = q.order_by(InventoryEvent.at.desc()).limit(limit).all()
+    return jsonify({"events": [event_out(e) for e in events], "total": len(events)})
+
+
+@bp.post("/inventory/events/<event_id>/reverse")
+@login_required
+def reverse_inventory_event(event_id):
+    """Reverse any forward inventory event by appending a compensating event
+    (history is never rewritten). Idempotent — reversing twice is a no-op."""
+    ev = db.session.get(InventoryEvent, event_id)
+    if not ev or ev.group_id != current_group().id:
+        abort(404)
+    data = request.get_json(silent=True) or {}
+    try:
+        res = inventory.reverse_event(ev, actor_user_id=current_user().id,
+                                      source_app=data.get("sourceApp", "web"),
+                                      idempotency_key=data.get("idempotencyKey"))
+    except inventory.UnsupportedReversal as e:
+        return jsonify({"error": str(e)}), 422
+    return jsonify({"summary": res.summary,
+                    "eventId": res.event.id if res.event else None,
+                    "lot": stock_out(res.lot) if res.lot else None})
 
 
 @bp.get("/stock/<lot_id>/insights")

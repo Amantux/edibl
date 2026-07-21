@@ -49,6 +49,7 @@ class Group(IDMixin, TimestampMixin, db.Model):
     planned = relationship("PlannedItem", back_populates="group", cascade="all, delete-orphan")
     tokens = relationship("ApiToken", back_populates="group", cascade="all, delete-orphan")
     settings = relationship("Setting", back_populates="group", cascade="all, delete-orphan")
+    events = relationship("InventoryEvent", back_populates="group", cascade="all, delete-orphan")
 
 
 class User(IDMixin, TimestampMixin, db.Model):
@@ -163,6 +164,23 @@ OUTCOMES = ("eaten", "spoiled", "expired", "discarded", "other")
 GOOD_OUTCOMES = frozenset({"eaten", "used"})
 LOSS_OUTCOMES = frozenset({"spoiled", "expired", "discarded"})
 
+# Package state is ORTHOGONAL to storage_method / freshness (a carton can be
+# "frozen" AND "opened"). Kept separate so opening a package no longer overloads
+# storage_method. "" = unknown/not tracked.
+PACKAGE_STATES = ("sealed", "opened", "resealed", "damaged", "decanted")
+
+# Quantity kinds mirror services.quantity — how sure we are of the amount. Unknown
+# and presence carry NO number and must never be coerced to 0 or 1.
+QUANTITY_KINDS = ("exact", "estimated", "approximate", "presence", "unknown")
+
+# Inventory-event ledger types (the shared command vocabulary). The slice writes
+# add/import/consume/open + reverse; the rest are reserved for later phases.
+EVENT_TYPES = (
+    "add", "import", "reconcile", "adjust", "consume", "waste", "expire",
+    "donate", "return", "open", "reseal", "move", "split", "merge", "freeze",
+    "thaw", "prepare", "transform", "decant", "archive", "reverse",
+)
+
 
 class StockLot(IDMixin, TimestampMixin, db.Model):
     __tablename__ = "stock_lots"
@@ -171,9 +189,17 @@ class StockLot(IDMixin, TimestampMixin, db.Model):
     quantity: Mapped[float] = mapped_column(Float, default=1)
     unit: Mapped[str] = mapped_column(String(32), default="count")
     storage_method: Mapped[str] = mapped_column(String(24), default="refrigerated")
+    # Package state (sealed/opened/…), ORTHOGONAL to storage_method + freshness.
+    package_state: Mapped[str] = mapped_column(String(24), default="sealed")
     # Observed freshness / condition (free-form; FRESHNESS_LEVELS are suggestions);
     # "" when not tracked. Exposed as "freshness" in the API.
     state: Mapped[str] = mapped_column(String(32), default="")
+    # How sure we are of `quantity` (QUANTITY_KINDS). "unknown"/"presence" mean the
+    # number is not meaningful — the UI shows "some"/"unknown", never 0 or 1.
+    quantity_kind: Mapped[str] = mapped_column(String(16), default="exact")
+    # Where this amount came from + how confident (feeds review/agent-safety).
+    provenance: Mapped[str] = mapped_column(String(64), default="manual")
+    confidence: Mapped[float] = mapped_column(Float, nullable=True)
     purchase_date: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     opened_date: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     expiry_date: Mapped[datetime] = mapped_column(DateTime, nullable=True)
@@ -266,11 +292,53 @@ class ConsumptionEvent(IDMixin, db.Model):
     group = relationship("Group", back_populates="consumption")
 
 
+class InventoryEvent(IDMixin, db.Model):
+    """Append-only ledger of stock changes (the audit + reversal + explanation
+    source). Every inventory command writes one of these atomically with the
+    projection update; nothing here is mutated after commit — a reversal appends a
+    NEW compensating event pointing back via `reversal_of`. See
+    docs/stock-redesign/adr/0001-event-logged-not-event-sourced.md.
+    """
+    __tablename__ = "inventory_events"
+    # (group, idempotency_key) is unique so a retried command is a no-op, not a
+    # double-apply. NULL keys are allowed to repeat (SQLite permits multiple NULLs).
+    __table_args__ = (
+        UniqueConstraint("group_id", "idempotency_key", name="uq_event_group_idem"),
+        # A forward event can be reversed at most once — the DB rejects a second
+        # concurrent reverse (NULLs, i.e. forward events, are allowed to repeat).
+        UniqueConstraint("reversal_of", name="uq_event_reversal_of"),
+    )
+    type: Mapped[str] = mapped_column(String(24), index=True)  # EVENT_TYPES
+    at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    actor_user_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id"), nullable=True)
+    source_app: Mapped[str] = mapped_column(String(32), default="web")  # web/mcp/assistant/ha
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    reason: Mapped[str] = mapped_column(String(255), default="")
+    # The physical positions (StockLots) this event touched.
+    src_position_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    dst_position_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # Signed quantity delta as a decimal STRING (exact; no binary-float rounding).
+    delta_value: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    delta_unit: Mapped[str] = mapped_column(String(32), default="")
+    # Orthogonal state facet changes, e.g. {"package_state": ["sealed","opened"]}.
+    state_changes: Mapped[dict] = mapped_column(JSON, default=dict)
+    confidence: Mapped[float] = mapped_column(Float, nullable=True)
+    provenance: Mapped[str] = mapped_column(String(64), default="manual")
+    # The event this one reverses (self-FK); NULL for forward events.
+    reversal_of: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("inventory_events.id"), nullable=True)
+    summary: Mapped[str] = mapped_column(String(255), default="")
+    group_id: Mapped[str] = mapped_column(String(36), ForeignKey("groups.id"), index=True)
+    group = relationship("Group", back_populates="events")
+
+
 __all__ = [
     "db", "gen_uuid", "utcnow",
     "Group", "User", "ApiToken", "TOKEN_PREFIX", "generate_raw_token", "hash_token",
     "Location", "LOCATION_KINDS", "Product", "CATEGORIES", "UNITS",
     "StockLot", "STORAGE_METHODS", "FRESHNESS_LEVELS", "LIFECYCLE_STATES", "OUTCOMES",
-    "GOOD_OUTCOMES", "LOSS_OUTCOMES",
+    "GOOD_OUTCOMES", "LOSS_OUTCOMES", "PACKAGE_STATES", "QUANTITY_KINDS", "EVENT_TYPES",
     "ShelfLifeProfile", "ShoppingItem", "ConsumptionEvent", "PlannedItem", "Setting",
+    "InventoryEvent",
 ]

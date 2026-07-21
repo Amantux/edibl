@@ -32,6 +32,33 @@ def expiry_status(expiry):
     return "fresh"
 
 
+def _numeric_kind(s):
+    """True when the lot's amount is a real number (exact/estimated/approximate),
+    False for presence/unknown (where `quantity` must not surface a value)."""
+    return (getattr(s, "quantity_kind", "exact") or "exact") in (
+        "exact", "estimated", "approximate")
+
+
+def _quantity_text(s):
+    """Natural-language amount for a lot via the Quantity value object, so
+    presence/unknown never render as a misleading number."""
+    from ..services.quantity import Quantity
+    kind = getattr(s, "quantity_kind", "exact") or "exact"
+    return Quantity(value=s.quantity, unit=s.unit, kind=kind).describe()
+
+
+def event_out(ev):
+    """An inventory-ledger entry, with its plain-language summary."""
+    return {
+        "id": ev.id, "type": ev.type, "at": iso(ev.at), "summary": ev.summary,
+        "sourceApp": ev.source_app, "reason": ev.reason,
+        "srcPositionId": ev.src_position_id, "dstPositionId": ev.dst_position_id,
+        "deltaValue": ev.delta_value, "deltaUnit": ev.delta_unit,
+        "stateChanges": ev.state_changes or {}, "provenance": ev.provenance,
+        "confidence": ev.confidence, "reversalOf": ev.reversal_of,
+    }
+
+
 def location_out(loc, with_counts=True):
     data = {
         "id": loc.id, "name": loc.name, "kind": loc.kind, "tempC": loc.temp_c,
@@ -67,7 +94,18 @@ def stock_out(s):
         "groupKey": (s.product.family or s.product.name) if s.product else "",
         "location": {"id": s.location.id, "name": s.location.name, "kind": s.location.kind}
         if s.location else None,
-        "quantity": s.quantity, "unit": s.unit, "storageMethod": s.storage_method,
+        # `quantity` is null for presence/unknown lots so no consumer reads a fake
+        # number; `quantityText` ("some" / "unknown amount") is the human form.
+        "quantity": (s.quantity if _numeric_kind(s) else None),
+        "unit": s.unit, "storageMethod": s.storage_method,
+        # Orthogonal package facet + how sure we are of the amount. `quantityText`
+        # renders "some"/"unknown amount"/"about 2" so the UI never shows a false
+        # number for a presence/unknown lot. Raw `quantity` kept for back-compat.
+        "packageState": getattr(s, "package_state", "sealed") or "sealed",
+        "quantityKind": getattr(s, "quantity_kind", "exact") or "exact",
+        "quantityText": _quantity_text(s),
+        "provenance": getattr(s, "provenance", "manual") or "manual",
+        "confidence": getattr(s, "confidence", None),
         # Who added it — only surfaced for real HA users (multi-user households),
         # so a single-user/standalone install isn't cluttered with "added by Local".
         "addedBy": (s.created_by_user.name

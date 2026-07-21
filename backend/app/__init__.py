@@ -63,7 +63,13 @@ def _ensure_columns():
     wanted = {
         "users": {"ha_user_id": "VARCHAR(255)", "is_owner": "BOOLEAN DEFAULT 0"},
         "products": {"family": "VARCHAR(255) DEFAULT ''"},
-        "stock_lots": {"state": "VARCHAR(32) DEFAULT ''", "created_by": "VARCHAR(36)"},
+        "stock_lots": {
+            "state": "VARCHAR(32) DEFAULT ''", "created_by": "VARCHAR(36)",
+            "package_state": "VARCHAR(24) DEFAULT 'sealed'",
+            "quantity_kind": "VARCHAR(16) DEFAULT 'exact'",
+            "provenance": "VARCHAR(64) DEFAULT 'manual'",
+            "confidence": "FLOAT",
+        },
         "consumption_events": {
             "outcome": "VARCHAR(16) DEFAULT 'eaten'",
             "days_kept": "INTEGER",
@@ -101,6 +107,43 @@ def _ensure_columns():
             )
         """))
         db.session.commit()
+
+    # Ledger backfill: derive the orthogonal package_state for legacy lots, and
+    # give every existing active lot an opening-balance `import` event so it has
+    # provenance in the new inventory-event ledger. Idempotent + no-op on fresh DBs.
+    if "stock_lots" in existing_tables and "inventory_events" in existing_tables:
+        _backfill_inventory_events()
+
+
+def _backfill_inventory_events():
+    """Expand+backfill for the stock redesign (Phase 1). Restart-safe/idempotent:
+    the presence of an `import` event marks a lot as already migrated, so a re-run
+    adds nothing AND won't re-derive package_state (which would clobber a lot the
+    user later explicitly re-sealed). Both the derivation and the opening event
+    happen exactly once per lot — the first time it's seen."""
+    from .models import StockLot, InventoryEvent
+
+    already = {e.dst_position_id for e in
+               db.session.query(InventoryEvent.dst_position_id).filter_by(type="import")}
+    made = 0
+    for lot in db.session.query(StockLot).filter_by(finished=False):
+        if lot.id in already:
+            continue  # already migrated — never touched again
+        # One-time derivation of the orthogonal package facet for a legacy lot that
+        # was "opened" via storage_method / opened_date, tied to this single visit.
+        if (lot.package_state or "sealed") == "sealed" and (
+                lot.storage_method == "opened" or lot.opened_date is not None):
+            lot.package_state = "opened"
+        db.session.add(InventoryEvent(
+            type="import", group_id=lot.group_id, source_app="migration",
+            dst_position_id=lot.id, delta_value=str(lot.quantity), delta_unit=lot.unit,
+            provenance="migration",
+            summary=f"Opening balance: {lot.quantity} {lot.unit}".strip(),
+            state_changes={"package_state": [None, lot.package_state]}))
+        made += 1
+    if made:
+        db.session.commit()
+        _LOGGER.info("stock redesign: created %d opening-balance events", made)
 
 
 def _seed_reference_data():

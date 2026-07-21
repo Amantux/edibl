@@ -217,9 +217,21 @@ async function submitBulk() {
 // consume with outcome + freshness
 function openConsume(s) { consumeFor.value = s; consumeQty.value = s.quantity }
 async function doConsume(outcome) {
+  const name = consumeFor.value.product?.name || 'item'
   const res = await api.post(`/stock/${consumeFor.value.id}/consume`, { quantity: consumeQty.value, outcome })
   consumeFor.value = null
   if (res.insight) flash(res.insight)
+  // Offer a one-tap Undo — reverses the exact ledger event, not a guess.
+  if (res.eventId) lastUndo.value = { eventId: res.eventId, label: `Used ${name}` }
+  await refresh()
+}
+// Open a package (orthogonal to using it) — turns a sealed carton into an open one.
+async function openPkg(s) { await api.post(`/stock/${s.id}/open`); await refresh() }
+const lastUndo = ref(null)
+async function undoLast() {
+  if (!lastUndo.value) return
+  await api.post(`/inventory/events/${lastUndo.value.eventId}/reverse`)
+  lastUndo.value = null
   await refresh()
 }
 async function setFresh(s, freshness) { await api.put('/stock/' + s.id, { freshness }); await load() }
@@ -240,6 +252,9 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
     <button @click="openAdd">＋ Add stock</button></div>
 
   <div v-if="toast" class="toast">{{ toast }}</div>
+  <div v-if="lastUndo" class="toast">{{ lastUndo.label }}
+    · <button class="ghost sm" @click="undoLast">Undo</button>
+    · <button class="ghost sm" @click="lastUndo = null">Dismiss</button></div>
 
   <div class="toolbar">
     <select v-model="filter.view" style="width:auto" @change="load">
@@ -262,7 +277,8 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
               <strong>{{ g.group }}</strong> <span v-if="g.category" class="chip">{{ g.category }}</span></td>
             <td class="muted">{{ g.products.join(', ') }}
               <span v-if="g.productCount > 1">· {{ g.productCount }} kinds</span></td>
-            <td>{{ g.totalQuantity }} {{ g.unit }} <span class="muted">· {{ g.lotCount }} lot{{ g.lotCount>1?'s':'' }}</span></td>
+            <td>{{ g.totalQuantity }} {{ g.unit }} <span class="muted">· {{ g.lotCount }} lot{{ g.lotCount>1?'s':'' }}</span>
+              <div v-if="g.summary" class="muted" style="font-size:.7rem">{{ g.summary }}</div></td>
             <td><span class="badge" :class="g.nextExpiryStatus">{{ nextExp(g) }}</span>
               <span v-if="g.expiring || g.expired" class="muted" style="font-size:.7rem">
                 {{ g.expired ? g.expired + ' expired' : g.expiring + ' soon' }}</span></td>
@@ -273,10 +289,13 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
               <span v-if="s.freshness" class="chip">{{ s.freshness }}</span>
               <span v-if="s.attrs?.cut" class="muted"> · {{ s.attrs.animal }} {{ s.attrs.cut }}</span></td>
             <td class="muted">{{ s.location?.name || '—' }}<span v-if="s.source" class="muted"> · {{ s.source }}</span><span v-if="s.addedBy" class="muted"> · 👤 {{ s.addedBy }}</span></td>
-            <td>{{ s.quantity }} {{ s.unit }} <span class="chip">{{ s.storageMethod.replace('_',' ') }}</span></td>
+            <td>{{ s.quantityKind === 'exact' ? (s.quantity + ' ' + s.unit) : s.quantityText }}
+              <span class="chip">{{ s.storageMethod.replace('_',' ') }}</span>
+              <span v-if="s.packageState === 'opened'" class="chip">open</span></td>
             <td><span class="badge" :class="s.expiryStatus">{{ expLabel(s) }}</span>
               <span v-if="s.expiryEstimated" class="muted" style="font-size:.7rem"> est</span></td>
             <td style="text-align:right;white-space:nowrap">
+              <button v-if="s.packageState === 'sealed'" class="ghost sm" @click="openPkg(s)">Open</button>
               <button class="secondary sm" @click="openConsume(s)">Use</button>
               <button class="ghost sm" @click="del(s)">✕</button></td>
           </tr>
@@ -294,8 +313,9 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
           <td><strong>{{ s.product?.name }}</strong>
             <span v-if="s.attrs?.cut" class="muted"> · {{ s.attrs.animal }} {{ s.attrs.cut }}</span></td>
           <td class="muted">{{ s.location?.name || '—' }}<span v-if="s.addedBy" class="muted"> · 👤 {{ s.addedBy }}</span></td>
-          <td>{{ s.quantity }} {{ s.unit }}</td>
-          <td><span class="chip">{{ s.storageMethod.replace('_',' ') }}</span></td>
+          <td>{{ s.quantityKind === 'exact' ? (s.quantity + ' ' + s.unit) : s.quantityText }}</td>
+          <td><span class="chip">{{ s.storageMethod.replace('_',' ') }}</span>
+            <span v-if="s.packageState === 'opened'" class="chip">open</span></td>
           <td><span class="badge" :class="s.expiryStatus">{{ expLabel(s) }}</span></td>
           <td style="text-align:right;white-space:nowrap">
             <button class="secondary sm" @click="openConsume(s)">Use</button>

@@ -3,6 +3,23 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.5.15
+
+- **Open a package without using it up.** Stock now tracks whether a package is
+  sealed or opened as its own thing (a carton can be frozen *and* open). Each item
+  gets an **Open** button, and groups read naturally — "2 cartons: 1 open, 1 sealed".
+- **Honest amounts.** You can log that you *have* something without pretending to
+  know how much — cilantro shows "some", a spice shows its level — instead of a
+  made-up "1". Unknown never silently becomes a number.
+- **Undo that means it.** Recording what you used now offers a one-tap **Undo** that
+  reverses that exact action from a full history, rather than guessing a quantity.
+- **One brain for changes.** The app, the chat assistant, and the MCP tools now make
+  inventory changes through one shared engine, so they always behave the same way.
+- Under the hood: every stock change is written to an append-only ledger with who/
+  when/why, quantities are unit-aware (no more adding litres to grams), and existing
+  data migrates automatically with an opening-balance entry. First step of a larger
+  kitchen-stock redesign — see docs/stock-redesign.
+
 ## 1.5.14
 
 - **Who added it.** In a multi-user household (behind Home Assistant), each stock

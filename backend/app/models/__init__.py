@@ -9,7 +9,8 @@ import secrets
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import String, Text, Float, Boolean, DateTime, ForeignKey, JSON
+from sqlalchemy import (String, Text, Float, Boolean, DateTime, ForeignKey, JSON,
+                        UniqueConstraint)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..extensions import db
@@ -47,6 +48,7 @@ class Group(IDMixin, TimestampMixin, db.Model):
     consumption = relationship("ConsumptionEvent", back_populates="group", cascade="all, delete-orphan")
     planned = relationship("PlannedItem", back_populates="group", cascade="all, delete-orphan")
     tokens = relationship("ApiToken", back_populates="group", cascade="all, delete-orphan")
+    settings = relationship("Setting", back_populates="group", cascade="all, delete-orphan")
 
 
 class User(IDMixin, TimestampMixin, db.Model):
@@ -228,6 +230,18 @@ class PlannedItem(IDMixin, TimestampMixin, db.Model):
     group = relationship("Group", back_populates="planned")
 
 
+class Setting(IDMixin, TimestampMixin, db.Model):
+    """Per-household runtime settings (e.g. the chat LLM provider) editable from
+    the UI. These override the add-on / env defaults, so a provider can be set up
+    in Home Assistant *or* in Edibl and is remembered across restarts."""
+    __tablename__ = "settings"
+    __table_args__ = (UniqueConstraint("group_id", "key", name="uq_setting_group_key"),)
+    key: Mapped[str] = mapped_column(String(64), index=True)
+    value: Mapped[str] = mapped_column(Text, default="")
+    group_id: Mapped[str] = mapped_column(String(36), ForeignKey("groups.id"), index=True)
+    group = relationship("Group", back_populates="settings")
+
+
 class ConsumptionEvent(IDMixin, db.Model):
     __tablename__ = "consumption_events"
     product_id: Mapped[str] = mapped_column(String(36), ForeignKey("products.id"), nullable=True)
@@ -251,5 +265,5 @@ __all__ = [
     "Location", "LOCATION_KINDS", "Product", "CATEGORIES", "UNITS",
     "StockLot", "STORAGE_METHODS", "FRESHNESS_LEVELS", "LIFECYCLE_STATES", "OUTCOMES",
     "GOOD_OUTCOMES", "LOSS_OUTCOMES",
-    "ShelfLifeProfile", "ShoppingItem", "ConsumptionEvent", "PlannedItem",
+    "ShelfLifeProfile", "ShoppingItem", "ConsumptionEvent", "PlannedItem", "Setting",
 ]

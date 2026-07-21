@@ -245,3 +245,40 @@ def test_undo_endpoint_unknown_id_is_safe(auth_client):
     r = auth_client.post("/api/v1/assistant/undo",
                          json={"undo": {"op": "delete_lot", "lotId": "nope"}})
     assert r.status_code == 200 and "Nothing to undo" in r.get_json()["message"]
+
+
+# --- persisted provider settings (UI or add-on) -----------------------------
+def test_settings_ui_overrides_addon_env(auth_client):
+    app = auth_client.application
+    app.config["LLM_PROVIDER"] = "anthropic"
+    app.config["LLM_API_KEY"] = "envkey"
+    g = auth_client.get("/api/v1/assistant/settings").get_json()
+    assert g["source"] == "addon" and g["provider"] == "anthropic"
+    body = auth_client.put("/api/v1/assistant/settings", json={
+        "provider": "ollama", "baseUrl": "http://ha:11434", "model": "llama3.1"}).get_json()
+    assert body["provider"] == "ollama" and body["source"] == "ui"
+    assert body["baseUrl"] == "http://ha:11434"
+    cfg = auth_client.get("/api/v1/assistant/config").get_json()
+    assert cfg["provider"] == "ollama" and cfg["model"] == "llama3.1"
+
+
+def test_settings_key_masked_and_not_clobbered(auth_client):
+    auth_client.put("/api/v1/assistant/settings",
+                    json={"provider": "openai", "apiKey": "sk-secret", "model": "gpt-4o-mini"})
+    g = auth_client.get("/api/v1/assistant/settings").get_json()
+    assert g["hasApiKey"] is True and "sk-secret" not in str(g)
+    # a PUT without apiKey must not wipe the stored key
+    auth_client.put("/api/v1/assistant/settings", json={"provider": "openai", "model": "gpt-4o"})
+    assert auth_client.get("/api/v1/assistant/settings").get_json()["hasApiKey"] is True
+
+
+def test_settings_reject_unknown_provider(auth_client):
+    assert auth_client.put("/api/v1/assistant/settings",
+                           json={"provider": "grok"}).status_code == 422
+
+
+def test_settings_clear_falls_back_to_env(auth_client):
+    auth_client.application.config["LLM_PROVIDER"] = "anthropic"
+    auth_client.put("/api/v1/assistant/settings", json={"provider": "ollama"})
+    auth_client.put("/api/v1/assistant/settings", json={"provider": ""})
+    assert auth_client.get("/api/v1/assistant/config").get_json()["provider"] == "anthropic"

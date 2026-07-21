@@ -83,6 +83,10 @@ llm_model:    gpt-4o-mini
 llm_provider: homeassistant
 ```
 
+You can set all of this **either** in the add-on **Configuration** tab **or** in
+Edibl's own **Settings** page (⚙️) — the UI value overrides the add-on default and
+is remembered across restarts, so a phone-only setup works fine.
+
 `ollama` / `openai` / `anthropic` support full chat CRUD (add / update / remove
 stock, edit the shopping list) — the same tools as the MCP server. The
 **`homeassistant`** provider reuses whatever chat agent HA already has (via the

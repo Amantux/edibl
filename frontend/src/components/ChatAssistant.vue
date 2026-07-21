@@ -45,7 +45,13 @@ async function send(text) {
   }
 }
 
-function toggle() { open.value = !open.value; if (open.value) scrollDown() }
+async function toggle() {
+  open.value = !open.value
+  if (open.value) {
+    try { cfg.value = await api.get('/assistant/config') } catch (e) { /* keep last */ }
+    scrollDown()
+  }
+}
 
 async function undoAction(a) {
   if (!a.undo || a.undone || a.undoing) return

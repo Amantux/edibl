@@ -3,6 +3,14 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.4.4
+
+- **Configure the chat provider from the UI** — the Settings page now has an
+  editable provider form (Ollama / OpenAI / Anthropic / Home Assistant, base URL,
+  model, API key). It's persisted per-household and **overrides** the add-on
+  default, so you can set it up in Home Assistant *or* in Edibl and it's
+  remembered either way. The API key is stored locally and never shown back.
+
 ## 1.4.3
 
 - **Mobile-friendly** — the sidebar now collapses into a top-bar menu on phones

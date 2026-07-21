@@ -16,6 +16,36 @@ def config():
     return jsonify(assistant.config_public())
 
 
+@bp.get("/assistant/settings")
+@login_required
+def get_settings():
+    """Editable provider settings for the UI (never returns the API key)."""
+    return jsonify(assistant.settings_public())
+
+
+@bp.put("/assistant/settings")
+@login_required
+def put_settings():
+    """Persist the chat provider from the UI (overrides the add-on/env default).
+    Body: { provider, baseUrl, model, apiKey? }. A blank/omitted apiKey is left
+    unchanged; blank provider/baseUrl/model fall back to the add-on default."""
+    data = request.get_json(force=True) or {}
+    provider = data.get("provider")
+    if provider is not None and str(provider) not in assistant.PROVIDER_CHOICES:
+        return jsonify({"error": "unknown provider"}), 422
+    kwargs = {}
+    if "provider" in data:
+        kwargs["provider"] = str(data["provider"] or "")
+    if "baseUrl" in data:
+        kwargs["base_url"] = str(data["baseUrl"] or "")
+    if "model" in data:
+        kwargs["model"] = str(data["model"] or "")
+    # Only update the key when a non-empty value is supplied (don't clobber it).
+    if data.get("apiKey"):
+        kwargs["api_key"] = str(data["apiKey"])
+    return jsonify(assistant.save_settings(current_group().id, **kwargs))
+
+
 @bp.post("/assistant/chat")
 @login_required
 @limiter.limit("30/minute")

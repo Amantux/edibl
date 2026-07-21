@@ -1,30 +1,49 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { api, apiUrl, getToken } from '../api'
 
 const importing = ref(false)
 const result = ref('')
-const cfg = ref(null)
+const s = ref(null)                       // /assistant/settings view
+const form = ref({ provider: '', baseUrl: '', model: '', apiKey: '' })
+const saving = ref(false)
+const saved = ref('')
 
-onMounted(async () => {
-  try { cfg.value = await api.get('/assistant/config') } catch (e) { cfg.value = { enabled: false } }
-})
+const providerLabels = { '': '— none (disabled) —', ollama: 'Ollama (local)',
+  openai: 'OpenAI-compatible', anthropic: 'Anthropic',
+  homeassistant: "Home Assistant's agent" }
+
+onMounted(loadSettings)
+async function loadSettings() {
+  try {
+    s.value = await api.get('/assistant/settings')
+    form.value = { provider: s.value.provider, baseUrl: s.value.baseUrl, model: s.value.model, apiKey: '' }
+  } catch (e) { s.value = { providers: [''], defaults: {}, needsKey: {} } }
+}
+const def = computed(() => (s.value?.defaults || {})[form.value.provider] || {})
+const needsKey = computed(() => (s.value?.needsKey || {})[form.value.provider])
+
+async function save() {
+  saving.value = true; saved.value = ''
+  try {
+    const body = { provider: form.value.provider, baseUrl: form.value.baseUrl, model: form.value.model }
+    if (form.value.apiKey) body.apiKey = form.value.apiKey
+    s.value = await api.put('/assistant/settings', body)
+    form.value = { provider: s.value.provider, baseUrl: s.value.baseUrl, model: s.value.model, apiKey: '' }
+    saved.value = '✓ Saved — the chat assistant will use this.'
+  } catch (e) { saved.value = '⚠️ ' + (e.message || 'save failed') } finally { saving.value = false }
+}
 
 function triggerBlob(blob, filename) {
   const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url; a.download = filename; a.click()
+  const a = document.createElement('a'); a.href = url; a.download = filename; a.click()
   URL.revokeObjectURL(url)
 }
-
 async function exportJson() {
-  const data = await api.get('/export')
-  triggerBlob(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }),
-    'edibl-export.json')
+  triggerBlob(new Blob([JSON.stringify(await api.get('/export'), null, 2)], { type: 'application/json' }), 'edibl-export.json')
 }
 async function exportCsv() {
-  const res = await fetch(apiUrl('/export/stock.csv'),
-    { headers: getToken() ? { Authorization: getToken() } : {} })
+  const res = await fetch(apiUrl('/export/stock.csv'), { headers: getToken() ? { Authorization: getToken() } : {} })
   triggerBlob(await res.blob(), 'edibl-stock.csv')
 }
 async function importFile(e) {
@@ -32,12 +51,9 @@ async function importFile(e) {
   if (!file) return
   importing.value = true; result.value = ''
   try {
-    const data = JSON.parse(await file.text())
-    const c = (await api.post('/import', data)).imported
+    const c = (await api.post('/import', JSON.parse(await file.text()))).imported
     result.value = `✓ Imported ${c.products} products, ${c.locations} locations, ${c.stock} stock lots, ${c.shopping} shopping items.`
-  } catch (err) {
-    result.value = '⚠️ Import failed: ' + (err.message || 'invalid file')
-  } finally { importing.value = false }
+  } catch (err) { result.value = '⚠️ Import failed: ' + (err.message || 'invalid file') } finally { importing.value = false }
 }
 </script>
 
@@ -46,20 +62,39 @@ async function importFile(e) {
 
   <div class="card">
     <h2>Chat assistant</h2>
-    <div v-if="cfg">
-      <div class="row wrap" style="gap:8px;margin-bottom:8px">
-        <span class="badge" :class="cfg.enabled ? 'fresh' : 'expired'">
-          {{ cfg.enabled ? 'connected' : 'not configured' }}</span>
-        <span class="chip">provider: {{ cfg.provider }}</span>
-        <span v-if="cfg.model" class="chip">model: {{ cfg.model }}</span>
-        <span class="chip">{{ cfg.tools ? 'full CRUD' : 'completion-only' }}</span>
-      </div>
-      <p class="muted" style="margin:0;font-size:.85rem">
-        Configure the provider in Home Assistant → <strong>Settings → Add-ons → Edibl →
-        Configuration</strong> (or the <code>EDIBL_LLM_*</code> env vars if standalone).
-        Options: <code>ollama</code>, <code>openai</code>, <code>anthropic</code>, or
-        <code>homeassistant</code> (reuse HA's own conversation agent).
+    <div v-if="s">
+      <p class="muted" style="margin-top:0">Pick the LLM that powers the chat &amp; receipt extraction. Set it here, or in Home Assistant → <strong>Settings → Add-ons → Edibl → Configuration</strong> — either is remembered.
+        <span v-if="s.source==='addon'"> Currently from the add-on config.</span>
+        <span v-else-if="s.source==='ui'"> Currently set here.</span>
       </p>
+      <div class="row wrap" style="gap:8px;margin-bottom:12px">
+        <span class="badge" :class="s.enabled ? 'fresh' : 'expired'">{{ s.enabled ? 'connected' : 'not configured' }}</span>
+        <span v-if="s.enabled" class="chip">{{ s.tools ? 'full chat CRUD' : 'completion-only' }}</span>
+      </div>
+
+      <label class="field"><span>Provider</span>
+        <select v-model="form.provider">
+          <option v-for="p in s.providers" :key="p" :value="p">{{ providerLabels[p] || p }}</option>
+        </select></label>
+
+      <template v-if="form.provider && form.provider !== 'homeassistant'">
+        <div class="row wrap">
+          <label class="field" style="flex:1;min-width:200px"><span>Base URL</span>
+            <input v-model="form.baseUrl" :placeholder="def.baseUrl || ''" /></label>
+          <label class="field" style="flex:1;min-width:160px"><span>Model</span>
+            <input v-model="form.model" :placeholder="def.model || ''" /></label>
+        </div>
+        <label v-if="needsKey" class="field"><span>API key {{ s.hasApiKey ? '(saved — leave blank to keep)' : '' }}</span>
+          <input v-model="form.apiKey" type="password" :placeholder="s.hasApiKey ? '•••••••••• saved' : 'sk-…'" /></label>
+      </template>
+      <p v-else-if="form.provider === 'homeassistant'" class="muted" style="font-size:.85rem;margin-top:-4px">
+        Reuses Home Assistant's own conversation agent — no URL or key needed. Completion-only (great for receipt extraction; full chat-CRUD needs ollama/openai/anthropic).
+      </p>
+
+      <div class="row" style="justify-content:flex-end;align-items:center;gap:10px;margin-top:6px">
+        <span v-if="saved" class="muted" style="font-size:.85rem">{{ saved }}</span>
+        <button :disabled="saving" @click="save">{{ saving ? 'Saving…' : 'Save' }}</button>
+      </div>
     </div>
     <div v-else class="muted">Loading…</div>
   </div>

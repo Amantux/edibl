@@ -503,19 +503,32 @@ _DEFAULTS = {
 }
 
 
+def _llm_overrides():
+    """UI-set (persisted) overrides for the current household, or {} if none / no
+    request context (e.g. tests, the MCP process)."""
+    try:
+        from ..auth import current_group
+        from .settings import get_llm_overrides
+        return get_llm_overrides(current_group().id)
+    except Exception:  # noqa: BLE001 — no request/group context
+        return {}
+
+
 def _cfg():
+    """Effective config: UI overrides > add-on/env > provider default."""
     c = current_app.config
-    provider = c.get("LLM_PROVIDER") or ""
+    ov = _llm_overrides()
+    provider = ov.get("llm_provider") or c.get("LLM_PROVIDER") or ""
     base, model = _DEFAULTS.get(provider, ("", ""))
-    api_key = c.get("LLM_API_KEY") or ""
+    api_key = ov.get("llm_api_key") or c.get("LLM_API_KEY") or ""
     if provider == "homeassistant" and not api_key:
         # Add-ons receive a Supervisor token in the environment.
         api_key = os.environ.get("SUPERVISOR_TOKEN", "")
     return {
         "provider": provider,
-        "base_url": c.get("LLM_BASE_URL") or base,
+        "base_url": ov.get("llm_base_url") or c.get("LLM_BASE_URL") or base,
         "api_key": api_key,
-        "model": c.get("LLM_MODEL") or model,
+        "model": ov.get("llm_model") or c.get("LLM_MODEL") or model,
         "timeout": c.get("LLM_TIMEOUT", 60),
         "max_steps": c.get("LLM_MAX_STEPS", 6),
     }
@@ -542,6 +555,38 @@ def config_public():
             # completion-only (Home Assistant conversation relay + extraction).
             "tools": cfg["provider"] in _TOOL_PROVIDERS,
             "setup": None if enabled else SETUP_MESSAGE}
+
+
+PROVIDER_CHOICES = ("", "ollama", "openai", "anthropic", "homeassistant")
+
+
+def settings_public():
+    """Editable assistant settings for the UI: what's set here (overrides) plus the
+    effective provider and whether an API key is on file. Never returns the key."""
+    cfg = _cfg()
+    ov = _llm_overrides()
+    env_provider = current_app.config.get("LLM_PROVIDER") or ""
+    source = "ui" if ov.get("llm_provider") else ("addon" if env_provider else "none")
+    return {
+        "provider": cfg["provider"] or "",
+        "baseUrl": ov.get("llm_base_url", ""),
+        "model": ov.get("llm_model", ""),
+        "hasApiKey": bool(cfg["api_key"]),
+        "enabled": cfg["provider"] in _PROVIDERS,
+        "tools": cfg["provider"] in _TOOL_PROVIDERS,
+        "source": source,
+        "providers": list(PROVIDER_CHOICES),
+        "needsKey": {"openai": True, "anthropic": True, "ollama": False,
+                     "homeassistant": False},
+        "defaults": {p: {"baseUrl": b, "model": m} for p, (b, m) in _DEFAULTS.items()},
+    }
+
+
+def save_settings(gid, provider=None, base_url=None, api_key=None, model=None):
+    """Persist UI overrides for the chat provider, then return the new view."""
+    from .settings import set_llm
+    set_llm(gid, provider=provider, base_url=base_url, api_key=api_key, model=model)
+    return settings_public()
 
 
 def run_chat(gid, messages):

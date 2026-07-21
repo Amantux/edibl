@@ -66,8 +66,9 @@ client) can query and act on your inventory.
 ## Assistant setup (required for chat)
 
 The chat assistant needs an LLM provider — set one and it can query **and** act
-(add / update / remove stock, edit the shopping list). Without a provider the
-chat shows setup guidance instead. Pick one:
+(add / update / remove stock, edit the shopping list). Configure it in the Edibl
+**Settings** page **or** in the Home Assistant add-on options (or the env vars
+below) — whichever you use is remembered. Pick one:
 
 ```bash
 # Local Ollama (recommended for Home Assistant / privacy):

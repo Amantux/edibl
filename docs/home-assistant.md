@@ -39,10 +39,19 @@ The integration reads Edibl's REST API and exposes:
 `https://github.com/Amantux/edibl` as an **Integration** → install **Edibl** →
 restart HA → **Settings → Devices & Services → Add Integration → Edibl**.
 
-**Connect:** enter the Edibl URL. If you run the add-on, map its port `7746` and
-use `http://homeassistant.local:7746`. The API token is optional in single-tenant
-mode; if Edibl requires auth, create a long-lived token in Edibl
-(`POST /api/v1/tokens`, `edbl_…`) and paste it.
+**Auto-discovery:** if you run the **add-on**, the integration is discovered
+automatically — you'll get a "New devices discovered / Edibl" prompt; just click
+**Add** (no URL or token needed, and no port to map — HA reaches the add-on
+internally). Install the integration in HACS first (below) so the prompt appears.
+
+**Manual connect** (standalone Edibl, or if you prefer): enter the Edibl URL. For
+the add-on, map its port `7746` and use `http://homeassistant.local:7746`. The API
+token is optional in single-tenant mode; if Edibl requires auth, create a
+long-lived token in Edibl (`POST /api/v1/tokens`, `edbl_…`) and paste it.
+
+**Connect to myMeal:** in Edibl's **Settings** page, the *myMeal* card takes your
+myMeal URL + token, has a **Test connection**, and a **Pull plan now** button —
+Edibl then reconciles myMeal's planned ingredients against your real stock.
 
 Example automation — nudge when things are going off:
 

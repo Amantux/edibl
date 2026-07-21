@@ -3,6 +3,16 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.5.1
+
+- **Auto-discovery** — when the add-on runs it registers with the Supervisor, so
+  the Edibl integration is offered automatically in Home Assistant (no URL/token,
+  no port mapping — HA reaches the add-on internally). Config flow gains a hassio
+  discovery step.
+- **Connect to myMeal from the UI** — the Settings page has a myMeal card (URL +
+  token, Test connection, Pull plan now), persisted per-household and overriding
+  the env default.
+
 ## 1.5.0
 
 Milestone release rolling up everything since 1.0.0: product grouping, user-driven

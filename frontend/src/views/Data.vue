@@ -16,7 +16,45 @@ const providerLabels = { '': '— none (disabled) —', ollama: 'Ollama',
   openai: 'OpenAI-compatible', anthropic: 'Anthropic',
   homeassistant: "Home Assistant's agent" }
 
-onMounted(loadSettings)
+// --- myMeal connection ---
+const mm = ref(null)
+const mmForm = ref({ url: '', token: '' })
+const mmMsg = ref('')
+const mmBusy = ref(false)
+async function loadMyMeal() {
+  try {
+    mm.value = await api.get('/integrations/mymeal')
+    mmForm.value = { url: mm.value.url || '', token: '' }
+  } catch (e) { mm.value = { source: 'none' } }
+}
+async function saveMyMeal() {
+  mmBusy.value = true; mmMsg.value = ''
+  try {
+    const body = { url: mmForm.value.url }
+    if (mmForm.value.token) body.token = mmForm.value.token
+    mm.value = await api.put('/integrations/mymeal', body)
+    mmForm.value = { url: mm.value.url || '', token: '' }
+    mmMsg.value = '✓ Saved.'
+  } catch (e) { mmMsg.value = '⚠️ ' + (e.message || 'save failed') } finally { mmBusy.value = false }
+}
+async function testMyMeal() {
+  mmBusy.value = true; mmMsg.value = 'Testing…'
+  try {
+    const r = await api.post('/integrations/mymeal/test')
+    mmMsg.value = !r.configured ? '⚠️ No myMeal URL set.'
+      : r.reachable ? `✓ Connected — myMeal has ${r.items} planned ingredient(s).`
+        : '⚠️ Unreachable: ' + (r.error || 'no response')
+  } catch (e) { mmMsg.value = '⚠️ ' + (e.message || 'error') } finally { mmBusy.value = false }
+}
+async function pullMyMeal() {
+  mmBusy.value = true; mmMsg.value = 'Pulling…'
+  try {
+    const r = await api.post('/integrations/mymeal/pull')
+    mmMsg.value = `✓ Pulled ${r.pulled} planned item(s) from myMeal.`
+  } catch (e) { mmMsg.value = '⚠️ ' + (e.message || 'pull failed') } finally { mmBusy.value = false }
+}
+
+onMounted(() => { loadSettings(); loadMyMeal() })
 async function loadSettings() {
   try {
     s.value = await api.get('/assistant/settings')
@@ -130,6 +168,24 @@ async function importFile(e) {
       <div class="row" style="justify-content:flex-end;align-items:center;gap:10px;margin-top:6px">
         <span v-if="saved" class="muted" style="font-size:.85rem">{{ saved }}</span>
         <button :disabled="saving" @click="save">{{ saving ? 'Saving…' : 'Save' }}</button>
+      </div>
+    </div>
+    <div v-else class="muted">Loading…</div>
+  </div>
+
+  <div class="card">
+    <h2>myMeal</h2>
+    <p class="muted" style="margin-top:0">Connect to <strong>myMeal</strong> (recipes &amp; meal plans). Edibl pulls the ingredients your planned meals need and reconciles them against what's actually in stock, so you see what to buy.</p>
+    <div v-if="mm">
+      <label class="field"><span>myMeal URL</span>
+        <input v-model="mmForm.url" placeholder="http://mymeal:8000" /></label>
+      <label class="field"><span>API token {{ mm.hasToken ? '— saved, leave blank to keep' : '(optional)' }}</span>
+        <input v-model="mmForm.token" type="password" :placeholder="mm.hasToken ? '•••••••••• saved' : 'token'" /></label>
+      <div class="row wrap" style="align-items:center;gap:10px">
+        <button :disabled="mmBusy" @click="saveMyMeal">Save</button>
+        <button class="secondary" :disabled="mmBusy || !mmForm.url" @click="testMyMeal">Test connection</button>
+        <button class="secondary" :disabled="mmBusy" @click="pullMyMeal">⬇️ Pull plan now</button>
+        <span v-if="mmMsg" class="muted" style="font-size:.85rem">{{ mmMsg }}</span>
       </div>
     </div>
     <div v-else class="muted">Loading…</div>

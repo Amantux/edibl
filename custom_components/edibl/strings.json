@@ -8,6 +8,10 @@
           "host": "Edibl URL",
           "token": "API token (optional)"
         }
+      },
+      "hassio_confirm": {
+        "title": "Edibl add-on discovered",
+        "description": "Set up the Edibl add-on at {host}? It runs in single-tenant mode, so no token is needed."
       }
     },
     "error": {
@@ -15,7 +19,8 @@
       "invalid_auth": "Edibl rejected the token."
     },
     "abort": {
-      "already_configured": "This Edibl instance is already configured."
+      "already_configured": "This Edibl instance is already configured.",
+      "cannot_connect": "The discovered Edibl add-on didn't provide a reachable address."
     }
   }
 }

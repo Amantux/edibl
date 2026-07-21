@@ -27,5 +27,11 @@ export EDIBL_MCP_SERVER_TOKEN="$(gets mcp_server_token)"
 # Behind HA ingress the requests come from the trusted supervisor proxy.
 export EDIBL_PROXY_HOPS="1"
 
+# Auto-discover the Edibl integration in Home Assistant. Only in single-tenant
+# mode — discovery carries no token, so with auth on the integration would 401.
+if [ -n "${SUPERVISOR_TOKEN:-}" ] && [ "$EDIBL_DISABLE_AUTH" = "true" ]; then
+  python3 /register-discovery.py &
+fi
+
 echo "Starting Edibl (auth_disabled=${EDIBL_DISABLE_AUTH}, llm=${EDIBL_LLM_PROVIDER:-rules}, mcp=${EDIBL_MCP_ENABLED})"
 exec /app/docker-entrypoint.sh

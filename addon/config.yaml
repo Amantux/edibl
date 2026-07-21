@@ -17,10 +17,14 @@ ingress: true
 ingress_port: 7746
 panel_icon: mdi:food-apple
 panel_title: Edibl
-hassio_api: false
+# Needed to register auto-discovery with the Supervisor at startup.
+hassio_api: true
 # Lets the `homeassistant` LLM provider call HA's conversation agent (and reuse
 # whatever chat/Ollama model HA already has configured).
 homeassistant_api: true
+# Auto-discover the Edibl HACS integration when this add-on is running.
+discovery:
+  - edibl
 # The Edibl MCP server (SSE). Left unmapped by default; set a token and map the
 # port if you want Home Assistant's MCP Client (or another agent) to reach it.
 ports:

@@ -13,7 +13,9 @@ from ..models import PlannedItem, ShoppingItem
 from ..auth import login_required, current_group
 from ..schemas.serializers import iso, shopping_out
 from ..services.planning import analyze_demand
+from ..services import integrations as integ
 from ..services.integrations import integration_status, mymeal_get
+from ..services.settings import set_mymeal
 
 bp = Blueprint("integrations", __name__)
 
@@ -37,6 +39,35 @@ def _planned_out(p):
 @login_required
 def status():
     return jsonify(integration_status())
+
+
+@bp.get("/integrations/mymeal")
+@login_required
+def mymeal_settings():
+    """myMeal connection view for the UI (URL + whether a token is on file)."""
+    return jsonify(integ.mymeal_public())
+
+
+@bp.put("/integrations/mymeal")
+@login_required
+def set_mymeal_settings():
+    """Connect Edibl to myMeal from the UI. Body: { url, token? }. A blank/omitted
+    token is left unchanged; overrides the add-on/env default and is remembered."""
+    data = request.get_json(force=True) or {}
+    kwargs = {}
+    if "url" in data:
+        kwargs["url"] = str(data["url"] or "")
+    if data.get("token"):
+        kwargs["token"] = str(data["token"])
+    set_mymeal(current_group().id, **kwargs)
+    return jsonify(integ.mymeal_public())
+
+
+@bp.post("/integrations/mymeal/test")
+@login_required
+def test_mymeal():
+    """Test the myMeal connection without changing anything."""
+    return jsonify(integ.mymeal_test())
 
 
 @bp.post("/integrations/mymeal/plan")

@@ -34,6 +34,7 @@ RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 # Pre-built frontend (vendored in the add-on build context — no npm on device).
 COPY webroot /app/frontend/dist
 COPY run.sh /run.sh
+COPY register-discovery.py /register-discovery.py
 RUN chmod +x /run.sh \
     && mkdir -p /data && chown -R app:app /app /data
 

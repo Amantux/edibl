@@ -32,9 +32,26 @@ def _get(base_url, token, path, params=None):
         return {"configured": True, "reachable": False, "error": str(e)}
 
 
-def mymeal_get(path, params=None):
+def _mymeal_overrides():
+    try:
+        from ..auth import current_group
+        from .settings import get_mymeal_overrides
+        return get_mymeal_overrides(current_group().id)
+    except Exception:  # noqa: BLE001 — no request/group context
+        return {}
+
+
+def mymeal_cfg():
+    """Effective myMeal connection: UI-set (persisted) > add-on/env."""
     cfg = current_app.config
-    return _get(cfg["MYMEAL_URL"], cfg["MYMEAL_TOKEN"], path, params)
+    ov = _mymeal_overrides()
+    return (ov.get("mymeal_url") or cfg["MYMEAL_URL"],
+            ov.get("mymeal_token") or cfg["MYMEAL_TOKEN"])
+
+
+def mymeal_get(path, params=None):
+    url, token = mymeal_cfg()
+    return _get(url, token, path, params)
 
 
 def homehoard_get(path, params=None):
@@ -42,9 +59,29 @@ def homehoard_get(path, params=None):
     return _get(cfg["HOMEHOARD_URL"], cfg["HOMEHOARD_TOKEN"], path, params)
 
 
+def mymeal_public():
+    """UI view of the myMeal connection (never returns the token)."""
+    url, token = mymeal_cfg()
+    ov = _mymeal_overrides()
+    env_url = current_app.config["MYMEAL_URL"]
+    return {"url": url, "hasToken": bool(token),
+            "source": "ui" if ov.get("mymeal_url") else ("addon" if env_url else "none")}
+
+
+def mymeal_test():
+    """Ping myMeal's planned-ingredients endpoint; returns {configured, reachable}."""
+    res = mymeal_get("/api/v1/plan/ingredients")
+    return {"configured": res.get("configured", False),
+            "reachable": res.get("reachable", False),
+            "error": res.get("error"),
+            "items": len((res.get("data") or {}).get("items", []))
+            if res.get("reachable") else None}
+
+
 def integration_status():
     cfg = current_app.config
+    url, _t = mymeal_cfg()
     return {
-        "myMeal": {"configured": bool(cfg["MYMEAL_URL"]), "url": cfg["MYMEAL_URL"]},
+        "myMeal": {"configured": bool(url), "url": url},
         "homeHoard": {"configured": bool(cfg["HOMEHOARD_URL"]), "url": cfg["HOMEHOARD_URL"]},
     }

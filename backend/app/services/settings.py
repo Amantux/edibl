@@ -8,6 +8,7 @@ from ..extensions import db
 from ..models import Setting
 
 LLM_KEYS = ("llm_provider", "llm_base_url", "llm_api_key", "llm_model", "llm_agent_id")
+MYMEAL_KEYS = ("mymeal_url", "mymeal_token")
 
 
 def _all(gid):
@@ -42,4 +43,17 @@ def set_llm(gid, provider=None, base_url=None, api_key=None, model=None, agent_i
         _set(gid, "llm_agent_id", agent_id.strip())
     if api_key is not None:
         _set(gid, "llm_api_key", api_key)
+    db.session.commit()
+
+
+def get_mymeal_overrides(gid):
+    d = _all(gid)
+    return {k: d[k] for k in MYMEAL_KEYS if k in d}
+
+
+def set_mymeal(gid, url=None, token=None):
+    if url is not None:
+        _set(gid, "mymeal_url", url.strip())
+    if token is not None:
+        _set(gid, "mymeal_token", token)
     db.session.commit()

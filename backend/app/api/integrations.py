@@ -10,7 +10,7 @@ from flask import Blueprint, request, jsonify, abort
 
 from ..extensions import db
 from ..models import PlannedItem, ShoppingItem
-from ..auth import login_required, current_group
+from ..auth import login_required, owner_required, current_group
 from ..schemas.serializers import iso, shopping_out
 from ..services.planning import analyze_demand
 from ..services import integrations as integ
@@ -49,7 +49,7 @@ def mymeal_settings():
 
 
 @bp.put("/integrations/mymeal")
-@login_required
+@owner_required
 def set_mymeal_settings():
     """Connect Edibl to myMeal from the UI. Body: { url, token? }. A blank/omitted
     token is left unchanged; overrides the add-on/env default and is remembered."""
@@ -64,14 +64,14 @@ def set_mymeal_settings():
 
 
 @bp.post("/integrations/mymeal/test")
-@login_required
+@owner_required
 def test_mymeal():
     """Test the myMeal connection without changing anything."""
     return jsonify(integ.mymeal_test())
 
 
 @bp.post("/integrations/mymeal/discover")
-@login_required
+@owner_required
 def discover_mymeal():
     """Find myMeal running as a Home Assistant add-on (via the Supervisor) so it can
     be connected on the internal network without knowing the hostname."""
@@ -79,7 +79,7 @@ def discover_mymeal():
 
 
 @bp.get("/integrations/mymeal/discover/debug")
-@login_required
+@owner_required
 def discover_mymeal_debug():
     """Read-only diagnostics for 'Find myMeal': what the Supervisor returned and
     every candidate host tried, with per-host probe results. No secrets."""
@@ -193,7 +193,7 @@ def clear():
 
 
 @bp.post("/integrations/mymeal/pull")
-@login_required
+@owner_required
 def pull_from_mymeal():
     """Pull the upcoming meal plan FROM myMeal (outbound) and ingest it. Requires
     EDIBL_MYMEAL_URL/TOKEN. Expects myMeal to expose the planned ingredients at

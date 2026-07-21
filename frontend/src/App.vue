@@ -1,17 +1,22 @@
 <script setup>
-import { ref, watch } from 'vue'
+import { ref, watch, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
+import { me, ensureMe } from './me'
 import ChatAssistant from './components/ChatAssistant.vue'
 const route = useRoute()
 const menuOpen = ref(false)
-const nav = [
+onMounted(ensureMe)
+const NAV = [
   { to: '/', icon: '📊', label: 'Dashboard' },
   { to: '/stock', icon: '🥫', label: 'Stock' },
   { to: '/plan', icon: '🍽️', label: 'Meal plan' },
   { to: '/shopping', icon: '🛒', label: 'Shopping' },
   { to: '/locations', icon: '📍', label: 'Locations' },
-  { to: '/settings', icon: '⚙️', label: 'Settings' },
+  { to: '/settings', icon: '⚙️', label: 'Settings', ownerOnly: true },
 ]
+// Owner-only items appear only once we've confirmed the user is the owner (the
+// server enforces regardless — this just hides what members can't use).
+const nav = computed(() => NAV.filter(n => !n.ownerOnly || me.value?.isOwner === true))
 watch(() => route.path, () => { menuOpen.value = false })
 </script>
 

@@ -13,7 +13,7 @@ from flask import Blueprint, request, jsonify, Response
 
 from ..extensions import db
 from ..models import Product, Location, StockLot, ShoppingItem, utcnow
-from ..auth import login_required, current_group
+from ..auth import login_required, owner_required, current_group
 from ..schemas.serializers import (product_out, location_out, stock_out,
                                     shopping_out, iso)
 
@@ -69,7 +69,7 @@ def export_csv():
 
 
 @bp.post("/import")
-@login_required
+@owner_required
 def data_import():
     """Additive restore from an /export JSON snapshot. Creates locations, products,
     stock lots, and shopping items that don't already exist (matched by name).

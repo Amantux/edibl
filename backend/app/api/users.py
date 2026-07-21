@@ -12,6 +12,16 @@ _LOGGER = logging.getLogger("edibl.auth")
 _DUMMY_HASH = hash_password("this-is-not-a-real-password")
 
 
+@bp.get("/me")
+@login_required
+def me():
+    """The current user + role, so the UI can gate owner-only surfaces. Behind HA
+    ingress this reflects the signed-in HA user; the server still enforces roles."""
+    u = current_user()
+    return jsonify({"id": u.id, "name": u.name, "isOwner": bool(u.is_owner),
+                    "ha": bool(u.ha_user_id)})
+
+
 def _password_ok(pw):
     n = current_app.config["MIN_PASSWORD_LENGTH"]
     if len(pw or "") < n:
@@ -34,6 +44,10 @@ def register():
     email = (data.get("email") or "").strip().lower()
     if not email:
         return jsonify({"error": "email required"}), 422
+    # `ha:<id>` is reserved for auto-provisioned Home Assistant identities — a
+    # registrant must not squat one (it would collide and DoS that HA user).
+    if email.startswith("ha:"):
+        return jsonify({"error": "invalid email"}), 422
     ok, err = _password_ok(data.get("password") or "")
     if not ok:
         return err
@@ -42,7 +56,8 @@ def register():
     group = Group(name=data.get("groupName") or "Household")
     db.session.add(group)
     db.session.flush()
-    user = User(name=data.get("name") or "", email=email,
+    # A registrant creates and therefore owns their new household.
+    user = User(name=data.get("name") or "", email=email, is_owner=True,
                 password_hash=hash_password(data["password"]), group_id=group.id)
     db.session.add(user)
     db.session.commit()

@@ -2,7 +2,7 @@
 actions the MCP server exposes, available from a widget on every screen."""
 from flask import Blueprint, request, jsonify
 
-from ..auth import login_required, current_group
+from ..auth import login_required, owner_required, current_group
 from ..extensions import limiter, db
 from ..services import assistant
 
@@ -24,7 +24,7 @@ def get_settings():
 
 
 @bp.put("/assistant/settings")
-@login_required
+@owner_required
 def put_settings():
     """Persist the chat provider from the UI (overrides the add-on/env default).
     Body: { provider, baseUrl, model, apiKey? }. A blank/omitted apiKey is left
@@ -49,7 +49,7 @@ def put_settings():
 
 
 @bp.delete("/assistant/settings")
-@login_required
+@owner_required
 def reset_settings():
     """Clear the UI overrides so the assistant falls back to the add-on/env
     default (the 'Reset to add-on default' action)."""
@@ -57,7 +57,7 @@ def reset_settings():
 
 
 @bp.post("/assistant/models")
-@login_required
+@owner_required
 @limiter.limit("30/minute")
 def list_models():
     """List models available on the (optionally overridden) provider — the UI polls

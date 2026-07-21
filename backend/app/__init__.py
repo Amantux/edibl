@@ -61,6 +61,7 @@ def _ensure_columns():
     from sqlalchemy import inspect, text
 
     wanted = {
+        "users": {"ha_user_id": "VARCHAR(255)", "is_owner": "BOOLEAN DEFAULT 0"},
         "products": {"family": "VARCHAR(255) DEFAULT ''"},
         "stock_lots": {"state": "VARCHAR(32) DEFAULT ''"},
         "consumption_events": {
@@ -79,6 +80,27 @@ def _ensure_columns():
             if name not in have:
                 db.session.execute(text(f'ALTER TABLE {table} ADD COLUMN {name} {ddl}'))
     db.session.commit()
+
+    # Backfill roles for installs that predate ownership: promote the earliest
+    # user of any household that has no owner, so an existing admin isn't locked
+    # out of the now-owner-gated config surfaces. Idempotent — a household that
+    # already has an owner is skipped, so this is a no-op on every later start.
+    if "users" in existing_tables:
+        db.session.execute(text("""
+            UPDATE users SET is_owner = 1
+            WHERE id IN (
+                SELECT u.id FROM users u
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM users o
+                    WHERE o.group_id = u.group_id AND o.is_owner = 1
+                )
+                AND u.created_at = (
+                    SELECT MIN(u2.created_at) FROM users u2
+                    WHERE u2.group_id = u.group_id
+                )
+            )
+        """))
+        db.session.commit()
 
 
 def _seed_reference_data():

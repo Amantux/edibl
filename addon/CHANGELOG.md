@@ -3,6 +3,19 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.5.13
+
+- **Multi-user behind Home Assistant.** Each HA user now gets their own Edibl
+  identity (auto-provisioned from the ingress sign-in), all sharing one
+  household — so stock, plan, and shopping are shared but identity is per-person.
+  The **first** user is the **owner** and can change household config (assistant
+  provider, myMeal connection, API keys, data import); everyone else is a
+  **member** with full inventory / plan / shopping / chat use. The Settings page
+  is owner-only. Trust boundary enforced: the identity headers are honored only
+  from the Home Assistant Supervisor proxy — a forged header from a directly
+  published port is ignored and falls back to the shared local user. Standalone
+  installs are unchanged (your account owns its household).
+
 ## 1.5.12
 
 - **Access & keys + connect links.** Settings gains a token manager — generate a

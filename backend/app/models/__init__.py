@@ -57,6 +57,10 @@ class User(IDMixin, TimestampMixin, db.Model):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     group_id: Mapped[str] = mapped_column(String(36), ForeignKey("groups.id"))
+    # HA user behind ingress (from X-Remote-User-Id); NULL for local/JWT users.
+    ha_user_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    # First user in a household is the owner; owners gate household config.
+    is_owner: Mapped[bool] = mapped_column(Boolean, default=False)
     group = relationship("Group", back_populates="users")
     api_tokens = relationship("ApiToken", back_populates="user", cascade="all, delete-orphan")
 

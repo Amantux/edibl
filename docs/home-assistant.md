@@ -161,9 +161,9 @@ and Edibl behaves exactly as a standalone pantry.
 
 **2. myMeal's chat manages Edibl too (when connected).** Symmetrically, when Edibl
 is connected to myMeal, myMeal's chat can check and update your real stock — "do
-we have eggs?", "add 2 L milk to the pantry", "we ate the leftovers". Adding
-pantry stock is **undoable right from myMeal's chat**; reverse other pantry
-changes (e.g. recording consumption) from Edibl's own chat.
+we have eggs?", "add 2 L milk to the pantry", "we ate the leftovers". Every
+pantry change it makes — adding stock, recording consumption, adding to Edibl's
+shopping list — carries a one-tap **Undo** right in myMeal's chat.
 
 **3. Home Assistant Assist as the single voice/chat hub.** Register each app's MCP
 server with HA's **Model Context Protocol** (MCP Client) integration, then point

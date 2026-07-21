@@ -192,3 +192,45 @@ def test_assistant_chat_without_provider_returns_setup(auth_client):
 
 def test_assistant_requires_message(auth_client):
     assert auth_client.post("/api/v1/assistant/chat", json={}).status_code == 422
+
+
+# --- reverse a consumption (powers cross-app undo) ---------------------------
+def test_consume_returns_event_id_and_unconsume_restores(auth_client):
+    lot = _add(auth_client, "Milk", quantity=4, unit="L")
+    r = auth_client.post(f"/api/v1/stock/{lot['id']}/consume",
+                         json={"quantity": 3, "outcome": "eaten"})
+    body = r.get_json()
+    assert body["consumptionId"] and body["consumedAmount"] == 3
+    assert auth_client.get(f"/api/v1/stock/{lot['id']}").get_json()["quantity"] == 1
+
+    u = auth_client.post(f"/api/v1/stock/{lot['id']}/unconsume",
+                         json={"consumptionId": body["consumptionId"], "amount": 3})
+    assert u.status_code == 200 and u.get_json()["quantity"] == 4
+    # the consumption event is gone -> not counted as waste anymore
+    pid = lot["product"]["id"]
+    ins = auth_client.get(f"/api/v1/products/{pid}/insights").get_json()
+    assert ins["wasted"] == 0
+    # Idempotent: a retry / double-tap with the same payload must NOT restore
+    # again (the event is already gone).
+    again = auth_client.post(f"/api/v1/stock/{lot['id']}/unconsume",
+                             json={"consumptionId": body["consumptionId"], "amount": 3})
+    assert again.status_code == 200 and again.get_json()["quantity"] == 4
+
+
+def test_unconsume_rejects_event_from_other_product(auth_client):
+    milk = _add(auth_client, "Milk", quantity=4, unit="L")
+    eggs = _add(auth_client, "Eggs", quantity=6, unit="count")
+    body = auth_client.post(f"/api/v1/stock/{milk['id']}/consume",
+                            json={"quantity": 2, "outcome": "eaten"}).get_json()
+    # Restoring the milk event onto the eggs lot must 409 and leave eggs untouched.
+    r = auth_client.post(f"/api/v1/stock/{eggs['id']}/unconsume",
+                         json={"consumptionId": body["consumptionId"], "amount": 2})
+    assert r.status_code == 409
+    assert auth_client.get(f"/api/v1/stock/{eggs['id']}").get_json()["quantity"] == 6
+
+
+def test_unconsume_foreign_lot_is_404(app, auth_client):
+    # A lot id that doesn't belong to this group must 404, not mutate anything.
+    r = auth_client.post("/api/v1/stock/does-not-exist/unconsume",
+                         json={"amount": 1})
+    assert r.status_code == 404

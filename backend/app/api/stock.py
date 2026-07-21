@@ -241,16 +241,61 @@ def consume(lot_id):
     if s.quantity <= 0:
         s.finished = True
         s.quantity = 0
-    db.session.add(ConsumptionEvent(
+    ev = ConsumptionEvent(
         product_id=s.product_id, quantity=amount, unit=s.unit,
         reason="used" if outcome == "eaten" else outcome,
         outcome=outcome, days_kept=days_kept, state=state,
-        group_id=current_group().id))
+        group_id=current_group().id)
+    db.session.add(ev)
     db.session.commit()
     insight = None
     if outcome in LOSS_OUTCOMES:
         insight = product_insights(current_group().id, s.product_id).get("suggestion") or None
-    return jsonify({**stock_out(s), "insight": insight})
+    # consumptionId + consumedAmount let a caller reverse this exact consumption
+    # via POST /stock/<lot_id>/unconsume (powers cross-app undo).
+    return jsonify({**stock_out(s), "insight": insight,
+                    "consumptionId": ev.id, "consumedAmount": amount})
+
+
+@bp.post("/stock/<lot_id>/unconsume")
+@login_required
+def unconsume(lot_id):
+    """Reverse a consumption on this lot: add `amount` back and delete the
+    ConsumptionEvent. Powers one-tap undo of a record-consumption action,
+    including from a sibling app. Body: {consumptionId?, amount}."""
+    s = _get(lot_id)
+    data = request.get_json(force=True) or {}
+    ev_id = data.get("consumptionId")
+
+    # Preferred path: reverse a specific ConsumptionEvent. Idempotent — if the
+    # event is already gone (a retry, a double-tap on one-tap undo) this is a
+    # no-op, NEVER a second restore. The event carries the authoritative amount.
+    if ev_id:
+        ev = db.session.get(ConsumptionEvent, ev_id)
+        if not ev or ev.group_id != current_group().id:
+            return jsonify(stock_out(s))  # already undone / not ours — no-op
+        if ev.product_id != s.product_id:
+            abort(409)  # event belongs to a different product than this lot
+        s.quantity = round((s.quantity or 0) + float(ev.quantity or 0), 4)
+        if s.quantity > 0:
+            s.finished = False
+        db.session.delete(ev)
+        db.session.commit()
+        return jsonify(stock_out(s))
+
+    # Fallback (no event id): restore a caller-supplied amount to the caller's own
+    # lot. Not idempotent by nature, so this path is only for callers that can't
+    # reference an event.
+    try:
+        amount = float(data.get("amount") or 0)
+    except (TypeError, ValueError):
+        amount = 0
+    if amount > 0:
+        s.quantity = round((s.quantity or 0) + amount, 4)
+        if s.quantity > 0:
+            s.finished = False
+        db.session.commit()
+    return jsonify(stock_out(s))
 
 
 @bp.get("/stock/<lot_id>/insights")

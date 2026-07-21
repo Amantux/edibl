@@ -3,6 +3,13 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.5.5
+
+- **Reverse a consumption over the API** — new `POST /stock/<lot>/unconsume`, and
+  the consume response now returns `consumptionId`/`consumedAmount`. This lets a
+  connected app (e.g. myMeal's chat) offer one-tap **undo** of recording that
+  food was eaten/spoiled, restoring the quantity and removing the event.
+
 ## 1.5.4
 
 - **One assistant for the whole kitchen.** When a myMeal instance is connected,

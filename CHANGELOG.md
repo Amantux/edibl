@@ -3,6 +3,18 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.5.4
+
+- **One assistant for the whole kitchen.** When a myMeal instance is connected,
+  Edibl's chat can now also **manage myMeal** — look up recipes, see and add to
+  the meal plan, create recipes, and add to myMeal's shopping list (mutations are
+  undoable). It's fully optional and auto-detected: with no myMeal connected these
+  tools don't appear and standalone Edibl is unchanged. Paired with myMeal's chat
+  gaining Edibl pantry tools, either app's chat manages both — and registering
+  both MCP servers (plus HomeHoard) with Home Assistant's MCP Client lets one HA
+  Assist pipeline drive everything by chat or voice. See
+  [docs/home-assistant.md](../docs/home-assistant.md).
+
 ## 1.5.3
 
 - **Zero-URL integration setup, matched to HomeHoard** — the add-on now registers

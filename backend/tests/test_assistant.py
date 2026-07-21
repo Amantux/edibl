@@ -328,3 +328,77 @@ def test_settings_persist_agent_id(auth_client):
     auth_client.put("/api/v1/assistant/settings",
                     json={"provider": "homeassistant", "agentId": "conversation.ollama"})
     assert auth_client.get("/api/v1/assistant/settings").get_json()["agentId"] == "conversation.ollama"
+
+
+# --------------------------------------------------------------------------- #
+# myMeal bridge — gated on a myMeal connection, so standalone Edibl is unchanged.
+# --------------------------------------------------------------------------- #
+def test_mymeal_tools_hidden_when_not_connected(app):
+    app.config["MYMEAL_URL"] = ""
+    app.config["MYMEAL_TOKEN"] = ""
+    with app.app_context():
+        tools = assistant._active_tools()
+    assert not any(n.startswith("mymeal_") for n in tools)
+    assert "add_stock" in tools  # base tools still present
+
+
+def test_mymeal_tools_present_when_connected(app):
+    app.config["MYMEAL_URL"] = "http://mymeal.test"
+    app.config["MYMEAL_TOKEN"] = ""
+    with app.app_context():
+        tools = assistant._active_tools()
+    assert "mymeal_plan_meal" in tools and "mymeal_list_recipes" in tools
+
+
+def test_mymeal_plan_meal_surfaces_action_and_undo(app, monkeypatch):
+    app.config["MYMEAL_URL"] = "http://mymeal.test"
+    app.config["MYMEAL_TOKEN"] = ""
+    from app.services import integrations
+    monkeypatch.setattr(integrations, "mymeal_get",
+                        lambda path, params=None: {
+                            "configured": True, "reachable": True,
+                            "data": {"items": [{"id": "r1", "name": "Spaghetti"}]}})
+    posted = {}
+
+    def fake_post(path, payload=None):
+        posted["path"], posted["payload"] = path, payload
+        return {"configured": True, "reachable": True, "data": {"id": "e1"}}
+    monkeypatch.setattr(integrations, "mymeal_post", fake_post)
+    deleted = {}
+
+    def fake_delete(path):
+        deleted["path"] = path
+        return {"configured": True, "reachable": True}
+    monkeypatch.setattr(integrations, "mymeal_delete", fake_delete)
+
+    with app.app_context():
+        g = Group(name="H")
+        db.session.add(g)
+        db.session.commit()
+        actions = []
+        text = assistant._run_tool(g.id, "mymeal_plan_meal",
+                                   {"recipe": "Spaghetti", "date": "2026-07-25"}, actions)
+        assert "Spaghetti" in text
+        assert posted["path"] == "/api/v1/mealplans"
+        assert posted["payload"]["recipeId"] == "r1"
+        a = actions[0]
+        assert a["undoable"] and a["undo"]["op"] == "delete_mymeal_mealplan"
+        assert a["undo"]["entryId"] == "e1"
+        msg = assistant.apply_undo(g.id, a["undo"])
+        assert "Undone" in msg
+        assert deleted["path"] == "/api/v1/mealplans/e1"
+
+
+def test_mymeal_tool_degrades_when_unreachable(app, monkeypatch):
+    app.config["MYMEAL_URL"] = "http://mymeal.test"
+    app.config["MYMEAL_TOKEN"] = ""
+    from app.services import integrations
+    monkeypatch.setattr(integrations, "mymeal_get",
+                        lambda path, params=None: {"configured": True, "reachable": False,
+                                                   "error": "timeout"})
+    with app.app_context():
+        g = Group(name="H")
+        db.session.add(g)
+        db.session.commit()
+        out = assistant._run_tool(g.id, "mymeal_list_recipes", {}, [])
+    assert "reach myMeal" in out

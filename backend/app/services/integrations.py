@@ -33,6 +33,22 @@ def _get(base_url, token, path, params=None):
         return {"configured": True, "reachable": False, "error": str(e)}
 
 
+def _write(method, base_url, token, path, payload=None):
+    """POST/PUT/DELETE to a sibling. Same {configured, reachable, data} envelope
+    as `_get`; DELETE (204, no body) yields data=None."""
+    if not base_url:
+        return {"configured": False, "reachable": False}
+    try:
+        with _client(base_url, token) as c:
+            r = c.request(method, path, json=payload)
+            r.raise_for_status()
+            return {"configured": True, "reachable": True,
+                    "data": r.json() if r.content else None}
+    except Exception as e:  # noqa: BLE001 - bounded, best-effort
+        _LOGGER.warning("integration %s %s%s failed: %s", method, base_url, path, e)
+        return {"configured": True, "reachable": False, "error": str(e)}
+
+
 def _mymeal_overrides():
     try:
         from ..auth import current_group
@@ -53,6 +69,21 @@ def mymeal_cfg():
 def mymeal_get(path, params=None):
     url, token = mymeal_cfg()
     return _get(url, token, path, params)
+
+
+def mymeal_post(path, payload=None):
+    url, token = mymeal_cfg()
+    return _write("POST", url, token, path, payload)
+
+
+def mymeal_put(path, payload=None):
+    url, token = mymeal_cfg()
+    return _write("PUT", url, token, path, payload)
+
+
+def mymeal_delete(path):
+    url, token = mymeal_cfg()
+    return _write("DELETE", url, token, path)
 
 
 def homehoard_get(path, params=None):

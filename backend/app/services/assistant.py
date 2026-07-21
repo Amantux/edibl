@@ -41,6 +41,18 @@ SYSTEM_PROMPT = (
     "offer a practical tip. Keep replies short and to the point."
 )
 
+_MYMEAL_PROMPT = (
+    " myMeal (the meal-planning app) is connected, so you can also look up its "
+    "recipes, see and add to its meal plan, create recipes, and add to its "
+    "shopping list using the mymeal_* tools."
+)
+
+
+def _system_prompt():
+    """Base prompt, plus a myMeal note only when myMeal is connected (so a
+    standalone Edibl's prompt is unchanged)."""
+    return SYSTEM_PROMPT + _MYMEAL_PROMPT if _mymeal_connected() else SYSTEM_PROMPT
+
 
 # --------------------------------------------------------------------------- #
 # In-process inventory tools (handlers take group_id + kwargs, return text)
@@ -385,8 +397,209 @@ _READONLY_LABELS = {
 }
 
 
+# --------------------------------------------------------------------------- #
+# myMeal bridge — recipe & meal-plan management, ONLY advertised when a myMeal
+# connection is configured. A standalone Edibl never sees these tools, so there
+# is no dependency on the two apps being deployed together. Each call is bounded
+# and degrades to a "connect myMeal" message if myMeal is unreachable.
+# --------------------------------------------------------------------------- #
+def _mymeal_connected():
+    """True only when the user has connected a myMeal (UI/add-on/discovery)."""
+    from .integrations import mymeal_cfg
+    try:
+        url, _t = mymeal_cfg()
+    except Exception:  # noqa: BLE001 — no app/request context
+        return False
+    return bool(url)
+
+
+def _mm_unavailable(res):
+    if not (res or {}).get("configured"):
+        return "myMeal isn't connected. Connect it in Settings to manage meals."
+    # Keep the raw HTTP/transport error out of the chat; point at the fix instead.
+    return ("Couldn't reach myMeal — check the connection in Settings and that "
+            "myMeal is running.")
+
+
+def _mm_items(res):
+    """Pull a list of rows from a myMeal response ({items:[...]} or a bare list)."""
+    data = (res or {}).get("data")
+    if isinstance(data, dict):
+        return data.get("items") or []
+    return data or []
+
+
+def _mm_default_list_id():
+    from .integrations import mymeal_get, mymeal_post
+    lists = _mm_items(mymeal_get("/api/v1/shopping-lists"))
+    if lists:
+        return lists[0].get("id")
+    created = mymeal_post("/api/v1/shopping-lists", {"name": "Shopping List"})
+    return (created.get("data") or {}).get("id")
+
+
+def h_mymeal_list_recipes(gid, query=""):
+    from .integrations import mymeal_get
+    res = mymeal_get("/api/v1/recipes", {"q": query} if query else None)
+    if not res.get("reachable"):
+        return _mm_unavailable(res)
+    items = _mm_items(res)
+    if not items:
+        return "No matching recipes in myMeal." if query else "myMeal has no recipes yet."
+    return f"myMeal recipes ({len(items)}): " + ", ".join(r.get("name", "?") for r in items[:30])
+
+
+def h_mymeal_get_recipe(gid, name):
+    from .integrations import mymeal_get
+    res = mymeal_get("/api/v1/recipes", {"q": name})
+    if not res.get("reachable"):
+        return _mm_unavailable(res)
+    items = _mm_items(res)
+    if not items:
+        return f"No myMeal recipe matching '{name}'."
+    full = mymeal_get(f"/api/v1/recipes/{items[0].get('id')}")
+    if not full.get("reachable"):
+        return _mm_unavailable(full)
+    r = full.get("data") or {}
+    ings = [i.get("display", "") for i in r.get("ingredients", [])]
+    return (f"{r.get('name', name)} — serves {r.get('servings') or '?'}. "
+            f"Ingredients: {', '.join(x for x in ings if x) or 'none listed'}. "
+            f"{len(r.get('steps', []))} step(s).")
+
+
+def h_mymeal_whats_for_dinner(gid, date=""):
+    from datetime import date as _date
+
+    from .integrations import mymeal_get
+    day = (date or "").strip() or _date.today().isoformat()
+    res = mymeal_get("/api/v1/mealplans", {"start": day, "end": day})
+    if not res.get("reachable"):
+        return _mm_unavailable(res)
+    entries = _mm_items(res)
+    if not entries:
+        return f"Nothing planned in myMeal for {day}."
+    meals = "; ".join(
+        f"{e.get('mealType', 'meal')}: "
+        f"{(e.get('recipe') or {}).get('name') or e.get('title') or '?'}"
+        for e in entries)
+    return f"myMeal plan for {day}: {meals}"
+
+
+def h_mymeal_plan_meal(gid, recipe, date="", meal_type="dinner"):
+    from datetime import date as _date
+
+    from .integrations import mymeal_get, mymeal_post
+    day = (date or "").strip() or _date.today().isoformat()
+    body = {"date": day, "mealType": meal_type or "dinner"}
+    items = _mm_items(mymeal_get("/api/v1/recipes", {"q": recipe}))
+    if items:
+        body["recipeId"] = items[0].get("id")
+        title = items[0].get("name", recipe)
+    else:
+        body["title"] = recipe
+        title = recipe
+    res = mymeal_post("/api/v1/mealplans", body)
+    if not res.get("reachable"):
+        return _mm_unavailable(res), None
+    entry = res.get("data") or {}
+    undo = ({"op": "delete_mymeal_mealplan", "entryId": entry["id"]}
+            if entry.get("id") else None)
+    return f"Planned {title} for {body['mealType']} on {day} in myMeal.", undo
+
+
+def h_mymeal_add_recipe(gid, name, ingredients=None, steps=None):
+    from .integrations import mymeal_post
+    body = {"name": name}
+    if ingredients:
+        body["ingredients"] = [{"display": str(x)} for x in ingredients]
+    if steps:
+        body["steps"] = [{"text": str(x)} for x in steps]
+    res = mymeal_post("/api/v1/recipes", body)
+    if not res.get("reachable"):
+        return _mm_unavailable(res), None
+    r = res.get("data") or {}
+    undo = ({"op": "delete_mymeal_recipe", "recipeId": r["id"]}
+            if r.get("id") else None)
+    return f"Added recipe '{name}' to myMeal.", undo
+
+
+def h_mymeal_shopping_add(gid, item, quantity=None, unit=""):
+    from .integrations import mymeal_post
+    list_id = _mm_default_list_id()
+    if not list_id:
+        return "myMeal isn't reachable to add to its shopping list.", None
+    payload = {"display": item}
+    if quantity is not None:
+        payload["quantity"] = quantity
+    if unit:
+        payload["unit"] = unit
+    res = mymeal_post(f"/api/v1/shopping-lists/{list_id}/items", payload)
+    if not res.get("reachable"):
+        return _mm_unavailable(res), None
+    it = res.get("data") or {}
+    undo = ({"op": "delete_mymeal_shopping", "itemId": it["id"]}
+            if it.get("id") else None)
+    return f"Added '{item}' to myMeal's shopping list.", undo
+
+
+_MYMEAL_TOOLS = {
+    "mymeal_list_recipes": (
+        h_mymeal_list_recipes,
+        {"type": "object", "properties": {"query": {"type": "string"}}},
+        "List recipes in myMeal (optionally filtered by a keyword)."),
+    "mymeal_get_recipe": (
+        h_mymeal_get_recipe,
+        {"type": "object", "properties": {"name": {"type": "string"}},
+         "required": ["name"]},
+        "Get a myMeal recipe's ingredients and step count by name."),
+    "mymeal_whats_for_dinner": (
+        h_mymeal_whats_for_dinner,
+        {"type": "object", "properties": {
+            "date": {"type": "string", "description": "YYYY-MM-DD; default today"}}},
+        "Show what's planned to eat in myMeal on a date."),
+    "mymeal_plan_meal": (
+        h_mymeal_plan_meal,
+        {"type": "object", "properties": {
+            "recipe": {"type": "string"},
+            "date": {"type": "string", "description": "YYYY-MM-DD; default today"},
+            "meal_type": {"type": "string",
+                          "description": "breakfast/lunch/dinner/snack"}},
+         "required": ["recipe"]},
+        "Add a meal to the myMeal plan for a date (links a recipe by name if it exists)."),
+    "mymeal_add_recipe": (
+        h_mymeal_add_recipe,
+        {"type": "object", "properties": {
+            "name": {"type": "string"},
+            "ingredients": {"type": "array", "items": {"type": "string"}},
+            "steps": {"type": "array", "items": {"type": "string"}}},
+         "required": ["name"]},
+        "Create a new recipe in myMeal (name, optional ingredient lines and steps)."),
+    "mymeal_shopping_add": (
+        h_mymeal_shopping_add,
+        {"type": "object", "properties": {
+            "item": {"type": "string"}, "quantity": {"type": "number"},
+            "unit": {"type": "string"}},
+         "required": ["item"]},
+        "Add an item to myMeal's shopping list."),
+}
+_MYMEAL_MUTATING = {"mymeal_plan_meal", "mymeal_add_recipe", "mymeal_shopping_add"}
+_MYMEAL_READONLY_LABELS = {
+    "mymeal_list_recipes": "Listed myMeal recipes",
+    "mymeal_get_recipe": "Read a myMeal recipe",
+    "mymeal_whats_for_dinner": "Checked the myMeal plan",
+}
+
+
+def _active_tools():
+    """Base Edibl tools, plus the myMeal bridge only when myMeal is connected —
+    so standalone Edibl is byte-for-byte unchanged."""
+    if _mymeal_connected():
+        return {**TOOLS, **_MYMEAL_TOOLS}
+    return TOOLS
+
+
 def _run_tool(gid, name, args, actions):
-    fn = TOOLS.get(name)
+    fn = _active_tools().get(name)
     if not fn:
         return f"Unknown tool: {name}"
     try:
@@ -400,7 +613,11 @@ def _run_tool(gid, name, args, actions):
         text, undo = result
     else:
         text, undo = result, None
-    label = text if name in _MUTATING else _READONLY_LABELS.get(name, name.replace("_", " "))
+    if name in _MUTATING or name in _MYMEAL_MUTATING:
+        label = text
+    else:
+        label = (_READONLY_LABELS.get(name) or _MYMEAL_READONLY_LABELS.get(name)
+                 or name.replace("_", " "))
     actions.append({"tool": name, "label": (label or "")[:160],
                     "undoable": undo is not None, "undo": undo})
     return text
@@ -487,6 +704,18 @@ def apply_undo(gid, undo):
             db.session.commit()
             return "Undone — removed it from the shopping list."
         return "Nothing to undo — already gone."
+    # Cross-app undo (myMeal) — reverse by DELETE through the sibling client.
+    if op in ("delete_mymeal_mealplan", "delete_mymeal_recipe", "delete_mymeal_shopping"):
+        from .integrations import mymeal_delete
+        path = {
+            "delete_mymeal_mealplan": f"/api/v1/mealplans/{undo.get('entryId')}",
+            "delete_mymeal_recipe": f"/api/v1/recipes/{undo.get('recipeId')}",
+            "delete_mymeal_shopping": f"/api/v1/shopping-lists/items/{undo.get('itemId')}",
+        }[op]
+        res = mymeal_delete(path)
+        if res.get("reachable"):
+            return "Undone — reverted that change in myMeal."
+        return "Couldn't reach myMeal to undo that change."
     return "Nothing to undo."
 
 
@@ -856,14 +1085,14 @@ def extract_items(text=None, image=None, media_type="image/jpeg"):
 def _openai_tools():
     return [{"type": "function",
              "function": {"name": n, "description": d, "parameters": p}}
-            for n, (_fn, p, d) in TOOLS.items()]
+            for n, (_fn, p, d) in _active_tools().items()]
 
 
 def _loop_openai_style(gid, user_messages, cfg, actions):
     import httpx
 
     is_ollama = cfg["provider"] == "ollama"
-    convo = [{"role": "system", "content": SYSTEM_PROMPT}]
+    convo = [{"role": "system", "content": _system_prompt()}]
     convo += [{"role": m["role"], "content": m.get("content", "")}
               for m in user_messages if m.get("role") in ("user", "assistant")]
     headers = {"Content-Type": "application/json"}
@@ -903,7 +1132,7 @@ def _loop_openai_style(gid, user_messages, cfg, actions):
 # --------------------------------------------------------------------------- #
 def _anthropic_tools():
     return [{"name": n, "description": d, "input_schema": p}
-            for n, (_fn, p, d) in TOOLS.items()]
+            for n, (_fn, p, d) in _active_tools().items()]
 
 
 def _loop_anthropic(gid, user_messages, cfg, actions):
@@ -919,7 +1148,7 @@ def _loop_anthropic(gid, user_messages, cfg, actions):
     with httpx.Client(timeout=cfg["timeout"]) as client:
         for _ in range(cfg["max_steps"]):
             body = {"model": cfg["model"], "max_tokens": 1024,
-                    "system": SYSTEM_PROMPT, "tools": _anthropic_tools(),
+                    "system": _system_prompt(), "tools": _anthropic_tools(),
                     "messages": convo}
             r = client.post(url, headers=headers, json=body)
             r.raise_for_status()

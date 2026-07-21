@@ -145,6 +145,43 @@ Let Home Assistant's own assistant reach Edibl's tools:
    Conversation**. Now "what's expiring?" and "add milk to the shopping list"
    work by voice.
 
+## One assistant for the whole kitchen (Edibl + myMeal + HomeHoard)
+
+You can drive **all** your household apps from a single assistant, three ways —
+use whichever fits, or all of them. None of this is required: each app works on
+its own, and the cross-app parts only switch on when the apps are actually
+connected.
+
+**1. Edibl's chat manages myMeal too (when connected).** If a myMeal instance is
+connected (Settings → myMeal, or auto-discovered as a Home Assistant add-on),
+Edibl's chat gains myMeal tools — "what's for dinner Friday?", "plan spaghetti
+for Saturday", "add a carbonara recipe", "put basil on the myMeal list". Mutations
+show as undoable action chips. If myMeal isn't connected, these tools don't appear
+and Edibl behaves exactly as a standalone pantry.
+
+**2. myMeal's chat manages Edibl too (when connected).** Symmetrically, when Edibl
+is connected to myMeal, myMeal's chat can check and update your real stock — "do
+we have eggs?", "add 2 L milk to the pantry", "we ate the leftovers". (Undo those
+pantry changes from Edibl's own chat.)
+
+**3. Home Assistant Assist as the single voice/chat hub.** Register each app's MCP
+server with HA's **Model Context Protocol** (MCP Client) integration, then point
+one Assist pipeline (Ollama / OpenAI Conversation) at them. One conversation agent
+then holds every app's tools, by chat or by voice:
+
+| App | MCP SSE endpoint (internal add-on network) | Token option |
+|---|---|---|
+| Edibl | `http://<slug>-edibl:7767/sse` | `mcp_server_token` |
+| myMeal | `http://<slug>-mymeal:7851/sse` | `mcp_server_token` |
+| HomeHoard | `http://<slug>-homehoard:7766/sse` | `mcp_server_token` |
+
+Set each add-on's `mcp_server_token` (and `enable_mcp`/`mcp_enabled: true`), add
+one MCP Client entry per app with its URL + token, and your Assist pipeline can
+answer across all three: *"what's expiring, what can I cook, and where's the
+drill?"* The MCP ports stay on the internal Supervisor network (no host mapping),
+so the token is belt-and-suspenders unless you deliberately expose a port to the
+LAN.
+
 ## Messaging: alerts out, chat in
 
 Home Assistant's messaging can drive Edibl both directions:

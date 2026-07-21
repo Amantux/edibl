@@ -3,6 +3,15 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.5.0
+
+Milestone release rolling up everything since 1.0.0: product grouping, user-driven
+categories/units/freshness, full agent CRUD with surfaced + undoable chat actions,
+receipt/order extraction (text **and** photo), a Home Assistant To-do shopping
+list, notification blueprint, data export/import, mobile-friendly UI with an
+in-app Settings page, and configurable providers (incl. Ollama key + model
+polling, and targeting your HA conversation agent).
+
 ## 1.4.5
 
 - **Better Ollama support** — send Ollama's API key (for secured / cloud Ollama)

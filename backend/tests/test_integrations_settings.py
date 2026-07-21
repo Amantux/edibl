@@ -26,3 +26,46 @@ def test_mymeal_override_env(auth_client):
 def test_mymeal_test_when_unconfigured(auth_client):
     r = auth_client.post("/api/v1/integrations/mymeal/test").get_json()
     assert r["configured"] is False and r["reachable"] is False
+
+
+import httpx  # noqa: E402
+
+
+def test_mymeal_discover_without_supervisor(auth_client, monkeypatch):
+    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+    r = auth_client.post("/api/v1/integrations/mymeal/discover").get_json()
+    assert r["available"] is False and r["candidates"] == []
+
+
+def test_mymeal_discover_finds_addon(auth_client, monkeypatch):
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "faketoken")
+
+    class _R:
+        def __init__(self, d):
+            self._d = d
+        def raise_for_status(self):
+            pass
+        def json(self):
+            return self._d
+
+    class _Cli:
+        def __init__(self, *a, **k):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def get(self, url, params=None):
+            if url == "/addons":
+                return _R({"data": {"addons": [
+                    {"slug": "local_mymeal", "name": "myMeal", "state": "started"},
+                    {"slug": "local_grafana", "name": "Grafana", "state": "started"}]}})
+            if url == "/addons/local_mymeal/info":
+                return _R({"data": {"hostname": "local-mymeal", "ingress_port": 8000}})
+            return _R({"data": {}})
+
+    monkeypatch.setattr(httpx, "Client", lambda *a, **k: _Cli())
+    r = auth_client.post("/api/v1/integrations/mymeal/discover").get_json()
+    assert r["available"] is True and len(r["candidates"]) == 1
+    c = r["candidates"][0]
+    assert c["url"] == "http://local-mymeal:8000" and c["running"] is True

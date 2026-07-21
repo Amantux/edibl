@@ -53,6 +53,18 @@ async function pullMyMeal() {
     mmMsg.value = `✓ Pulled ${r.pulled} planned item(s) from myMeal.`
   } catch (e) { mmMsg.value = '⚠️ ' + (e.message || 'pull failed') } finally { mmBusy.value = false }
 }
+const mmCandidates = ref([])
+async function discoverMyMeal() {
+  mmBusy.value = true; mmMsg.value = 'Searching Home Assistant…'; mmCandidates.value = []
+  try {
+    const r = await api.post('/integrations/mymeal/discover')
+    mmCandidates.value = r.candidates || []
+    if (!r.available) mmMsg.value = 'Add-on discovery only works when Edibl runs as a Home Assistant add-on.'
+    else if (!mmCandidates.value.length) mmMsg.value = 'No myMeal add-on found — enter the URL manually.'
+    else mmMsg.value = `Found ${mmCandidates.value.length} add-on(s) — pick one below.`
+  } catch (e) { mmMsg.value = '⚠️ ' + (e.message || 'error') } finally { mmBusy.value = false }
+}
+function useCandidate(cnd) { mmForm.value.url = cnd.url; mmMsg.value = `Filled in “${cnd.name}” — Save, then Test.` }
 
 onMounted(() => { loadSettings(); loadMyMeal() })
 async function loadSettings() {
@@ -177,8 +189,15 @@ async function importFile(e) {
     <h2>myMeal</h2>
     <p class="muted" style="margin-top:0">Connect to <strong>myMeal</strong> (recipes &amp; meal plans). Edibl pulls the ingredients your planned meals need and reconciles them against what's actually in stock, so you see what to buy.</p>
     <div v-if="mm">
+      <div class="row wrap" style="margin-bottom:10px">
+        <button class="secondary sm" :disabled="mmBusy" @click="discoverMyMeal">🔍 Find myMeal add-on</button>
+      </div>
+      <div v-if="mmCandidates.length" class="row wrap" style="margin-bottom:10px;gap:6px">
+        <button v-for="cnd in mmCandidates" :key="cnd.slug" class="chip" style="cursor:pointer;border:none"
+          @click="useCandidate(cnd)">{{ cnd.name }} · {{ cnd.hostname }}:{{ cnd.port }}{{ cnd.running ? '' : ' (stopped)' }}</button>
+      </div>
       <label class="field"><span>myMeal URL</span>
-        <input v-model="mmForm.url" placeholder="http://mymeal:8000" /></label>
+        <input v-model="mmForm.url" placeholder="http://mymeal:8000 or an add-on hostname" /></label>
       <label class="field"><span>API token {{ mm.hasToken ? '— saved, leave blank to keep' : '(optional)' }}</span>
         <input v-model="mmForm.token" type="password" :placeholder="mm.hasToken ? '•••••••••• saved' : 'token'" /></label>
       <div class="row wrap" style="align-items:center;gap:10px">

@@ -70,6 +70,14 @@ def test_mymeal():
     return jsonify(integ.mymeal_test())
 
 
+@bp.post("/integrations/mymeal/discover")
+@login_required
+def discover_mymeal():
+    """Find myMeal running as a Home Assistant add-on (via the Supervisor) so it can
+    be connected on the internal network without knowing the hostname."""
+    return jsonify(integ.discover_mymeal())
+
+
 @bp.post("/integrations/mymeal/plan")
 @login_required
 def ingest_plan():

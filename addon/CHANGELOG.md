@@ -3,6 +3,13 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.5.2
+
+- **Connect to a myMeal add-on in one click** — the Settings → myMeal card can
+  now **find myMeal running as a Home Assistant add-on** (via the Supervisor) and
+  fill in its internal address, so Edibl reaches it on the add-on network without
+  you knowing the hostname or mapping a port.
+
 ## 1.5.1
 
 - **Auto-discovery** — when the add-on runs it registers with the Supervisor, so

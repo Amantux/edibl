@@ -6,6 +6,7 @@ rather than an exception. Edibl is the source of truth for inventory; these are
 for pulling recipes/plans (myMeal) or cross-querying non-food items (HomeHoard).
 """
 import logging
+import os
 
 from flask import current_app
 
@@ -66,6 +67,62 @@ def mymeal_public():
     env_url = current_app.config["MYMEAL_URL"]
     return {"url": url, "hasToken": bool(token),
             "source": "ui" if ov.get("mymeal_url") else ("addon" if env_url else "none")}
+
+
+def _supervisor_get(path):
+    """GET the Home Assistant Supervisor API (add-on has hassio_api). Returns the
+    parsed JSON, or None when not running under the Supervisor / on error."""
+    token = os.environ.get("SUPERVISOR_TOKEN")
+    if not token:
+        return None
+    import httpx
+    try:
+        with httpx.Client(base_url="http://supervisor",
+                          headers={"Authorization": f"Bearer {token}"}, timeout=_TIMEOUT) as c:
+            r = c.get(path)
+            r.raise_for_status()
+            return r.json()
+    except Exception as e:  # noqa: BLE001 — best-effort
+        _LOGGER.info("supervisor GET %s failed: %s", path, e)
+        return None
+
+
+def _internal_port(info):
+    """myMeal's internal port: prefer ingress_port, else the first mapped container
+    port, else a sane default."""
+    if info.get("ingress_port"):
+        return info["ingress_port"]
+    for container_port in (info.get("network") or {}):
+        try:
+            return int(str(container_port).split("/")[0])
+        except (ValueError, TypeError):
+            continue
+    return 8000
+
+
+def discover_mymeal():
+    """Find myMeal running as a Home Assistant add-on and return how to reach it on
+    the internal add-on network (hostname:port). Best-effort; requires the Supervisor."""
+    data = _supervisor_get("/addons")
+    if data is None:
+        return {"available": False, "candidates": []}
+    addons = (data.get("data") or {}).get("addons", [])
+    candidates = []
+    for a in addons:
+        name, slug = (a.get("name") or ""), (a.get("slug") or "")
+        if "meal" not in f"{name} {slug}".lower():
+            continue
+        info = (_supervisor_get(f"/addons/{slug}/info") or {}).get("data") or {}
+        host = info.get("hostname")
+        if not host:
+            continue
+        port = _internal_port(info)
+        candidates.append({
+            "slug": slug, "name": name or slug, "hostname": host, "port": port,
+            "url": f"http://{host}:{port}",
+            "running": a.get("state") == "started",
+        })
+    return {"available": True, "candidates": candidates}
 
 
 def mymeal_test():

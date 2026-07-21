@@ -49,9 +49,13 @@ the add-on, map its port `7746` and use `http://homeassistant.local:7746`. The A
 token is optional in single-tenant mode; if Edibl requires auth, create a
 long-lived token in Edibl (`POST /api/v1/tokens`, `edbl_…`) and paste it.
 
-**Connect to myMeal:** in Edibl's **Settings** page, the *myMeal* card takes your
-myMeal URL + token, has a **Test connection**, and a **Pull plan now** button —
-Edibl then reconciles myMeal's planned ingredients against your real stock.
+**Connect to myMeal:** in Edibl's **Settings** page, the *myMeal* card has a
+**🔍 Find myMeal add-on** button — if myMeal runs as a Home Assistant add-on,
+Edibl locates it via the Supervisor and fills in its internal address (reachable
+on the add-on network, no port mapping needed). Or enter the URL + token by hand.
+Then **Test connection** and **Pull plan now** — Edibl reconciles myMeal's planned
+ingredients against your real stock. (If myMeal needs auth, add its token; if it's
+single-tenant like Edibl, none is needed.)
 
 Example automation — nudge when things are going off:
 

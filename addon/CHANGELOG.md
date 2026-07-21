@@ -3,6 +3,12 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.5.14
+
+- **Who added it.** In a multi-user household (behind Home Assistant), each stock
+  lot now shows who added it (👤 name). Only shown for real HA users, so a
+  single-user or standalone install stays uncluttered.
+
 ## 1.5.13
 
 - **Multi-user behind Home Assistant.** Each HA user now gets their own Edibl

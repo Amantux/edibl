@@ -63,7 +63,7 @@ def _ensure_columns():
     wanted = {
         "users": {"ha_user_id": "VARCHAR(255)", "is_owner": "BOOLEAN DEFAULT 0"},
         "products": {"family": "VARCHAR(255) DEFAULT ''"},
-        "stock_lots": {"state": "VARCHAR(32) DEFAULT ''"},
+        "stock_lots": {"state": "VARCHAR(32) DEFAULT ''", "created_by": "VARCHAR(36)"},
         "consumption_events": {
             "outcome": "VARCHAR(16) DEFAULT 'eaten'",
             "days_kept": "INTEGER",

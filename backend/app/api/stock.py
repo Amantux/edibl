@@ -5,7 +5,7 @@ from flask import Blueprint, request, jsonify, abort
 from ..extensions import db
 from ..models import (StockLot, Product, Location, ConsumptionEvent, utcnow,
                       STORAGE_METHODS, OUTCOMES, LOSS_OUTCOMES)
-from ..auth import login_required, current_group
+from ..auth import login_required, current_group, current_user
 from ..schemas.serializers import stock_out, expiry_status
 from ..services.estimation import estimate_expiry, product_insights
 
@@ -91,6 +91,7 @@ def _build_lot(data, product, gid):
         expiry_estimated=estimated, cost=data.get("cost"), source=data.get("source", ""),
         lot_code=data.get("lotCode", ""), notes=data.get("notes", ""),
         attrs=data.get("attrs") or {}, group_id=gid,
+        created_by=current_user().id,
     )
 
 

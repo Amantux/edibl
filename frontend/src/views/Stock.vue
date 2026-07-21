@@ -272,7 +272,7 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
             <td><span class="ind">↳</span> {{ s.product?.name }}
               <span v-if="s.freshness" class="chip">{{ s.freshness }}</span>
               <span v-if="s.attrs?.cut" class="muted"> · {{ s.attrs.animal }} {{ s.attrs.cut }}</span></td>
-            <td class="muted">{{ s.location?.name || '—' }}<span v-if="s.source" class="muted"> · {{ s.source }}</span></td>
+            <td class="muted">{{ s.location?.name || '—' }}<span v-if="s.source" class="muted"> · {{ s.source }}</span><span v-if="s.addedBy" class="muted"> · 👤 {{ s.addedBy }}</span></td>
             <td>{{ s.quantity }} {{ s.unit }} <span class="chip">{{ s.storageMethod.replace('_',' ') }}</span></td>
             <td><span class="badge" :class="s.expiryStatus">{{ expLabel(s) }}</span>
               <span v-if="s.expiryEstimated" class="muted" style="font-size:.7rem"> est</span></td>
@@ -293,7 +293,7 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
         <tr v-for="s in flatItems" :key="s.id">
           <td><strong>{{ s.product?.name }}</strong>
             <span v-if="s.attrs?.cut" class="muted"> · {{ s.attrs.animal }} {{ s.attrs.cut }}</span></td>
-          <td class="muted">{{ s.location?.name || '—' }}</td>
+          <td class="muted">{{ s.location?.name || '—' }}<span v-if="s.addedBy" class="muted"> · 👤 {{ s.addedBy }}</span></td>
           <td>{{ s.quantity }} {{ s.unit }}</td>
           <td><span class="chip">{{ s.storageMethod.replace('_',' ') }}</span></td>
           <td><span class="badge" :class="s.expiryStatus">{{ expLabel(s) }}</span></td>

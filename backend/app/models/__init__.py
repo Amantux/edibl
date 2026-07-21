@@ -187,6 +187,9 @@ class StockLot(IDMixin, TimestampMixin, db.Model):
     # Specialty attributes: wine {vintage,varietal,region,producer,abv,volume_ml};
     # meat {cut,animal,weight_g,freeze_date,thaw_by,butcher_session}.
     attrs: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Who added this lot (for multi-user households); NULL for legacy/imported lots.
+    created_by: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
+    created_by_user = relationship("User")
     group_id: Mapped[str] = mapped_column(String(36), ForeignKey("groups.id"))
     group = relationship("Group", back_populates="stock")
     product = relationship("Product", back_populates="stock")

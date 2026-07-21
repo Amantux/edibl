@@ -107,3 +107,19 @@ def test_register_rejects_reserved_ha_email(client):
     r = client.post("/api/v1/users/register",
                     json={"email": "ha:alice", "password": "password"})
     assert r.status_code == 422
+
+
+def test_stock_attribution_only_for_ha_users(ic):
+    # HA user's lot is attributed…
+    ic.post("/api/v1/stock", json={"productName": "Eggs", "quantity": 6},
+            headers={"X-Remote-User-Id": "alice", "X-Remote-User-Display-Name": "Alice"},
+            environ_overrides=INGRESS)
+    ha_items = ic.get("/api/v1/stock", headers={"X-Remote-User-Id": "alice"},
+                      environ_overrides=INGRESS).get_json()["items"]
+    eggs = next(i for i in ha_items if (i.get("product") or {}).get("name") == "Eggs")
+    assert eggs["addedBy"] == "Alice"
+    # …a lot added by the shared local user (no HA identity) is NOT attributed.
+    ic.post("/api/v1/stock", json={"productName": "Salt"})  # no ingress peer
+    local_items = ic.get("/api/v1/stock").get_json()["items"]
+    salt = next(i for i in local_items if (i.get("product") or {}).get("name") == "Salt")
+    assert salt["addedBy"] is None

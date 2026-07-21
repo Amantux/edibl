@@ -68,6 +68,10 @@ def stock_out(s):
         "location": {"id": s.location.id, "name": s.location.name, "kind": s.location.kind}
         if s.location else None,
         "quantity": s.quantity, "unit": s.unit, "storageMethod": s.storage_method,
+        # Who added it — only surfaced for real HA users (multi-user households),
+        # so a single-user/standalone install isn't cluttered with "added by Local".
+        "addedBy": (s.created_by_user.name
+                    if (s.created_by_user and s.created_by_user.ha_user_id) else None),
         # "freshness" is the user-facing name; "state" kept for back-compat.
         "freshness": s.state or "", "state": s.state or "",
         "purchaseDate": iso(s.purchase_date), "openedDate": iso(s.opened_date),

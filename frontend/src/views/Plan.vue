@@ -1,14 +1,21 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { api } from '../api'
+import { ui } from '../ui'
 const plan = ref(null)
 const integ = ref(null)
 const raw = ref('')
 const busy = ref(false)
+const loading = ref(true)
+const loadError = ref('')
 
 async function load() {
-  plan.value = await api.get('/plan')
-  integ.value = await api.get('/integrations/status')
+  loading.value = true; loadError.value = ''
+  try {
+    const [p, i] = await Promise.all([api.get('/plan'), api.get('/integrations/status')])
+    plan.value = p; integ.value = i
+  } catch (e) { loadError.value = e.message || 'Could not load the meal plan.' }
+  finally { loading.value = false }
 }
 onMounted(load)
 
@@ -21,18 +28,35 @@ async function ingest() {
   })
   if (!items.length) return
   busy.value = true
-  try { await api.post('/integrations/mymeal/plan', { meal: 'Manual', items }); raw.value = ''; await load() }
-  finally { busy.value = false }
+  try {
+    await api.post('/integrations/mymeal/plan', { meal: 'Manual', items })
+    raw.value = ''; ui.success(`Added ${items.length} item(s) to the plan.`); await load()
+  } catch (e) { ui.error(e.message || 'Could not add to the plan.') } finally { busy.value = false }
 }
-async function order() { const r = await api.post('/plan/order'); alert(`Added ${r.added} item(s) to the shopping list.`); }
-async function clearPlan() { if (confirm('Clear the whole meal plan?')) { await api.post('/plan/clear'); await load() } }
-async function remove(id) { await api.del('/plan/' + id); await load() }
+async function order() {
+  try { const r = await api.post('/plan/order'); ui.success(`Added ${r.added} item(s) to the shopping list.`) }
+  catch (e) { ui.error(e.message || 'Could not order.') }
+}
+async function clearPlan() {
+  if (!confirm('Clear the whole meal plan?')) return
+  try { await api.post('/plan/clear'); ui.info('Meal plan cleared.'); await load() }
+  catch (e) { ui.error(e.message || 'Could not clear the plan.') }
+}
+async function remove(id) {
+  try { await api.del('/plan/' + id); await load() } catch (e) { ui.error(e.message || 'Could not remove.') }
+}
 </script>
 
 <template>
   <div class="page-head"><h1>🍽️ Meal plan</h1><div class="grow"></div>
     <button v-if="plan?.shortfall.length" @click="order">🛒 Order the {{ plan.shortfall.length }} missing</button>
     <button v-if="plan?.planned.length" class="secondary" @click="clearPlan">Clear</button></div>
+
+  <div v-if="loadError" class="card" style="border-color:var(--danger)">
+    <strong style="color:var(--danger)">Couldn't load the meal plan.</strong>
+    <span class="muted"> {{ loadError }}</span>
+    <button class="secondary sm" style="margin-left:8px" @click="load">Retry</button>
+  </div>
 
   <div class="card" style="background:var(--accent-soft);border-color:var(--accent)">
     <strong>How this works:</strong> <span class="muted">myMeal owns the recipes; Edibl owns the real inventory.
@@ -50,7 +74,8 @@ async function remove(id) { await api.del('/plan/' + id); await load() }
       <button :disabled="busy || !raw.trim()" @click="ingest">Add to plan</button></div>
   </div>
 
-  <div v-if="plan" class="card">
+  <div v-if="loading && !plan" class="card"><div class="muted">Loading your plan…</div></div>
+  <div v-else-if="plan" class="card">
     <div class="row"><h2 style="flex:1;margin:0">Do I have what I need?</h2>
       <span class="badge" :class="plan.canMakeAll ? 'fresh' : 'expiring'">
         {{ plan.canMakeAll ? 'All covered ✓' : plan.shortfall.length + ' short' }}</span></div>

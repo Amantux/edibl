@@ -1,12 +1,19 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { api } from '../api'
+import { ui } from '../ui'
 const items = ref([])
 const newItem = ref({ name: '', quantity: 1, unit: 'count' })
 const copied = ref(false)
 const exportText = ref('')
+const loading = ref(true)
 
-async function load() { items.value = await api.get('/shopping') }
+async function load() {
+  loading.value = true
+  try { items.value = await api.get('/shopping') }
+  catch (e) { ui.error(e.message || 'Could not load the shopping list.') }
+  finally { loading.value = false }
+}
 onMounted(load)
 
 // Friendly label for the source "tag" on a list item.
@@ -14,12 +21,24 @@ function tagLabel(src) { return src === 'low_stock' ? 'low' : src.replace('_', '
 
 async function add() {
   if (!newItem.value.name.trim()) return
-  await api.post('/shopping', { ...newItem.value })
-  newItem.value = { name: '', quantity: 1, unit: 'count' }; await load()
+  try {
+    await api.post('/shopping', { ...newItem.value })
+    newItem.value = { name: '', quantity: 1, unit: 'count' }; await load()
+  } catch (e) { ui.error(e.message || 'Could not add the item.') }
 }
-async function remove(i) { await api.del('/shopping/' + i.id); await load() }
-async function purchased(i) { await api.put('/shopping/' + i.id, { status: 'purchased' }); await load() }
-async function suggest() { await api.post('/shopping/suggest'); await load() }
+async function remove(i) {
+  try { await api.del('/shopping/' + i.id); await load() } catch (e) { ui.error(e.message || 'Could not remove.') }
+}
+async function purchased(i) {
+  try { await api.put('/shopping/' + i.id, { status: 'purchased' }); await load() }
+  catch (e) { ui.error(e.message || 'Could not update.') }
+}
+async function suggest() {
+  try {
+    const r = await api.post('/shopping/suggest'); await load()
+    ui.success(r.added ? `Added ${r.added} low-stock item(s).` : 'Nothing new to suggest.')
+  } catch (e) { ui.error(e.message || 'Could not suggest items.') }
+}
 
 async function copyForDelivery() {
   const res = await api.get('/shopping/export?format=json')
@@ -38,12 +57,15 @@ async function copyForDelivery() {
     <button @click="copyForDelivery">{{ copied ? '✓ Copied!' : '📋 Copy for delivery' }}</button></div>
 
   <div class="card">
-    <div class="row" style="margin-bottom:14px">
-      <input v-model="newItem.name" placeholder="Add an item…" style="flex:2" @keyup.enter="add" />
-      <input type="number" v-model.number="newItem.quantity" style="width:90px" />
-      <button @click="add">Add</button>
-    </div>
-    <table v-if="items.length">
+    <form class="row" style="margin-bottom:14px" @submit.prevent="add">
+      <label class="sr-only" for="sl-add">Add an item</label>
+      <input id="sl-add" v-model="newItem.name" placeholder="Add an item…" style="flex:2" />
+      <label class="sr-only" for="sl-qty">Quantity</label>
+      <input id="sl-qty" type="number" min="0" v-model.number="newItem.quantity" style="width:90px" />
+      <button type="submit">Add</button>
+    </form>
+    <div v-if="loading" class="muted">Loading…</div>
+    <table v-else-if="items.length">
       <tbody>
         <tr v-for="i in items" :key="i.id">
           <td><strong>{{ i.name }}</strong> <span class="muted">{{ i.quantity }} {{ i.unit }}</span>

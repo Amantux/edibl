@@ -3,6 +3,24 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.5.21
+
+A frontend consistency + accessibility pass across the whole app.
+
+- **Consistent, accessible feedback.** One global notification system replaces the
+  old per-page toasts and pop-up alerts; messages are announced to screen readers,
+  errors stay until dismissed, and Undo lives right in the toast.
+- **Every dialog is keyboard-friendly.** Modals now trap focus, close on **Esc**,
+  and return focus where you were — across add, bulk, use, reconcile, item actions,
+  and location screens.
+- **Nothing fails silently.** Pages that couldn't load used to show nothing; now
+  they surface a clear message (with retry) and every action reports success or a
+  specific, readable error.
+- **Snappier loads.** The Dashboard and Stock pages fetch their data in parallel
+  instead of one request after another.
+- **Polish.** A visible keyboard focus ring everywhere, a "skip to content" link,
+  a proper sign-in form, and a fixed Locations empty state.
+
 ## 1.5.20
 
 - **Starts ready to use.** Every household now begins with a **Kitchen** containing a

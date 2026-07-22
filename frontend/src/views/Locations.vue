@@ -2,8 +2,10 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api'
+import { ui } from '../ui'
 const router = useRouter()
 const locs = ref([])
+const loading = ref(true)
 const meta = ref({ locationKinds: [] })
 const show = ref(false)
 const form = ref({ name: '', kind: 'fridge', parentId: '' })
@@ -24,15 +26,30 @@ function expLabel(s) {
 function reconcileHere(l) { router.push(`/stock?reconcile=${l.id}`) }
 function addHere() { router.push('/stock?add=1') }
 
-async function load() { locs.value = await api.get('/locations') }
-onMounted(async () => { meta.value = await api.get('/meta'); await load() })
+async function load() {
+  loading.value = true
+  try { locs.value = await api.get('/locations') }
+  catch (e) { ui.error(e.message || 'Could not load locations.') }
+  finally { loading.value = false }
+}
+onMounted(async () => {
+  try { const [m] = await Promise.all([api.get('/meta'), load()]); meta.value = m }
+  catch (e) { /* load() surfaces its own error */ }
+})
 async function create() {
   if (!form.value.name.trim()) return
   const body = { ...form.value }; if (!body.parentId) delete body.parentId
-  await api.post('/locations', body); show.value = false
-  form.value = { name: '', kind: 'fridge', parentId: '' }; await load()
+  try {
+    await api.post('/locations', body); show.value = false
+    form.value = { name: '', kind: 'fridge', parentId: '' }
+    ui.success('Location added.'); await load()
+  } catch (e) { ui.error(e.message || 'Could not add the location.') }
 }
-async function del(l) { if (confirm(`Delete ${l.name} and its contents?`)) { await api.del('/locations/'+l.id); await load() } }
+async function del(l) {
+  if (!confirm(`Delete ${l.name} and its contents?`)) return
+  try { await api.del('/locations/' + l.id); ui.info(`Deleted ${l.name}.`); await load() }
+  catch (e) { ui.error(e.message || 'Could not delete.') }
+}
 </script>
 
 <template>
@@ -40,8 +57,10 @@ async function del(l) { if (confirm(`Delete ${l.name} and its contents?`)) { awa
     <div class="grow"></div><button @click="show = true">＋ New location</button></div>
   <p class="muted" style="margin-top:-8px">Sites, rooms, fridges, freezers, wine cellars — nest them however your homes are laid out.</p>
 
-  <div v-if="locs.length" class="card-grid">
-    <div v-for="l in locs" :key="l.id" class="card loc-card" style="margin:0" @click="openLoc(l)">
+  <div v-if="loading" class="muted" style="padding:12px">Loading locations…</div>
+  <div v-else-if="locs.length" class="card-grid">
+    <div v-for="l in locs" :key="l.id" class="card loc-card" style="margin:0"
+      role="button" tabindex="0" @click="openLoc(l)" @keydown.enter="openLoc(l)">
       <div class="row"><div style="font-size:1.6rem">{{ icons[l.kind] || '📍' }}</div>
         <div style="flex:1"><div style="font-weight:650">{{ l.name }}</div>
           <div class="muted" style="font-size:.8rem">{{ l.kind.replace('_',' ') }}<span v-if="l.parent"> · in {{ l.parent.name }}</span></div></div>
@@ -53,10 +72,12 @@ async function del(l) { if (confirm(`Delete ${l.name} and its contents?`)) { awa
         <span class="grow"></span><span class="muted" style="font-size:.72rem">view →</span></div>
     </div>
   </div>
+  <div v-else class="empty"><div class="ico">📍</div><p>No locations yet — add a fridge, freezer, or pantry to start.</p>
+    <button style="margin-top:10px" @click="show = true">Add your first location</button></div>
 
   <!-- Drill-in drawer: what's actually in this place -->
   <div v-if="drillLoc" class="drawer-backdrop" @click.self="drillLoc=null">
-    <div class="drawer">
+    <div class="drawer" v-trap="() => drillLoc=null" :aria-label="`Contents of ${drillLoc.name}`">
       <div class="page-head"><h1 style="font-size:1.2rem">{{ icons[drillLoc.kind] || '📍' }} {{ drillLoc.name }}</h1>
         <div class="grow"></div><button class="ghost sm" @click="drillLoc=null">✕</button></div>
       <div class="row wrap" style="gap:8px;margin-bottom:14px">
@@ -78,10 +99,9 @@ async function del(l) { if (confirm(`Delete ${l.name} and its contents?`)) { awa
         <button style="margin-top:8px" @click="addHere">Add something</button></div>
     </div>
   </div>
-  <div v-else class="empty"><div class="ico">📍</div><p>No locations yet — add a fridge, freezer, or pantry to start.</p></div>
 
   <div v-if="show" class="modal-backdrop" @click.self="show = false">
-    <div class="card modal">
+    <div class="card modal" v-trap="() => show = false" aria-label="New location">
       <h2>New location</h2>
       <label class="field"><span>Name</span><input v-model="form.name" placeholder="e.g. Kitchen Fridge" autofocus @keyup.enter="create" /></label>
       <label class="field"><span>Kind</span><select v-model="form.kind">

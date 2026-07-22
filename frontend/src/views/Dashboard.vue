@@ -2,20 +2,23 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api'
+import { ui } from '../ui'
 const router = useRouter()
 const d = ref(null)
 const runout = ref([])
 const lifecycle = ref([])
 const reorder = ref([])
-const toast = ref('')
 
 onMounted(async () => {
   try {
-    d.value = await api.get('/dashboard')
-    runout.value = (await api.get('/dashboard/runout')).items
-    lifecycle.value = (await api.get('/dashboard/lifecycle')).items
-    reorder.value = (await api.get('/shopping/reorder')).suggestions || []
-  } catch (e) { /* handled by api 401 redirect */ }
+    // Parallel — the landing page shouldn't wait on four round-trips in series.
+    const [dash, ro, lc, re] = await Promise.all([
+      api.get('/dashboard'), api.get('/dashboard/runout'),
+      api.get('/dashboard/lifecycle'), api.get('/shopping/reorder'),
+    ])
+    d.value = dash; runout.value = ro.items
+    lifecycle.value = lc.items; reorder.value = re.suggestions || []
+  } catch (e) { ui.error(e.message || 'Could not load the dashboard.') }
 })
 
 // One-line "here's what needs attention" summary under the title.
@@ -30,12 +33,13 @@ const attention = computed(() => {
 })
 
 function go(path) { router.push(path) }
-function flash(m) { toast.value = m; setTimeout(() => (toast.value = ''), 4000) }
 async function addToList(sug) {
-  await api.post('/shopping', { name: sug.name, quantity: sug.suggestedQuantity,
-    unit: sug.unit, source: 'low_stock', productId: sug.productId, note: 'Running low' })
-  reorder.value = reorder.value.filter((s) => s.productId !== sug.productId)
-  flash(`Added ${sug.name} to the shopping list (low).`)
+  try {
+    await api.post('/shopping', { name: sug.name, quantity: sug.suggestedQuantity,
+      unit: sug.unit, source: 'low_stock', productId: sug.productId, note: 'Running low' })
+    reorder.value = reorder.value.filter((s) => s.productId !== sug.productId)
+    ui.success(`Added ${sug.name} to the shopping list (low).`)
+  } catch (e) { ui.error(e.message || 'Could not add to list.') }
 }
 </script>
 
@@ -44,8 +48,6 @@ async function addToList(sug) {
     <span v-if="d" class="muted" style="font-size:.9rem">· {{ attention }}</span>
     <div class="grow"></div>
     <button @click="go('/stock?add=1')">＋ Add stock</button></div>
-
-  <div v-if="toast" class="toast">{{ toast }}</div>
 
   <div v-if="d">
     <!-- Needs attention: tap through to the matching stock view -->

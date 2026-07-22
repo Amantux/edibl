@@ -3,6 +3,7 @@ import { ref, computed, reactive, onMounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../api'
 import { askEdibl } from '../chat'
+import { ui } from '../ui'
 
 const groups = ref([])            // grouped view (all stock)
 const flatItems = ref([])         // freezer / wine views
@@ -21,7 +22,6 @@ const receiptText = ref('')
 const extracting = ref(false)
 const consumeFor = ref(null)
 const consumeQty = ref(null)
-const toast = ref('')
 const form = ref(blankForm())
 const bulk = ref(blankBulk())
 
@@ -166,13 +166,18 @@ function applyProductDefaults() {
 }
 
 onMounted(async () => {
-  locations.value = await api.get('/locations')
-  await loadSuggest()
-  await loadProducts()
-  try { assistantCfg.value = await api.get('/assistant/config') } catch (e) { /* optional */ }
-  await load()
-  loadReorder()
-  try { freshnessScale.value = (await api.get('/meta')).freshnessScale || [] } catch (e) { /* optional */ }
+  // Fetch independent resources in parallel instead of a long await chain.
+  try {
+    const [locs, cfg, meta] = await Promise.all([
+      api.get('/locations'),
+      api.get('/assistant/config').catch(() => ({ enabled: false })),
+      api.get('/meta').catch(() => ({})),
+    ])
+    locations.value = locs
+    assistantCfg.value = cfg
+    freshnessScale.value = meta.freshnessScale || []
+    await Promise.all([loadSuggest(), loadProducts(), load(), loadReorder()])
+  } catch (e) { ui.error(e.message || 'Could not load stock.') }
   if (route.query.add) openAdd()          // deep-link from the Dashboard "Add stock"
   if (route.query.focus) focus.value = String(route.query.focus)
   if (route.query.reconcile) openReconcile(String(route.query.reconcile))  // from Locations
@@ -219,7 +224,7 @@ async function extractPhoto(e) {
 }
 
 function toggle(key) { expanded[key] = !expanded[key] }
-function flash(msg) { if (!msg) return; toast.value = msg; setTimeout(() => (toast.value = ''), 6000) }
+function flash(msg) { if (msg) ui.toast(msg) }
 function expLabel(s) { return s.daysToExpiry == null ? '—' : (s.daysToExpiry < 0 ? 'expired' : s.daysToExpiry + 'd') }
 function nextExp(g) {
   if (!g.nextExpiry) return '—'
@@ -315,7 +320,7 @@ async function doConsume(outcome) {
   consumeFor.value = null
   if (res.insight) flash(res.insight)
   // Offer a one-tap Undo — reverses the exact ledger event, not a guess.
-  if (res.eventId) lastUndo.value = { eventId: res.eventId, label: `Used ${name}` }
+  if (res.eventId) ui.toast(`Used ${name}`, { action: { label: 'Undo', run: () => reverseEvent(res.eventId) } })
   await refresh()
 }
 // Open a package (orthogonal to using it) — turns a sealed carton into an open one.
@@ -387,21 +392,18 @@ async function commitReconcile() {
   try {
     const r = await api.post(`/locations/${reconcileFor.value.id}/reconcile`, { counts, missing, additions })
     reconcileFor.value = null
-    flash(r.summary || 'Reconciled.')
-    if (r.batchId) lastUndo.value = { eventId: null, batchId: r.batchId, label: r.summary }
+    if (r.batchId) ui.toast(r.summary || 'Reconciled.', { action: { label: 'Undo', run: () => reverseBatch(r.batchId) } })
+    else ui.success(r.summary || 'Reconciled.')
     await refresh(); loadReorder()
   } catch (e) { flash(e.message || 'Reconcile failed.') }
 }
-const lastUndo = ref(null)
-async function undoLast() {
-  if (!lastUndo.value) return
-  if (lastUndo.value.batchId) {
-    await api.post(`/inventory/reconciliations/${lastUndo.value.batchId}/reverse`)
-  } else {
-    await api.post(`/inventory/events/${lastUndo.value.eventId}/reverse`)
-  }
-  lastUndo.value = null
-  await refresh()
+async function reverseEvent(id) {
+  try { await api.post(`/inventory/events/${id}/reverse`); ui.success('Undone.'); await refresh() }
+  catch (e) { ui.error(e.message || 'Undo failed.') }
+}
+async function reverseBatch(id) {
+  try { await api.post(`/inventory/reconciliations/${id}/reverse`); ui.success('Reconciliation undone.'); await refresh() }
+  catch (e) { ui.error(e.message || 'Undo failed.') }
 }
 async function setFresh(s, freshness) { await api.put('/stock/' + s.id, { freshness }); await load() }
 async function del(s) {
@@ -419,11 +421,6 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
     <div class="grow"></div>
     <button class="secondary" @click="showBulk = true">⧉ Bulk add</button>
     <button @click="openAdd">＋ Add stock</button></div>
-
-  <div v-if="toast" class="toast">{{ toast }}</div>
-  <div v-if="lastUndo" class="toast">{{ lastUndo.label }}
-    · <button class="ghost sm" @click="undoLast">Undo</button>
-    · <button class="ghost sm" @click="lastUndo = null">Dismiss</button></div>
 
   <!-- Omnibox: search · add · ask -->
   <form class="omnibox" @submit.prevent="omniSubmit">
@@ -580,7 +577,7 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
 
   <!-- Action sheet: styled replacement for the old prompt() dialogs -->
   <div v-if="sheetFor" class="modal-backdrop" @click.self="closeSheet">
-    <div class="card modal sheet">
+    <div class="card modal sheet" v-trap="closeSheet" aria-label="Item actions">
       <h2 style="margin-bottom:4px">{{ sheetFor.product?.name }}</h2>
       <p class="muted" style="margin-top:0">{{ sheetFor.quantityKind==='exact' ? (sheetFor.quantity+' '+sheetFor.unit) : sheetFor.quantityText }}
         · {{ sheetFor.storageMethod.replace('_',' ') }}<span v-if="sheetFor.packageState==='opened'"> · open</span></p>
@@ -618,7 +615,7 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
 
   <!-- Reconcile a location: walk it, fix reality, commit as one reversible op -->
   <div v-if="reconcileFor" class="modal-backdrop" @click.self="reconcileFor=null">
-    <div class="card modal">
+    <div class="card modal" v-trap="() => reconcileFor=null" aria-label="Reconcile location">
       <h2>Reconcile — {{ reconcileFor.name }}</h2>
       <p class="muted" style="margin-top:0">Set what's actually there, mark anything missing, and add what you found. Committed as one undoable step.</p>
       <table v-if="reconcileRows.length">
@@ -655,7 +652,7 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
 
   <!-- Add stock -->
   <div v-if="showAdd" class="modal-backdrop" @click.self="showAdd = false; stopScan()">
-    <div class="card modal">
+    <div class="card modal" v-trap="() => { showAdd = false; stopScan() }" aria-label="Add stock">
       <h2>Add stock</h2>
       <label class="field"><span>What is it?</span>
         <input ref="nameInput" v-model="form.productName" list="dl-names" placeholder="e.g. Organic milk"
@@ -714,7 +711,7 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
 
   <!-- Bulk add -->
   <div v-if="showBulk" class="modal-backdrop" @click.self="showBulk = false">
-    <div class="card modal">
+    <div class="card modal" v-trap="() => showBulk = false" aria-label="Bulk add">
       <h2>⧉ Bulk add</h2>
       <p class="muted" style="margin-top:0">Many items at once — a grocery haul, a farm box, or a butchered animal. Shared settings apply to every row.</p>
 
@@ -764,7 +761,7 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
 
   <!-- Consume / outcome -->
   <div v-if="consumeFor" class="modal-backdrop" @click.self="consumeFor = null">
-    <div class="card modal" style="max-width:420px">
+    <div class="card modal" style="max-width:420px" v-trap="() => consumeFor = null" aria-label="Use item">
       <h2>{{ consumeFor.product?.name }}</h2>
       <p class="muted" style="margin-top:0">How did it go? This teaches Edibl how long things really last for you.</p>
       <label class="field" style="width:140px"><span>Quantity</span>

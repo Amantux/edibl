@@ -90,7 +90,7 @@ async function remove(id) {
           <td><span class="badge" :class="it.have ? 'fresh' : 'expired'">
             {{ it.have ? 'have it' : 'short ' + it.shortfall }}</span></td>
           <td style="text-align:right"><button v-if="plan.planned[idx]" class="ghost sm"
-            @click="remove(plan.planned[idx].id)">✕</button></td>
+            :aria-label="`Remove ${it.name} from plan`" @click="remove(plan.planned[idx].id)">✕</button></td>
         </tr>
       </tbody>
     </table>

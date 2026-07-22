@@ -73,7 +73,7 @@ async function copyForDelivery() {
             <span v-if="i.note" class="muted" style="font-size:.78rem"> · {{ i.note }}</span></td>
           <td style="text-align:right;white-space:nowrap">
             <button class="secondary sm" @click="purchased(i)">Got it</button>
-            <button class="ghost sm" @click="remove(i)">✕</button></td>
+            <button class="ghost sm" :aria-label="`Remove ${i.name} from list`" @click="remove(i)">✕</button></td>
         </tr>
       </tbody>
     </table>

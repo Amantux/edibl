@@ -566,7 +566,7 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
           <td><span class="badge" :class="s.expiryStatus">{{ expLabel(s) }}</span></td>
           <td style="text-align:right;white-space:nowrap">
             <button class="secondary sm" @click="openConsume(s)">Use</button>
-            <button class="ghost sm" @click="del(s)">✕</button></td>
+            <button class="ghost sm" :aria-label="`Remove ${s.product?.name}`" @click="del(s)">✕</button></td>
         </tr>
       </tbody>
     </table>

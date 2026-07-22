@@ -64,7 +64,7 @@ async function del(l) {
       <div class="row"><div style="font-size:1.6rem">{{ icons[l.kind] || '📍' }}</div>
         <div style="flex:1"><div style="font-weight:650">{{ l.name }}</div>
           <div class="muted" style="font-size:.8rem">{{ l.kind.replace('_',' ') }}<span v-if="l.parent"> · in {{ l.parent.name }}</span></div></div>
-        <button class="ghost sm" @click.stop="del(l)">✕</button></div>
+        <button class="ghost sm" :aria-label="`Delete ${l.name}`" @click.stop="del(l)">✕</button></div>
       <div class="row" style="margin-top:10px;gap:6px">
         <span class="badge">{{ l.stockCount }} items</span>
         <span v-if="l.childCount" class="badge">{{ l.childCount }} sub</span>
@@ -79,7 +79,7 @@ async function del(l) {
   <div v-if="drillLoc" class="drawer-backdrop" @click.self="drillLoc=null">
     <div class="drawer" v-trap="() => drillLoc=null" :aria-label="`Contents of ${drillLoc.name}`">
       <div class="page-head"><h1 style="font-size:1.2rem">{{ icons[drillLoc.kind] || '📍' }} {{ drillLoc.name }}</h1>
-        <div class="grow"></div><button class="ghost sm" @click="drillLoc=null">✕</button></div>
+        <div class="grow"></div><button class="ghost sm" aria-label="Close" @click="drillLoc=null">✕</button></div>
       <div class="row wrap" style="gap:8px;margin-bottom:14px">
         <button class="secondary sm" @click="addHere">＋ Add here</button>
         <button class="secondary sm" @click="reconcileHere(drillLoc)">📋 Reconcile this place</button>

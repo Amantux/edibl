@@ -249,6 +249,9 @@ async function splitLot(s) {
   const res = await api.post(`/stock/${s.id}/split`, { quantity: Number(v) })
   if (res?.error) flash(res.error); else { flash('Split off.'); await refresh() }
 }
+// Freeze / thaw — a preservation change that recomputes the effective shelf life.
+async function freezeLot(s) { await api.post(`/stock/${s.id}/freeze`); flash('Frozen.'); await refresh() }
+async function thawLot(s) { await api.post(`/stock/${s.id}/thaw`); flash('Thawed.'); await refresh() }
 const lastUndo = ref(null)
 async function undoLast() {
   if (!lastUndo.value) return
@@ -322,6 +325,8 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
               <button class="ghost sm" @click="correctAmount(s)" title="Correct amount">Correct</button>
               <button class="ghost sm" @click="splitLot(s)" title="Split off a portion">Split</button>
               <button class="ghost sm" @click="moveLot(s)" title="Move to another location">Move</button>
+              <button v-if="s.storageMethod !== 'frozen'" class="ghost sm" @click="freezeLot(s)" title="Freeze">Freeze</button>
+              <button v-else class="ghost sm" @click="thawLot(s)" title="Thaw">Thaw</button>
               <button class="ghost sm" @click="del(s)">✕</button></td>
           </tr>
         </template>

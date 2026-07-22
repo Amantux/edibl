@@ -3,6 +3,31 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.5.16
+
+The kitchen-stock redesign, phases 2–5 — everyday actions, transformations, and
+smarter planning, all on the one shared, fully-reversible engine.
+
+- **Everyday actions, done right.** Correct an amount to what you actually measured,
+  move a lot to another location, split a portion off, or merge two of the same
+  thing together — each is a single tap, and each can be undone. "Use the milk" now
+  draws from the open carton first, then the soonest-to-expire, and spills across
+  cartons instead of stopping at one.
+- **Stock takes.** A new reconciliation flow lets you walk a location, correct what's
+  there, mark what's missing, and add what you found — committed (and undone) as one
+  operation. More honest than expecting everyone to log every teaspoon.
+- **Kitchens transform, not just consume.** Freeze and thaw (with the shelf-life
+  estimate adjusting automatically), and turn stock into other stock — "made stock
+  from the carcass", "cooked 2 lb chicken into 4 servings" — keeping the lineage.
+  Items bought together now stay linked as one purchase even when split up.
+- **Smarter, safer suggestions.** Edibl now understands that "scallions" and "green
+  onion" are the same thing, keeps dairy and almond milk apart, and never offers a
+  dishwasher tablet for a recipe. Set a minimum/target per item and it suggests what
+  to reorder — counting what you've reserved for planned meals, and honest about
+  anything it's unsure of.
+- Every one of these works from the app, the chat assistant, and the MCP tools
+  identically, and writes to the same audit ledger.
+
 ## 1.5.15
 
 - **Open a package without using it up.** Stock now tracks whether a package is

@@ -1,9 +1,9 @@
 from flask import Blueprint, request, jsonify, abort, Response
 
 from ..extensions import db
-from ..models import ShoppingItem, Product, StockLot, ConsumptionEvent
+from ..models import ShoppingItem, Product, StockLot, ConsumptionEvent, Reservation
 from ..auth import login_required, current_group
-from ..schemas.serializers import shopping_out
+from ..schemas.serializers import shopping_out, reservation_out
 from ..services.shopping import format_for_delivery
 
 bp = Blueprint("shopping", __name__)
@@ -107,3 +107,98 @@ def suggest():
         added.append(i)
     db.session.commit()
     return jsonify({"added": len(added), "items": [shopping_out(i) for i in added]})
+
+
+# --------------------------------------------------------------------------- #
+# Reservations — earmark stock for a planned meal (not free for reorder)
+# --------------------------------------------------------------------------- #
+def _reserved_by_product(gid):
+    out = {}
+    for r in db.session.query(Reservation).filter_by(group_id=gid).all():
+        if r.product_id:
+            out[r.product_id] = out.get(r.product_id, 0) + (r.quantity or 0)
+    return out
+
+
+@bp.get("/reservations")
+@login_required
+def list_reservations():
+    rs = (db.session.query(Reservation).filter_by(group_id=current_group().id)
+          .order_by(Reservation.created_at.asc()).all())
+    return jsonify({"items": [reservation_out(r) for r in rs], "total": len(rs)})
+
+
+@bp.post("/reservations")
+@login_required
+def add_reservation():
+    data = request.get_json(force=True) or {}
+    name = (data.get("name") or "").strip()
+    pid = data.get("productId")
+    if not name and not pid:
+        return jsonify({"error": "productId or name required"}), 422
+    if pid:
+        p = db.session.get(Product, pid)
+        if not p or p.group_id != current_group().id:
+            return jsonify({"error": "unknown product"}), 404
+        name = name or p.name
+    r = Reservation(product_id=pid, concept_id=data.get("conceptId"), name=name,
+                    quantity=float(data.get("quantity") or 1),
+                    unit=data.get("unit") or "count", meal=data.get("meal", ""),
+                    source_ref=data.get("sourceRef", ""), group_id=current_group().id)
+    db.session.add(r)
+    db.session.commit()
+    return jsonify(reservation_out(r)), 201
+
+
+@bp.delete("/reservations/<res_id>")
+@login_required
+def delete_reservation(res_id):
+    r = db.session.get(Reservation, res_id)
+    if not r or r.group_id != current_group().id:
+        abort(404)
+    db.session.delete(r)
+    db.session.commit()
+    return "", 204
+
+
+# --------------------------------------------------------------------------- #
+# Reorder suggestions — policy + reservation aware (uncertainty honest)
+# --------------------------------------------------------------------------- #
+@bp.get("/shopping/reorder")
+@login_required
+def reorder():
+    """Suggest what to buy from per-product replenishment policies, accounting for
+    reserved stock and unknown/estimated amounts. Does NOT auto-add — returns the
+    ranked suggestions so the user (or a follow-up POST /shopping) decides."""
+    gid = current_group().id
+    reserved = _reserved_by_product(gid)
+    suggestions = []
+    products = (db.session.query(Product).filter_by(group_id=gid).all())
+    for p in products:
+        if p.do_not_suggest:
+            continue
+        threshold = p.reorder_threshold if p.reorder_threshold is not None else p.min_quantity
+        if threshold is None and not p.staple:
+            continue  # no policy → not a reorder candidate
+        lots = [s for s in p.stock if not s.finished]
+        # Only exact/estimated amounts count toward the numeric on-hand; presence/
+        # unknown lots mean we can't be sure, so we flag rather than assume a number.
+        numeric = [s for s in lots if (s.quantity_kind or "exact")
+                   in ("exact", "estimated", "approximate")]
+        uncertain = len(lots) - len(numeric)
+        on_hand = round(sum(s.quantity or 0 for s in numeric), 4)
+        available = round(on_hand - reserved.get(p.id, 0), 4)
+        thr = threshold if threshold is not None else 1
+        if available > thr:
+            continue
+        target = p.target_quantity if p.target_quantity is not None else (thr or 1)
+        need = round(max(target - available, thr - available, 1), 4)
+        suggestions.append({
+            "productId": p.id, "name": p.name, "unit": p.default_unit,
+            "onHand": on_hand, "reserved": reserved.get(p.id, 0),
+            "available": available, "threshold": thr, "suggestedQuantity": need,
+            "staple": bool(p.staple),
+            "uncertain": uncertain > 0,  # some stock is presence/unknown
+        })
+    suggestions.sort(key=lambda s: (s["available"], s["name"].lower()))
+    return jsonify({"suggestions": suggestions, "count": len(suggestions)})

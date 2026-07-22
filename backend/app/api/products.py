@@ -1,10 +1,10 @@
 from flask import Blueprint, request, jsonify, abort
 
 from ..extensions import db
-from ..models import (Product, StockLot, CATEGORIES, UNITS, FRESHNESS_LEVELS,
-                      STORAGE_METHODS)
+from ..models import (Product, StockLot, FoodConcept, ITEM_TYPES, CATEGORIES, UNITS,
+                      FRESHNESS_LEVELS, STORAGE_METHODS)
 from ..auth import login_required, current_group
-from ..schemas.serializers import product_out
+from ..schemas.serializers import product_out, concept_out
 from ..services.estimation import product_insights
 
 bp = Blueprint("products", __name__)
@@ -33,6 +33,19 @@ def _apply(p, data):
         from ..models import TRACKING_MODES
         tm = (data.get("trackingMode") or "").strip().lower()
         p.tracking_mode = tm if tm in TRACKING_MODES else ""
+    if "itemType" in data:
+        it = (data.get("itemType") or "food").strip().lower()
+        p.item_type = it if it in ITEM_TYPES else "food"
+    if "conceptId" in data:
+        p.concept_id = data["conceptId"] or None
+    for k, attr in {"minQuantity": "min_quantity", "targetQuantity": "target_quantity",
+                    "reorderThreshold": "reorder_threshold"}.items():
+        if k in data:
+            setattr(p, attr, data[k] if data[k] is not None else None)
+    if "staple" in data:
+        p.staple = bool(data["staple"])
+    if "doNotSuggest" in data:
+        p.do_not_suggest = bool(data["doNotSuggest"])
     if "shelfLifeDays" in data:
         p.shelf_life_days = data["shelfLifeDays"] or None
 
@@ -131,3 +144,60 @@ def delete(product_id):
     db.session.delete(_get(product_id))
     db.session.commit()
     return "", 204
+
+
+# --------------------------------------------------------------------------- #
+# Food concepts — canonical ingredient identity (aliases, item_type, allergens)
+# --------------------------------------------------------------------------- #
+def _get_concept(concept_id):
+    c = db.session.get(FoodConcept, concept_id)
+    if not c or c.group_id != current_group().id:
+        abort(404)
+    return c
+
+
+def _apply_concept(c, data):
+    if data.get("canonicalName"):
+        c.canonical_name = str(data["canonicalName"]).strip()
+    if "aliases" in data and isinstance(data["aliases"], list):
+        c.aliases = [str(a).strip() for a in data["aliases"] if str(a).strip()]
+    if "allergens" in data and isinstance(data["allergens"], list):
+        c.allergens = [str(a).strip().lower() for a in data["allergens"] if str(a).strip()]
+    if "classification" in data:
+        c.classification = str(data.get("classification") or "").strip()
+    if "substitutionGroup" in data:
+        c.substitution_group = str(data.get("substitutionGroup") or "").strip()
+    if "itemType" in data:
+        it = (data.get("itemType") or "food").strip().lower()
+        c.item_type = it if it in ITEM_TYPES else "food"
+
+
+@bp.get("/concepts")
+@login_required
+def list_concepts():
+    concepts = (db.session.query(FoodConcept)
+                .filter_by(group_id=current_group().id)
+                .order_by(FoodConcept.canonical_name).all())
+    return jsonify({"items": [concept_out(c) for c in concepts], "total": len(concepts)})
+
+
+@bp.post("/concepts")
+@login_required
+def create_concept():
+    data = request.get_json(force=True) or {}
+    if not (data.get("canonicalName") or "").strip():
+        return jsonify({"error": "canonicalName required"}), 422
+    c = FoodConcept(canonical_name="", group_id=current_group().id)
+    _apply_concept(c, data)
+    db.session.add(c)
+    db.session.commit()
+    return jsonify(concept_out(c)), 201
+
+
+@bp.put("/concepts/<concept_id>")
+@login_required
+def update_concept(concept_id):
+    c = _get_concept(concept_id)
+    _apply_concept(c, request.get_json(force=True) or {})
+    db.session.commit()
+    return jsonify(concept_out(c))

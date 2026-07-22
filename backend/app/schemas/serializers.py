@@ -82,8 +82,36 @@ def product_out(p):
         # Explicit tracking mode (may be "") plus the effective one the UI should use.
         "trackingMode": getattr(p, "tracking_mode", "") or "",
         "effectiveTrackingMode": effective_tracking_mode(p),
+        "itemType": getattr(p, "item_type", "food") or "food",
+        "conceptId": getattr(p, "concept_id", None),
+        "concept": {"id": p.concept.id, "canonicalName": p.concept.canonical_name}
+        if getattr(p, "concept", None) else None,
+        # Replenishment policy (all optional).
+        "policy": {
+            "minQuantity": p.min_quantity, "targetQuantity": p.target_quantity,
+            "reorderThreshold": p.reorder_threshold,
+            "staple": bool(p.staple), "doNotSuggest": bool(p.do_not_suggest),
+        },
         "shelfLifeDays": p.shelf_life_days, "notes": p.notes,
         "createdAt": iso(p.created_at),
+    }
+
+
+def concept_out(c):
+    return {
+        "id": c.id, "canonicalName": c.canonical_name, "aliases": c.aliases or [],
+        "classification": c.classification, "itemType": c.item_type,
+        "allergens": c.allergens or [], "substitutionGroup": c.substitution_group,
+        "createdAt": iso(c.created_at),
+    }
+
+
+def reservation_out(r):
+    return {
+        "id": r.id, "productId": r.product_id, "conceptId": r.concept_id,
+        "name": r.name, "quantity": r.quantity, "unit": r.unit, "meal": r.meal,
+        "sourceRef": r.source_ref, "neededBy": iso(r.needed_by),
+        "createdAt": iso(r.created_at),
     }
 
 

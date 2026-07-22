@@ -51,6 +51,8 @@ class Group(IDMixin, TimestampMixin, db.Model):
     settings = relationship("Setting", back_populates="group", cascade="all, delete-orphan")
     events = relationship("InventoryEvent", back_populates="group", cascade="all, delete-orphan")
     acquisition_lots = relationship("AcquisitionLot", cascade="all, delete-orphan")
+    concepts = relationship("FoodConcept", cascade="all, delete-orphan")
+    reservations = relationship("Reservation", cascade="all, delete-orphan")
 
 
 class User(IDMixin, TimestampMixin, db.Model):
@@ -129,11 +131,46 @@ UNITS = ("count", "g", "kg", "oz", "lb", "ml", "l", "pack", "bottle")
 TRACKING_MODES = ("presence", "level", "count", "measure", "package", "portions")
 
 
+# What kind of thing this is — gates recipe matching + food-expiry logic. Non-food
+# consumables (foil, bags, dishwasher tablets) never match recipes.
+ITEM_TYPES = ("food", "beverage", "consumable")
+
+
+class FoodConcept(IDMixin, TimestampMixin, db.Model):
+    """Canonical ingredient identity — the broad 'what' a recipe cares about ('milk',
+    'green onion', 'chicken breast'), separate from a purchasable Product. Anchors
+    recipe matching, aliases/regional names, substitutions, and allergen/dietary
+    metadata. See docs/stock-redesign/DESIGN.md §4.4."""
+    __tablename__ = "food_concepts"
+    canonical_name: Mapped[str] = mapped_column(String(255), index=True)
+    aliases: Mapped[list] = mapped_column(JSON, default=list)          # ["scallion","green onion"]
+    classification: Mapped[str] = mapped_column(String(64), default="")  # vegetable/dairy/…
+    item_type: Mapped[str] = mapped_column(String(16), default="food")   # ITEM_TYPES
+    allergens: Mapped[list] = mapped_column(JSON, default=list)         # ["dairy","nuts"]
+    substitution_group: Mapped[str] = mapped_column(String(64), default="")
+    default_tracking: Mapped[str] = mapped_column(String(16), default="")
+    group_id: Mapped[str] = mapped_column(String(36), ForeignKey("groups.id"), index=True)
+    products = relationship("Product", back_populates="concept")
+
+
 class Product(IDMixin, TimestampMixin, db.Model):
     __tablename__ = "products"
     name: Mapped[str] = mapped_column(String(255))
     brand: Mapped[str] = mapped_column(String(255), default="")
     category: Mapped[str] = mapped_column(String(64), default="other")
+    # Canonical identity (nullable; derived from `family` at migration) + what kind
+    # of thing this is (non-food is excluded from recipe/expiry logic).
+    concept_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("food_concepts.id"), nullable=True, index=True)
+    concept = relationship("FoodConcept", back_populates="products")
+    item_type: Mapped[str] = mapped_column(String(16), default="food")
+    # Replenishment policy (all optional): desired minimum / target on hand, the
+    # threshold that triggers a reorder suggestion, and staple / do-not-suggest flags.
+    min_quantity: Mapped[float] = mapped_column(Float, nullable=True)
+    target_quantity: Mapped[float] = mapped_column(Float, nullable=True)
+    reorder_threshold: Mapped[float] = mapped_column(Float, nullable=True)
+    staple: Mapped[bool] = mapped_column(Boolean, default=False)
+    do_not_suggest: Mapped[bool] = mapped_column(Boolean, default=False)
     # Free-text display grouping, e.g. "Milk" for both Organic milk and Filtered
     # milk. Distinct products (own shelf-life + lots) that read as one group.
     family: Mapped[str] = mapped_column(String(255), default="", index=True)
@@ -283,6 +320,21 @@ class ShoppingItem(IDMixin, TimestampMixin, db.Model):
     group = relationship("Group", back_populates="shopping")
 
 
+class Reservation(IDMixin, TimestampMixin, db.Model):
+    """Stock earmarked for a planned meal, so it isn't double-allocated or suggested
+    for reorder as if free. Points at a product (or just a name/concept) + amount."""
+    __tablename__ = "reservations"
+    product_id: Mapped[str] = mapped_column(String(36), ForeignKey("products.id"), nullable=True)
+    concept_id: Mapped[str] = mapped_column(String(36), ForeignKey("food_concepts.id"), nullable=True)
+    name: Mapped[str] = mapped_column(String(255), default="")
+    quantity: Mapped[float] = mapped_column(Float, default=1)
+    unit: Mapped[str] = mapped_column(String(32), default="count")
+    meal: Mapped[str] = mapped_column(String(255), default="")
+    source_ref: Mapped[str] = mapped_column(String(128), default="")
+    needed_by: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    group_id: Mapped[str] = mapped_column(String(36), ForeignKey("groups.id"), index=True)
+
+
 class PlannedItem(IDMixin, TimestampMixin, db.Model):
     """A required ingredient propagated from myMeal (a recipe / meal plan). Edibl
     matches these against on-hand stock to predict shortfalls and what to order."""
@@ -375,5 +427,5 @@ __all__ = [
     "StockLot", "STORAGE_METHODS", "FRESHNESS_LEVELS", "LIFECYCLE_STATES", "OUTCOMES",
     "GOOD_OUTCOMES", "LOSS_OUTCOMES", "PACKAGE_STATES", "QUANTITY_KINDS", "EVENT_TYPES",
     "ShelfLifeProfile", "ShoppingItem", "ConsumptionEvent", "PlannedItem", "Setting",
-    "InventoryEvent", "AcquisitionLot",
+    "InventoryEvent", "AcquisitionLot", "FoodConcept", "ITEM_TYPES", "Reservation",
 ]

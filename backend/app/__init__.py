@@ -63,7 +63,13 @@ def _ensure_columns():
     wanted = {
         "users": {"ha_user_id": "VARCHAR(255)", "is_owner": "BOOLEAN DEFAULT 0"},
         "products": {"family": "VARCHAR(255) DEFAULT ''",
-                     "tracking_mode": "VARCHAR(16) DEFAULT ''"},
+                     "tracking_mode": "VARCHAR(16) DEFAULT ''",
+                     "concept_id": "VARCHAR(36)",
+                     "item_type": "VARCHAR(16) DEFAULT 'food'",
+                     "min_quantity": "FLOAT", "target_quantity": "FLOAT",
+                     "reorder_threshold": "FLOAT",
+                     "staple": "BOOLEAN DEFAULT 0",
+                     "do_not_suggest": "BOOLEAN DEFAULT 0"},
         "stock_lots": {
             "state": "VARCHAR(32) DEFAULT ''", "created_by": "VARCHAR(36)",
             "package_state": "VARCHAR(24) DEFAULT 'sealed'",
@@ -117,6 +123,42 @@ def _ensure_columns():
         _backfill_inventory_events()
     if "stock_lots" in existing_tables and "acquisition_lots" in existing_tables:
         _backfill_acquisition_lots()
+    if "products" in existing_tables and "food_concepts" in existing_tables:
+        _backfill_food_concepts()
+
+
+def _backfill_food_concepts():
+    """Turn the free-text `family` grouping into canonical FoodConcepts, one per
+    distinct family (else per product name), and link products. Preserves the
+    original label as the concept's canonical name. Once-per-product, self-quiescing:
+    products that already have a concept are skipped."""
+    from .models import Product, FoodConcept
+    unlinked = (db.session.query(Product)
+                .filter(Product.concept_id.is_(None)).all())
+    if not unlinked:
+        return
+    # Reuse an existing concept for the same label within a household.
+    existing = {}
+    for c in db.session.query(FoodConcept).all():
+        existing[(c.group_id, (c.canonical_name or "").lower())] = c
+    made = 0
+    for p in unlinked:
+        label = (p.family or p.name or "").strip()
+        if not label:
+            continue
+        key = (p.group_id, label.lower())
+        concept = existing.get(key)
+        if concept is None:
+            concept = FoodConcept(canonical_name=label, item_type=p.item_type or "food",
+                                  group_id=p.group_id)
+            db.session.add(concept)
+            db.session.flush()
+            existing[key] = concept
+            made += 1
+        p.concept_id = concept.id
+    db.session.commit()
+    if made:
+        _LOGGER.info("stock redesign: created %d food concepts", made)
 
 
 def _backfill_acquisition_lots():

@@ -1,8 +1,18 @@
 # Edibl Kitchen Stock Model — Redesign
 
-> Status: **proposed** (awaiting sign-off on the model + first vertical slice).
-> Governs the evolution of Edibl's stock domain from a single mutable `StockLot`
-> into a coherent, event-logged kitchen model. Companion ADRs live in `adr/`.
+> Status: **in progress — Phases 1–5 implemented** (Model B). Governs the evolution
+> of Edibl's stock domain from a single mutable `StockLot` into a coherent,
+> event-logged kitchen model. Companion ADRs live in `adr/`.
+>
+> **Implemented:** Phase 1 (Quantity VO, InventoryEvent ledger, shared command
+> layer, package_state, migration+opening events) · Phase 2 (adjust/move/split/merge
+> + FEFO/prefer-open selection with spill) · Phase 3 (reconciliation as one
+> reversible batch, tracking modes, frontend quick actions) · Phase 4 (AcquisitionLot
+> split, freeze/thaw/transform + lineage) · Phase 5 (FoodConcept + aliases,
+> item_type boundaries, matching service, reservations, policy-driven reorder).
+> **Deferred (documented follow-ups):** full multi-fact expiry table (§5.3), Phase 6
+> external-intelligence review queue (§7), and deeper Phase-5 frontend surfaces
+> (reorder dashboard, concept editor) — the backend/API/MCP/assistant support them.
 
 The guiding constraint from the brief: **the smallest coherent model that handles
 the scenario matrix** — not a warehouse platform, not a nullable-column patch. When

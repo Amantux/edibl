@@ -575,6 +575,27 @@ def reverse_reconciliation(batch_id):
                     "reversed": res.event_ids})
 
 
+@bp.get("/stock/match")
+@login_required
+def match():
+    """Ranked product candidates for a query, with confidence + reasons — the safe
+    replacement for scattered substring matching. Query: ?q=&itemType=food,beverage."""
+    from ..services import matching
+    q = request.args.get("q", "")
+    types = request.args.get("itemType")
+    item_types = set(t.strip() for t in types.split(",")) if types else None
+    cands = matching.match_products(current_group().id, q, item_types=item_types)
+    return jsonify({"query": q, "candidates": [
+        {"product": product_out_lite(c.product), "score": c.score, "reasons": c.reasons}
+        for c in cands[:20]]})
+
+
+def product_out_lite(p):
+    return {"id": p.id, "name": p.name, "category": p.category,
+            "itemType": getattr(p, "item_type", "food"),
+            "conceptId": getattr(p, "concept_id", None)}
+
+
 @bp.get("/inventory/events")
 @login_required
 def list_events():

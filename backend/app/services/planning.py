@@ -18,6 +18,9 @@ def _on_hand_by_name(gid):
     for s in lots:
         if not s.product:
             continue
+        # Non-food consumables (foil, dishwasher tablets) never satisfy a recipe.
+        if (getattr(s.product, "item_type", "food") or "food") == "consumable":
+            continue
         key = s.product.name.lower()
         qty, unit, exp = agg.get(key, (0.0, s.unit, False))
         exp = exp or expiry_status(s.expiry_date) in ("expiring", "expired")

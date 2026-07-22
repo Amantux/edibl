@@ -27,23 +27,28 @@ async function loadMyMeal() {
     mmForm.value = { url: mm.value.url || '', token: '' }
   } catch (e) { mm.value = { source: 'none' } }
 }
+function _testMsg(r) {
+  return !r.configured ? '⚠️ No myMeal URL set — paste a connect link, pick a discovered add-on, or enter the URL below.'
+    : r.reachable ? `✓ Connected — myMeal has ${r.items} planned ingredient(s).`
+      : '⚠️ Saved, but can’t reach it: ' + (r.error || 'no response')
+        + '. Check the URL/token, or that myMeal is running.'
+}
 async function saveMyMeal() {
-  mmBusy.value = true; mmMsg.value = ''
+  mmBusy.value = true; mmMsg.value = 'Saving…'
   try {
     const body = { url: mmForm.value.url }
     if (mmForm.value.token) body.token = mmForm.value.token
     mm.value = await api.put('/integrations/mymeal', body)
     mmForm.value = { url: mm.value.url || '', token: '' }
-    mmMsg.value = '✓ Saved.'
+    // Verify in the same step so the user knows immediately whether it works.
+    mmMsg.value = 'Saved — testing…'
+    mmMsg.value = _testMsg(await api.post('/integrations/mymeal/test'))
   } catch (e) { mmMsg.value = '⚠️ ' + (e.message || 'save failed') } finally { mmBusy.value = false }
 }
 async function testMyMeal() {
   mmBusy.value = true; mmMsg.value = 'Testing…'
   try {
-    const r = await api.post('/integrations/mymeal/test')
-    mmMsg.value = !r.configured ? '⚠️ No myMeal URL set.'
-      : r.reachable ? `✓ Connected — myMeal has ${r.items} planned ingredient(s).`
-        : '⚠️ Unreachable: ' + (r.error || 'no response')
+    mmMsg.value = _testMsg(await api.post('/integrations/mymeal/test'))
   } catch (e) { mmMsg.value = '⚠️ ' + (e.message || 'error') } finally { mmBusy.value = false }
 }
 async function pullMyMeal() {
@@ -64,7 +69,12 @@ async function discoverMyMeal() {
     else mmMsg.value = `Found ${mmCandidates.value.length} add-on(s) — pick one below.`
   } catch (e) { mmMsg.value = '⚠️ ' + (e.message || 'error') } finally { mmBusy.value = false }
 }
-function useCandidate(cnd) { mmForm.value.url = cnd.url; mmMsg.value = `Filled in “${cnd.name}” — Save, then Test.` }
+// Picking a discovered add-on connects in one click (fill → save → verify).
+async function useCandidate(cnd) {
+  mmForm.value.url = cnd.url
+  mmMsg.value = `Connecting “${cnd.name}”…`
+  await saveMyMeal()
+}
 
 // ── Access & keys: mint/list/revoke tokens + connect-link sharing ────────────
 const tokens = ref([])
@@ -104,13 +114,14 @@ async function copyText(text, label) {
   try { await navigator.clipboard.writeText(text); keysMsg.value = `✓ ${label} copied.` }
   catch (e) { keysMsg.value = 'Copy failed — select the text and copy manually.' }
 }
-// Paste a myMeal connect link into the myMeal card (fills URL + token at once).
-function pasteMymealConnect(str) {
+// Paste a myMeal connect link — fills URL + token AND connects in one step.
+async function pasteMymealConnect(str) {
   const obj = decodeConnect(str, 'mymeal')
   if (!obj) { mmMsg.value = '⚠️ That doesn’t look like a myMeal connect link.'; return }
   mmForm.value.url = obj.url || mmForm.value.url
   mmForm.value.token = obj.token || ''
-  mmMsg.value = '✓ Filled from the connect link — Save, then Test.'
+  mmMsg.value = 'Connecting from the link…'
+  await saveMyMeal()
 }
 const mmDiag = ref('')
 async function diagnoseMyMeal() {

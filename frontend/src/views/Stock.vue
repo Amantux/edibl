@@ -1,6 +1,8 @@
 <script setup>
 import { ref, computed, reactive, onMounted, nextTick } from 'vue'
+import { useRoute } from 'vue-router'
 import { api } from '../api'
+import { askEdibl } from '../chat'
 
 const groups = ref([])            // grouped view (all stock)
 const flatItems = ref([])         // freezer / wine views
@@ -22,6 +24,55 @@ const consumeQty = ref(null)
 const toast = ref('')
 const form = ref(blankForm())
 const bulk = ref(blankBulk())
+
+// ── Task-first landing: omnibox + smart lists + focus ────────────────────────
+const omniQuery = ref('')
+const focus = ref('all')          // all | expiring | open | low
+const reorder = ref([])           // GET /shopping/reorder suggestions
+const route = useRoute()
+
+// Every active lot flattened out of the grouped payload (for focused lists).
+const allLots = computed(() => groups.value.flatMap((g) => g.lots || []))
+const q = computed(() => omniQuery.value.trim().toLowerCase())
+function lotMatchesQuery(s) {
+  if (!q.value) return true
+  return (s.product?.name || '').toLowerCase().includes(q.value) ||
+    (s.groupKey || '').toLowerCase().includes(q.value)
+}
+const expiringLots = computed(() =>
+  allLots.value.filter((s) => ['expiring', 'expired'].includes(s.expiryStatus)))
+const openLots = computed(() => allLots.value.filter((s) => s.packageState === 'opened'))
+const focusedLots = computed(() => {
+  const base = focus.value === 'expiring' ? expiringLots.value
+    : focus.value === 'open' ? openLots.value : allLots.value
+  return base.filter(lotMatchesQuery)
+})
+const groupsFiltered = computed(() =>
+  !q.value ? groups.value
+    : groups.value.filter((g) => g.group.toLowerCase().includes(q.value) ||
+      (g.products || []).some((n) => n.toLowerCase().includes(q.value))))
+const smart = computed(() => ({
+  expiring: expiringLots.value,
+  open: openLots.value,
+  low: reorder.value,
+}))
+async function loadReorder() {
+  try { reorder.value = (await api.get('/shopping/reorder')).suggestions || [] } catch (e) { reorder.value = [] }
+}
+function setFocus(f) { focus.value = focus.value === f ? 'all' : f }
+// Omnibox: a plain query filters; an "add …" phrase opens Add; anything else asks Edibl.
+function omniSubmit() {
+  const v = omniQuery.value.trim()
+  if (!v) return
+  if (/^add\b/i.test(v)) { openAdd(); form.value.productName = v.replace(/^add\s+/i, ''); return }
+  askEdibl(v)
+}
+async function addToShopping(sug) {
+  await api.post('/shopping', { name: sug.name, quantity: sug.suggestedQuantity,
+    unit: sug.unit, source: 'low_stock', productId: sug.productId })
+  flash(`Added ${sug.name} to the shopping list.`)
+  await loadReorder()
+}
 
 // barcode
 const scanning = ref(false)
@@ -83,6 +134,10 @@ onMounted(async () => {
   await loadProducts()
   try { assistantCfg.value = await api.get('/assistant/config') } catch (e) { /* optional */ }
   await load()
+  loadReorder()
+  if (route.query.add) openAdd()          // deep-link from the Dashboard "Add stock"
+  if (route.query.focus) focus.value = String(route.query.focus)
+  if (route.query.reconcile) openReconcile(String(route.query.reconcile))  // from Locations
 })
 
 function applyExtracted(res, note) {
@@ -227,35 +282,77 @@ async function doConsume(outcome) {
 }
 // Open a package (orthogonal to using it) — turns a sealed carton into an open one.
 async function openPkg(s) { await api.post(`/stock/${s.id}/open`); await refresh() }
-// Correct amount — when a measured value differs from the tracked estimate.
-async function correctAmount(s) {
-  const v = prompt(`Correct amount for ${s.product?.name} (${s.unit}):`, s.quantity ?? '')
-  if (v === null || v === '') return
-  const res = await api.post(`/stock/${s.id}/adjust`, { quantity: Number(v), quantityKind: 'exact' })
-  if (res?.error) flash(res.error); else { flash('Corrected.'); await refresh() }
-}
-// Move a lot to another location (matched by name from the known locations).
-async function moveLot(s) {
-  const name = prompt(`Move ${s.product?.name} to which location?`, s.location?.name || '')
-  if (name === null) return
-  const loc = locations.value.find((l) => l.name.toLowerCase() === name.trim().toLowerCase())
-  if (!loc) { flash('No location by that name.'); return }
-  await api.post(`/stock/${s.id}/move`, { locationId: loc.id }); flash('Moved.'); await refresh()
-}
-// Split an amount off into a new position (e.g. portioning for the freezer).
-async function splitLot(s) {
-  const v = prompt(`Split how much off ${s.product?.name}? (${s.unit}, have ${s.quantity})`)
-  if (v === null || v === '') return
-  const res = await api.post(`/stock/${s.id}/split`, { quantity: Number(v) })
-  if (res?.error) flash(res.error); else { flash('Split off.'); await refresh() }
-}
 // Freeze / thaw — a preservation change that recomputes the effective shelf life.
 async function freezeLot(s) { await api.post(`/stock/${s.id}/freeze`); flash('Frozen.'); await refresh() }
 async function thawLot(s) { await api.post(`/stock/${s.id}/thaw`); flash('Thawed.'); await refresh() }
+
+// ── Styled action sheet (replaces prompt/confirm for Correct/Split/Move) ─────
+const sheetFor = ref(null)              // the lot whose actions are open
+const sheetMode = ref('')               // '' menu | 'correct' | 'split' | 'move'
+const sheetVal = ref('')                // number input for correct/split
+const sheetLoc = ref('')                // location select for move
+function openSheet(s) { sheetFor.value = s; sheetMode.value = ''; sheetVal.value = ''; sheetLoc.value = s.location?.id || '' }
+function closeSheet() { sheetFor.value = null; sheetMode.value = '' }
+function sheetStart(mode) { sheetMode.value = mode; sheetVal.value = sheetFor.value?.quantity ?? '' }
+async function sheetCommit() {
+  const s = sheetFor.value
+  if (!s) return
+  try {
+    if (sheetMode.value === 'correct') {
+      await api.post(`/stock/${s.id}/adjust`, { quantity: Number(sheetVal.value), quantityKind: 'exact' })
+      flash('Corrected.')
+    } else if (sheetMode.value === 'split') {
+      const r = await api.post(`/stock/${s.id}/split`, { quantity: Number(sheetVal.value) })
+      if (r?.error) { flash(r.error); return }
+      flash('Split off a new position.')
+    } else if (sheetMode.value === 'move') {
+      await api.post(`/stock/${s.id}/move`, { locationId: sheetLoc.value || null })
+      flash('Moved.')
+    }
+    closeSheet(); await refresh()
+  } catch (e) { flash(e.message || 'Action failed.') }
+}
+async function sheetDelete() {
+  const s = sheetFor.value
+  if (!s || !confirm(`Remove ${s.product?.name}? (No consumption logged — use "Use" for that.)`)) return
+  await api.del('/stock/' + s.id); closeSheet(); await refresh()
+}
+
+// ── Reconcile a location: walk it, correct counts, mark missing, add found ───
+const reconcileFor = ref(null)          // location object
+const reconcileRows = ref([])           // [{ lot, count, missing }]
+const reconcileAdds = ref([])           // [{ name, quantity, unit }]
+async function openReconcile(locId) {
+  const loc = locations.value.find((l) => l.id === locId) || locations.value[0]
+  if (!loc) { flash('Add a location first.'); return }
+  reconcileFor.value = loc
+  const items = (await api.get(`/stock?locationId=${loc.id}`)).items || []
+  reconcileRows.value = items.map((s) => ({ lot: s, count: s.quantity, missing: false }))
+  reconcileAdds.value = []
+}
+function addReconcileRow() { reconcileAdds.value.push({ name: '', quantity: 1, unit: 'count' }) }
+async function commitReconcile() {
+  const counts = reconcileRows.value.filter((r) => !r.missing && Number(r.count) !== r.lot.quantity)
+    .map((r) => ({ lotId: r.lot.id, quantity: Number(r.count) }))
+  const missing = reconcileRows.value.filter((r) => r.missing).map((r) => r.lot.id)
+  const additions = reconcileAdds.value.filter((a) => a.name.trim())
+    .map((a) => ({ name: a.name.trim(), quantity: Number(a.quantity) || 1, unit: a.unit || 'count' }))
+  try {
+    const r = await api.post(`/locations/${reconcileFor.value.id}/reconcile`, { counts, missing, additions })
+    reconcileFor.value = null
+    flash(r.summary || 'Reconciled.')
+    if (r.batchId) lastUndo.value = { eventId: null, batchId: r.batchId, label: r.summary }
+    await refresh(); loadReorder()
+  } catch (e) { flash(e.message || 'Reconcile failed.') }
+}
 const lastUndo = ref(null)
 async function undoLast() {
   if (!lastUndo.value) return
-  await api.post(`/inventory/events/${lastUndo.value.eventId}/reverse`)
+  if (lastUndo.value.batchId) {
+    await api.post(`/inventory/reconciliations/${lastUndo.value.batchId}/reverse`)
+  } else {
+    await api.post(`/inventory/events/${lastUndo.value.eventId}/reverse`)
+  }
   lastUndo.value = null
   await refresh()
 }
@@ -281,23 +378,104 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
     · <button class="ghost sm" @click="undoLast">Undo</button>
     · <button class="ghost sm" @click="lastUndo = null">Dismiss</button></div>
 
+  <!-- Omnibox: search · add · ask -->
+  <form class="omnibox" @submit.prevent="omniSubmit">
+    <span aria-hidden="true">🔎</span>
+    <input class="oi" v-model="omniQuery" placeholder="Search stock, or type a question / “add 2 L milk”…" />
+    <button v-if="omniQuery" type="button" class="ghost sm" @click="omniQuery=''" aria-label="Clear">✕</button>
+    <button type="button" class="secondary sm" @click="openAdd">＋ Add</button>
+    <button type="submit" class="sm">Ask</button>
+  </form>
+
+  <!-- Smart lists: the answers you actually want -->
+  <div class="smart-grid">
+    <button class="smart bad" :class="{active:focus==='expiring'}" @click="setFocus('expiring')">
+      <div class="st-top"><span class="st-n">{{ smart.expiring.length }}</span><span>⏰</span></div>
+      <div class="st-title">Use it or lose it</div>
+      <div class="st-peek">{{ smart.expiring.slice(0,3).map(s=>s.product?.name).join(' · ') || 'Nothing expiring soon' }}</div>
+    </button>
+    <button class="smart" :class="{active:focus==='open'}" @click="setFocus('open')">
+      <div class="st-top"><span class="st-n">{{ smart.open.length }}</span><span>📭</span></div>
+      <div class="st-title">Open packages</div>
+      <div class="st-peek">{{ smart.open.slice(0,3).map(s=>s.product?.name).join(' · ') || 'Nothing opened' }}</div>
+    </button>
+    <button class="smart warn" :class="{active:focus==='low'}" @click="setFocus('low')">
+      <div class="st-top"><span class="st-n">{{ smart.low.length }}</span><span>🛒</span></div>
+      <div class="st-title">Running low</div>
+      <div class="st-peek">{{ smart.low.slice(0,3).map(s=>s.name).join(' · ') || 'Set reorder levels on items' }}</div>
+    </button>
+    <button class="smart" @click="openReconcile()">
+      <div class="st-top"><span class="st-n">✓</span><span>📋</span></div>
+      <div class="st-title">Reconcile a place</div>
+      <div class="st-peek">Walk a location and fix what's really there.</div>
+    </button>
+  </div>
+
   <div class="toolbar">
-    <select v-model="filter.view" style="width:auto" @change="load">
-      <option value="all">All stock (grouped)</option>
-      <option value="freezer">Freezer / vacuum-sealed</option>
+    <div class="seg">
+      <button :class="{on:focus==='all' && filter.view==='all'}" @click="focus='all';filter.view='all';load()">All</button>
+      <button :class="{on:focus==='expiring'}" @click="focus='expiring'">Expiring</button>
+      <button :class="{on:focus==='open'}" @click="focus='open'">Open</button>
+      <button :class="{on:focus==='low'}" @click="focus='low'">Low</button>
+    </div>
+    <div class="grow"></div>
+    <select v-model="filter.view" style="width:auto" @change="focus='all';load()">
+      <option value="all">Everything</option>
+      <option value="freezer">Freezer</option>
       <option value="wine">Wine & alcohol</option>
     </select>
   </div>
 
   <div v-if="loading" class="muted">Loading…</div>
 
-  <!-- Grouped view -->
-  <div v-else-if="filter.view==='all' && groups.length" class="card tablewrap" style="padding:0">
+  <!-- Running-low (reorder) focus -->
+  <div v-else-if="focus==='low'" class="card tablewrap" style="padding:0">
+    <table v-if="reorder.length">
+      <thead><tr><th>Item</th><th>Available</th><th>Threshold</th><th>Suggested</th><th></th></tr></thead>
+      <tbody>
+        <tr v-for="s in reorder" :key="s.productId">
+          <td><strong>{{ s.name }}</strong> <span v-if="s.staple" class="chip">staple</span>
+            <span v-if="s.uncertain" class="muted" title="some stock is an unknown amount">· ~</span></td>
+          <td>{{ s.available }} {{ s.unit }}<span v-if="s.reserved" class="muted"> · {{ s.reserved }} reserved</span></td>
+          <td class="muted">{{ s.threshold }}</td>
+          <td>{{ s.suggestedQuantity }} {{ s.unit }}</td>
+          <td style="text-align:right"><button class="sm" @click="addToShopping(s)">Add to list</button></td>
+        </tr>
+      </tbody>
+    </table>
+    <div v-else class="empty"><div class="ico">🛒</div><p>Nothing needs reordering.</p>
+      <p class="muted">Set a minimum or reorder level on an item and it'll show up here.</p></div>
+  </div>
+
+  <!-- Focused flat list (expiring / open) -->
+  <div v-else-if="focus!=='all'" class="card tablewrap" style="padding:0">
+    <table v-if="focusedLots.length">
+      <thead><tr><th>Item</th><th>Where</th><th>On hand</th><th>Expiry</th><th></th></tr></thead>
+      <tbody>
+        <tr v-for="s in focusedLots" :key="s.id">
+          <td><strong>{{ s.product?.name }}</strong>
+            <span v-if="s.packageState==='opened'" class="chip">open</span>
+            <span v-if="s.freshness" class="chip">{{ s.freshness }}</span></td>
+          <td class="muted">{{ s.location?.name || '—' }}</td>
+          <td>{{ s.quantityKind === 'exact' ? (s.quantity + ' ' + s.unit) : s.quantityText }}</td>
+          <td><span class="badge" :class="s.expiryStatus">{{ expLabel(s) }}</span></td>
+          <td style="text-align:right;white-space:nowrap">
+            <button v-if="s.packageState === 'sealed'" class="ghost sm" @click="openPkg(s)">Open</button>
+            <button class="secondary sm" @click="openConsume(s)">Use</button>
+            <button class="ghost sm" @click="openSheet(s)" title="More">⋯</button></td>
+        </tr>
+      </tbody>
+    </table>
+    <div v-else class="empty"><div class="ico">✨</div><p>Nothing here — nice.</p></div>
+  </div>
+
+  <!-- Grouped view (everything) -->
+  <div v-else-if="filter.view==='all' && groupsFiltered.length" class="card tablewrap" style="padding:0">
     <table>
       <thead><tr><th>Group</th><th>Products</th><th>On hand</th><th>Next expiry</th><th></th></tr></thead>
       <tbody>
-        <template v-for="g in groups" :key="g.group">
-          <tr class="grp" @click="toggle(g.group)">
+        <template v-for="g in groupsFiltered" :key="g.group">
+          <tr class="grp clickable" @click="toggle(g.group)">
             <td><span class="caret">{{ expanded[g.group] ? '▾' : '▸' }}</span>
               <strong>{{ g.group }}</strong> <span v-if="g.category" class="chip">{{ g.category }}</span></td>
             <td class="muted">{{ g.products.join(', ') }}
@@ -322,12 +500,7 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
             <td style="text-align:right;white-space:nowrap">
               <button v-if="s.packageState === 'sealed'" class="ghost sm" @click="openPkg(s)">Open</button>
               <button class="secondary sm" @click="openConsume(s)">Use</button>
-              <button class="ghost sm" @click="correctAmount(s)" title="Correct amount">Correct</button>
-              <button class="ghost sm" @click="splitLot(s)" title="Split off a portion">Split</button>
-              <button class="ghost sm" @click="moveLot(s)" title="Move to another location">Move</button>
-              <button v-if="s.storageMethod !== 'frozen'" class="ghost sm" @click="freezeLot(s)" title="Freeze">Freeze</button>
-              <button v-else class="ghost sm" @click="thawLot(s)" title="Thaw">Thaw</button>
-              <button class="ghost sm" @click="del(s)">✕</button></td>
+              <button class="ghost sm" @click="openSheet(s)" title="More actions">⋯</button></td>
           </tr>
         </template>
       </tbody>
@@ -357,6 +530,73 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
 
   <div v-else class="empty"><div class="ico">🥫</div><p>No stock here yet.</p>
     <button style="margin-top:10px" @click="openAdd">Add your first item</button></div>
+
+  <!-- Action sheet: styled replacement for the old prompt() dialogs -->
+  <div v-if="sheetFor" class="modal-backdrop" @click.self="closeSheet">
+    <div class="card modal sheet">
+      <h2 style="margin-bottom:4px">{{ sheetFor.product?.name }}</h2>
+      <p class="muted" style="margin-top:0">{{ sheetFor.quantityKind==='exact' ? (sheetFor.quantity+' '+sheetFor.unit) : sheetFor.quantityText }}
+        · {{ sheetFor.storageMethod.replace('_',' ') }}<span v-if="sheetFor.packageState==='opened'"> · open</span></p>
+
+      <template v-if="!sheetMode">
+        <button class="opt" @click="sheetStart('correct')"><span class="em">📏</span> Correct amount</button>
+        <button class="opt" @click="sheetStart('split')"><span class="em">✂️</span> Split off a portion</button>
+        <button class="opt" @click="sheetStart('move')"><span class="em">📦</span> Move to another place</button>
+        <button v-if="sheetFor.storageMethod!=='frozen'" class="opt" @click="freezeLot(sheetFor);closeSheet()"><span class="em">❄️</span> Freeze</button>
+        <button v-else class="opt" @click="thawLot(sheetFor);closeSheet()"><span class="em">💧</span> Thaw</button>
+        <button v-if="sheetFor.packageState==='sealed'" class="opt" @click="openPkg(sheetFor);closeSheet()"><span class="em">📭</span> Mark opened</button>
+        <div class="divider"></div>
+        <button class="opt danger-opt" @click="sheetDelete"><span class="em">🗑️</span> Remove (no history)</button>
+      </template>
+
+      <template v-else-if="sheetMode==='move'">
+        <label class="field"><span>Move to</span>
+          <select v-model="sheetLoc">
+            <option value="">Unassigned</option>
+            <option v-for="l in locations" :key="l.id" :value="l.id">{{ l.name }}</option>
+          </select></label>
+        <div class="row"><button class="secondary" @click="sheetMode=''">Back</button>
+          <button @click="sheetCommit">Move</button></div>
+      </template>
+
+      <template v-else>
+        <label class="field"><span>{{ sheetMode==='correct' ? 'Measured amount' : 'Amount to split off' }} ({{ sheetFor.unit }})</span>
+          <input type="number" step="any" min="0" v-model="sheetVal" /></label>
+        <div class="row"><button class="secondary" @click="sheetMode=''">Back</button>
+          <button :disabled="sheetVal===''" @click="sheetCommit">{{ sheetMode==='correct' ? 'Correct' : 'Split' }}</button></div>
+      </template>
+    </div>
+  </div>
+
+  <!-- Reconcile a location: walk it, fix reality, commit as one reversible op -->
+  <div v-if="reconcileFor" class="modal-backdrop" @click.self="reconcileFor=null">
+    <div class="card modal">
+      <h2>Reconcile — {{ reconcileFor.name }}</h2>
+      <p class="muted" style="margin-top:0">Set what's actually there, mark anything missing, and add what you found. Committed as one undoable step.</p>
+      <table v-if="reconcileRows.length">
+        <thead><tr><th>Item</th><th>Count</th><th>Missing</th></tr></thead>
+        <tbody>
+          <tr v-for="r in reconcileRows" :key="r.lot.id">
+            <td>{{ r.lot.product?.name }} <span class="muted">({{ r.lot.unit }})</span></td>
+            <td><input type="number" step="any" min="0" v-model="r.count" :disabled="r.missing" style="width:90px" /></td>
+            <td><input type="checkbox" v-model="r.missing" style="width:auto" /></td>
+          </tr>
+        </tbody>
+      </table>
+      <p v-else class="muted">Nothing tracked here yet.</p>
+      <div class="divider"></div>
+      <p class="muted" style="margin:0 0 6px;font-weight:600">Found something new?</p>
+      <div v-for="(a,i) in reconcileAdds" :key="i" class="row" style="margin-bottom:6px">
+        <input v-model="a.name" placeholder="name" />
+        <input type="number" step="any" v-model="a.quantity" style="width:80px" />
+        <input v-model="a.unit" style="width:80px" placeholder="unit" />
+      </div>
+      <button class="secondary sm" @click="addReconcileRow">＋ Add found item</button>
+      <div class="row" style="margin-top:16px"><div class="grow"></div>
+        <button class="secondary" @click="reconcileFor=null">Cancel</button>
+        <button @click="commitReconcile">Commit reconciliation</button></div>
+    </div>
+  </div>
 
   <datalist id="dl-names"><option v-for="n in suggest.names" :key="n" :value="n" /></datalist>
   <datalist id="dl-cats"><option v-for="c in suggest.categories" :key="c" :value="c" /></datalist>

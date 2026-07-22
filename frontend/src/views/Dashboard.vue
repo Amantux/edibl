@@ -17,7 +17,7 @@ onMounted(async () => {
 
 <template>
   <div class="page-head"><h1>Dashboard</h1><div class="grow"></div>
-    <button @click="router.push('/stock')">＋ Add stock</button></div>
+    <button @click="router.push('/stock?add=1')">＋ Add stock</button></div>
 
   <div v-if="d">
     <div class="stat-grid" style="margin-bottom:18px">

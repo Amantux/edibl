@@ -3,6 +3,30 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.5.17
+
+A redesigned stock experience, an easier myMeal connection, and a nicer chat.
+
+- **Stock, reimagined around answers.** The stock page now opens with the things
+  you actually want to know — **Use it or lose it**, **Open packages**, **Running
+  low**, and **Reconcile a place** — as tap-through cards, plus a single search box
+  that also adds items or asks the assistant. The full grouped list is still there,
+  one tap away.
+- **Running low, handled.** Set a minimum on an item and it shows up under Running
+  low with a suggested amount and a one-tap "Add to list" (it even accounts for what
+  you've reserved for planned meals).
+- **Reconcile a location** from the app: walk a place, fix the counts, mark what's
+  missing, add what you found — committed as one undoable step.
+- **Cleaner item actions.** Correct / Split / Move / Freeze / Thaw now live in a
+  tidy action sheet instead of pop-up prompts.
+- **See inside a place.** Tap any location to see exactly what's in it, add there, or
+  reconcile it.
+- **Easier myMeal connection.** Picking a discovered add-on, or pasting a connect
+  link, now connects **and verifies** in one step — with clearer guidance when
+  there's nothing set up yet.
+- **A friendlier assistant.** The chat opens instantly, looks nicer, animates
+  gently (and respects reduced-motion), and works as a proper bottom sheet on phones.
+
 ## 1.5.16
 
 The kitchen-stock redesign, phases 2–5 — everyday actions, transformations, and

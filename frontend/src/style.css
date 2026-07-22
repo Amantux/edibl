@@ -3,6 +3,10 @@
   --bg: #f6f8f4; --surface: #fff; --surface-2: #f0f4ee; --border: #e2e8dd;
   --text: #1b2a1f; --muted: #6b7a6e; --danger: #dc2626; --warning: #d97706; --success: #16a34a;
   --radius: 14px; --radius-sm: 9px; --shadow: 0 1px 2px rgba(20,40,25,.06), 0 6px 20px rgba(20,40,25,.06);
+  /* Aliases so component-scoped styles resolve to the real tokens (were falling
+     back to hardcoded hex). */
+  --primary: var(--accent); --primary-hover: var(--accent-hover); --surface-raised: var(--surface-2);
+  --popover-shadow: 0 4px 12px rgba(20,40,25,.10), 0 12px 40px rgba(20,40,25,.14);
 }
 @media (prefers-color-scheme: dark) {
   :root { --bg:#101512; --surface:#18201a; --surface-2:#141a15; --border:#28332a;
@@ -53,6 +57,45 @@ tbody tr.clickable { cursor:pointer; } tbody tr.clickable:hover td { background:
 pre.export { background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius-sm); padding:12px; white-space:pre-wrap; font-family:ui-monospace,monospace; font-size:.85rem; max-height:320px; overflow:auto; }
 
 .tablewrap { overflow:hidden; }  /* desktop: clip table to the card's rounded corners */
+
+/* ── Task-first stock: omnibox + smart lists ─────────────────────────────── */
+.omnibox { display:flex; gap:8px; align-items:center; background:var(--surface); border:1px solid var(--border);
+  border-radius:999px; padding:6px 6px 6px 16px; box-shadow:var(--shadow); margin-bottom:16px; }
+.omnibox .oi { flex:1; border:none; background:transparent; padding:6px 0; font-size:.98rem; box-shadow:none; }
+.omnibox .oi:focus { outline:none; }
+.omnibox button { border-radius:999px; }
+.smart-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:12px; margin-bottom:18px; }
+.smart { text-align:left; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius);
+  padding:14px 16px; cursor:pointer; transition:transform .12s ease, box-shadow .12s ease, border-color .12s ease; color:var(--text); }
+/* keep the card surface on hover/active — override the global button:hover fill */
+.smart:hover { background:var(--surface); transform:translateY(-2px); box-shadow:var(--shadow); border-color:var(--accent); }
+.smart.active, .smart.active:hover { background:var(--accent-soft); border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
+.smart .st-top { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
+.smart .st-n { font-size:1.5rem; font-weight:750; letter-spacing:-.02em; }
+.smart .st-title { font-size:.82rem; font-weight:600; color:var(--muted); }
+.smart .st-peek { font-size:.8rem; color:var(--muted); line-height:1.45; }
+.smart .st-peek b { color:var(--text); font-weight:600; }
+.smart.warn .st-n { color:var(--warning); } .smart.bad .st-n { color:var(--danger); }
+/* Segmented focus control */
+.seg { display:inline-flex; background:var(--surface-2); border:1px solid var(--border); border-radius:999px; padding:3px; gap:2px; }
+.seg button { background:transparent; color:var(--muted); border:none; padding:6px 13px; border-radius:999px; font-size:.84rem; }
+.seg button.on { background:var(--surface); color:var(--text); box-shadow:var(--shadow); }
+/* Action sheet (replaces prompt/confirm for row actions) */
+.sheet { width:min(420px,100%); }
+.sheet .opt { display:flex; align-items:center; gap:12px; width:100%; text-align:left; background:transparent; color:var(--text);
+  border:1px solid transparent; border-radius:var(--radius-sm); padding:11px 12px; font-weight:500; }
+.sheet .opt:hover { background:var(--surface-2); }
+.sheet .opt .em { font-size:1.15rem; width:24px; text-align:center; }
+.sheet .opt.danger-opt:hover { background:rgba(220,38,38,.08); color:var(--danger); }
+/* Location drill-in drawer */
+.drawer-backdrop { position:fixed; inset:0; background:rgba(15,23,20,.5); z-index:100; display:flex; justify-content:flex-end; }
+.drawer { width:min(460px,100%); height:100%; background:var(--surface); border-left:1px solid var(--border); overflow:auto;
+  padding:20px; box-shadow:var(--popover-shadow); animation:slideIn .18s ease; }
+@keyframes slideIn { from { transform:translateX(24px); opacity:.4; } to { transform:none; opacity:1; } }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration:.001ms !important; transition-duration:.001ms !important; }
+}
 
 /* Mobile top bar — hidden on desktop */
 .topbar { display:none; }

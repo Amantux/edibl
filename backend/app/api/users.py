@@ -56,6 +56,8 @@ def register():
     group = Group(name=data.get("groupName") or "Household")
     db.session.add(group)
     db.session.flush()
+    from ..services.bootstrap import seed_default_locations
+    seed_default_locations(group.id)  # new household starts with Kitchen/Fridge/Freezer
     # A registrant creates and therefore owns their new household.
     user = User(name=data.get("name") or "", email=email, is_owner=True,
                 password_hash=hash_password(data["password"]), group_id=group.id)

@@ -3,6 +3,19 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.5.20
+
+- **Starts ready to use.** Every household now begins with a **Kitchen** containing a
+  **Fridge** and **Freezer**, so you can add stock right away (existing installs get
+  them too, once).
+- **Condition on the way in.** The add form has a simple **1–5 condition scale**
+  (Fresh · Good · Okay · Use soon · Going off) so you can note freshness as you stock.
+- **Smarter add.** Item names now **autocomplete from your kitchen** as you type
+  (server-side), and when you add something you already have, Edibl **defaults its
+  location to wherever most of it already lives**.
+- **Chat closes on mobile.** Added a proper ✕ on the chat panel — the bottom sheet no
+  longer traps you.
+
 ## 1.5.19
 
 - **A dashboard that's a launchpad, not just a readout.** The landing page now opens

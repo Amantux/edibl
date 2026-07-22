@@ -118,6 +118,25 @@ def by_barcode(code):
     return jsonify({"found": False, "barcode": code})
 
 
+@bp.get("/products/autocomplete")
+@login_required
+def autocomplete():
+    """Server-side item-name autocomplete for the add form. Ranked via the matching
+    service (exact/alias/family/substring), newest-relevant first. ?q=&limit="""
+    from ..services import matching
+    q = (request.args.get("q") or "").strip()
+    if not q:
+        return jsonify({"names": []})
+    limit = min(int(request.args.get("limit", 8) or 8), 20)
+    names = []
+    for c in matching.match_products(current_group().id, q):
+        if c.product.name not in names:
+            names.append(c.product.name)
+        if len(names) >= limit:
+            break
+    return jsonify({"names": names})
+
+
 @bp.post("/products")
 @login_required
 def create():

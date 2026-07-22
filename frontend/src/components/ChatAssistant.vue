@@ -84,8 +84,11 @@ async function undoAction(a) {
     <div v-if="open" class="panel card">
       <div class="phead">
         <strong>🥑 Ask Edibl</strong>
-        <span class="tag" :class="cfg.enabled ? 'on' : 'off'">
-          {{ cfg.enabled ? cfg.provider : 'not set up' }}</span>
+        <div class="ph-right">
+          <span class="tag" :class="cfg.enabled ? 'on' : 'off'">
+            {{ cfg.enabled ? cfg.provider : 'not set up' }}</span>
+          <button class="pclose" @click="open = false" aria-label="Close chat">✕</button>
+        </div>
       </div>
 
       <div ref="body" class="pbody">
@@ -148,6 +151,10 @@ async function undoAction(a) {
 .phead { display: flex; align-items: center; justify-content: space-between;
   padding: 13px 15px; border-bottom: 1px solid var(--border);
   background: linear-gradient(180deg, var(--accent-soft), transparent); }
+.ph-right { display: flex; align-items: center; gap: 8px; }
+.pclose { background: transparent; color: var(--muted); border: none; padding: 4px 8px;
+  font-size: 1rem; line-height: 1; border-radius: 8px; cursor: pointer; }
+.pclose:hover { background: var(--surface-2); color: var(--text); }
 .tag { font-size: .68rem; padding: 2px 9px; border-radius: 999px; text-transform: lowercase; font-weight: 600; }
 .tag.on { background: rgba(47,158,68,.18); color: var(--accent); }
 .tag.off { background: var(--surface-2); color: var(--muted); }

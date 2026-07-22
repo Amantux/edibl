@@ -27,6 +27,9 @@ class Config:
     DISABLE_AUTH = _bool("EDIBL_DISABLE_AUTH", False)
     ALLOW_REGISTRATION = _bool("EDIBL_ALLOW_REGISTRATION", True)
     MIN_PASSWORD_LENGTH = int(os.environ.get("EDIBL_MIN_PASSWORD_LENGTH", "8"))
+    # New households start with a default Kitchen/Fridge/Freezer so intake works
+    # immediately. Off in tests for a clean baseline.
+    SEED_DEFAULTS = _bool("EDIBL_SEED_DEFAULTS", True)
 
     # --- Network / proxy -------------------------------------------------
     CORS_ORIGINS = [

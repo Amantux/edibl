@@ -42,6 +42,8 @@ def create_app(config_object=Config):
         db.create_all()
         _ensure_columns()
         _seed_reference_data()
+        from .services.bootstrap import seed_all_households
+        seed_all_households()
 
     _register_blueprints(app)
     _register_spa(app)

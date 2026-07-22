@@ -14,6 +14,7 @@ def app(tmp_path):
         SECRET_KEY = "test-secret-key-that-is-long-enough-32b"
         RATELIMIT_ENABLED = False
         PROXY_HOPS = 0
+        SEED_DEFAULTS = False   # clean baseline; the seeding test opts in explicitly
 
     app = create_app(TestConfig)
     yield app

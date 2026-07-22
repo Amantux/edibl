@@ -29,6 +29,7 @@ const bulk = ref(blankBulk())
 const omniQuery = ref('')
 const focus = ref('all')          // all | expiring | open | low
 const reorder = ref([])           // GET /shopping/reorder suggestions
+const freshnessScale = ref([])    // 1–5 condition scale for the add form
 const route = useRoute()
 
 // Every active lot flattened out of the grouped payload (for focused lists).
@@ -118,14 +119,50 @@ async function openAdd() {
   showAdd.value = true; showMore.value = false
   await nextTick(); nameInput.value?.focus()
 }
-// Fill in what we already know about a named product (category/group/unit), so a
-// repeat item needs only a name + quantity. Only fills blanks — never clobbers.
+// Where each known product mostly lives right now: product name → the location id
+// holding the most of its active lots. Powers the "put it with the others" default.
+const productLocationMode = computed(() => {
+  const counts = {}
+  for (const s of allLots.value) {
+    const name = (s.product?.name || '').trim().toLowerCase()
+    const loc = s.location?.id
+    if (!name || !loc) continue
+    ;(counts[name] = counts[name] || {})[loc] = (counts[name]?.[loc] || 0) + 1
+  }
+  const mode = {}
+  for (const [name, locs] of Object.entries(counts)) {
+    mode[name] = Object.entries(locs).sort((a, b) => b[1] - a[1])[0][0]
+  }
+  return mode
+})
+// Server-side item-name autocomplete: as you type, ask the backend for matching
+// product names (ranked by the matching service), debounced.
+const nameOptions = ref([])
+let nameTimer = null
+function onNameInput() {
+  clearTimeout(nameTimer)
+  const q = (form.value.productName || '').trim()
+  if (q.length < 1) { nameOptions.value = []; return }
+  nameTimer = setTimeout(async () => {
+    try { nameOptions.value = (await api.get('/products/autocomplete?q=' + encodeURIComponent(q))).names || [] }
+    catch (e) { /* keep last */ }
+  }, 180)
+}
+
+// Fill in what we already know about a named product (category/group/unit + where it
+// usually lives), so a repeat item needs only a name + quantity. Only fills blanks.
 function applyProductDefaults() {
-  const p = productMap.value[(form.value.productName || '').trim().toLowerCase()]
-  if (!p) return
-  if (!form.value.category) form.value.category = p.category || ''
-  if (!form.value.family) form.value.family = p.family || ''
-  if ((!form.value.unit || form.value.unit === 'count') && p.defaultUnit) form.value.unit = p.defaultUnit
+  const key = (form.value.productName || '').trim().toLowerCase()
+  const p = productMap.value[key]
+  if (p) {
+    if (!form.value.category) form.value.category = p.category || ''
+    if (!form.value.family) form.value.family = p.family || ''
+    if ((!form.value.unit || form.value.unit === 'count') && p.defaultUnit) form.value.unit = p.defaultUnit
+  }
+  // Put a matching item with the majority of its kind, unless a place was chosen.
+  if (!form.value.locationId && productLocationMode.value[key]) {
+    form.value.locationId = productLocationMode.value[key]
+  }
 }
 
 onMounted(async () => {
@@ -135,6 +172,7 @@ onMounted(async () => {
   try { assistantCfg.value = await api.get('/assistant/config') } catch (e) { /* optional */ }
   await load()
   loadReorder()
+  try { freshnessScale.value = (await api.get('/meta')).freshnessScale || [] } catch (e) { /* optional */ }
   if (route.query.add) openAdd()          // deep-link from the Dashboard "Add stock"
   if (route.query.focus) focus.value = String(route.query.focus)
   if (route.query.reconcile) openReconcile(String(route.query.reconcile))  // from Locations
@@ -608,7 +646,7 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
     </div>
   </div>
 
-  <datalist id="dl-names"><option v-for="n in suggest.names" :key="n" :value="n" /></datalist>
+  <datalist id="dl-names"><option v-for="n in nameOptions" :key="n" :value="n" /></datalist>
   <datalist id="dl-cats"><option v-for="c in suggest.categories" :key="c" :value="c" /></datalist>
   <datalist id="dl-units"><option v-for="u in suggest.units" :key="u" :value="u" /></datalist>
   <datalist id="dl-fam"><option v-for="f in suggest.families" :key="f" :value="f" /></datalist>
@@ -621,7 +659,7 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
       <h2>Add stock</h2>
       <label class="field"><span>What is it?</span>
         <input ref="nameInput" v-model="form.productName" list="dl-names" placeholder="e.g. Organic milk"
-          @change="applyProductDefaults" @keyup.enter="add" /></label>
+          @input="onNameInput" @change="applyProductDefaults" @keyup.enter="add" /></label>
       <div class="row">
         <label class="field" style="width:110px"><span>Quantity</span>
           <input type="number" min="0" v-model.number="form.quantity" @keyup.enter="add" /></label>
@@ -631,6 +669,11 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
           <select v-model="form.locationId"><option value="">Unassigned</option>
             <option v-for="l in locations" :key="l.id" :value="l.id">{{ l.name }}</option></select></label>
       </div>
+      <label class="field" v-if="freshnessScale.length"><span>Condition (optional)</span>
+        <select v-model="form.freshness">
+          <option value="">Not tracked</option>
+          <option v-for="f in freshnessScale" :key="f.key" :value="f.key">{{ f.level }} · {{ f.label }}</option>
+        </select></label>
 
       <button type="button" class="ghost sm morebtn" @click="showMore = !showMore">
         {{ showMore ? '▾ Fewer options' : '▸ More options — category, storage, expiry, barcode…' }}</button>
@@ -645,8 +688,6 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
         <div class="row">
           <label class="field" style="flex:1"><span>Storage</span>
             <input v-model="form.storageMethod" list="dl-storage" /></label>
-          <label class="field" style="width:150px"><span>Freshness</span>
-            <input v-model="form.freshness" list="dl-fresh" placeholder="optional" /></label>
         </div>
         <div class="row">
           <label class="field" style="flex:1"><span>Source (where from)</span>

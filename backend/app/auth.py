@@ -41,6 +41,12 @@ def decode_token(token: str):
         return None
 
 
+def _seed_defaults(group_id):
+    """Seed a new household's default Kitchen/Fridge/Freezer (idempotent)."""
+    from .services.bootstrap import seed_default_locations
+    seed_default_locations(group_id)
+
+
 def _default_user() -> User:
     user = db.session.query(User).filter_by(email=DEFAULT_EMAIL).first()
     if user:
@@ -51,6 +57,7 @@ def _default_user() -> User:
     group = Group(name=DEFAULT_GROUP)
     db.session.add(group)
     db.session.flush()
+    _seed_defaults(group.id)
     user = User(name="Local", email=DEFAULT_EMAIL,
                 password_hash=hash_password("unused"), is_owner=True, group_id=group.id)
     db.session.add(user)
@@ -107,6 +114,7 @@ def _ingress_user():
         group = Group(name=DEFAULT_GROUP)
         db.session.add(group)
         db.session.flush()
+    _seed_defaults(group.id)
     # Count owners among REAL HA users only, so a legacy synthetic local user
     # (ha_user_id NULL, is_owner True from single-user mode) doesn't lock the
     # first real HA user out of owner on a migrated install.

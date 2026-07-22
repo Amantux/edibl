@@ -7,6 +7,6 @@ Every command is transactional, idempotency-keyed, appends an immutable
 `InventoryEvent`, and returns a user-readable summary + an undo descriptor.
 """
 from .commands import (  # noqa: F401
-    add_lot, open_lot, consume_lot, reverse_event, CommandResult,
-    UnsupportedReversal,
+    add_lot, open_lot, consume_lot, reverse_event, adjust_lot, move_lot,
+    split_lot, merge_lots, CommandResult, UnsupportedReversal,
 )

@@ -265,6 +265,66 @@ def record_consumption(name: str, quantity: float = 1, outcome: str = "eaten") -
 
 
 @mcp.tool()
+def open_stock(name: str) -> str:
+    """Mark a package opened (e.g. an opened carton) — an orthogonal facet, separate
+    from using it up. Affects freshness/shelf-life, not quantity."""
+    lot = _find_lot(name)
+    if not lot:
+        return f"No stock matching '{name}'."
+    res = _post(f"/stock/{lot['id']}/open", {})
+    return res.get("summary", f"Opened {lot['product']['name']}.")
+
+
+@mcp.tool()
+def adjust_stock(name: str, quantity: float) -> str:
+    """Correct a lot to a measured amount (e.g. an estimated bin you just weighed).
+    Sets the exact quantity on the soonest-to-expire matching lot; reversible."""
+    lot = _find_lot(name)
+    if not lot:
+        return f"No stock matching '{name}'."
+    _post(f"/stock/{lot['id']}/adjust", {"quantity": quantity, "quantityKind": "exact"})
+    return f"Corrected {lot['product']['name']} to {quantity} {lot['unit']}."
+
+
+@mcp.tool()
+def move_stock(name: str, location: str) -> str:
+    """Move the soonest-to-expire lot matching `name` to another location."""
+    lot = _find_lot(name)
+    if not lot:
+        return f"No stock matching '{name}'."
+    _post(f"/stock/{lot['id']}/move", {"locationId": _location_id(location)})
+    return f"Moved {lot['product']['name']} to {location}."
+
+
+@mcp.tool()
+def split_stock(name: str, quantity: float, location: str = "") -> str:
+    """Split `quantity` off the soonest-to-expire lot matching `name` into a new
+    position (e.g. portioning). Conserves the total; reversible."""
+    lot = _find_lot(name)
+    if not lot:
+        return f"No stock matching '{name}'."
+    body = {"quantity": quantity}
+    if location:
+        body["locationId"] = _location_id(location)
+    _post(f"/stock/{lot['id']}/split", body)
+    return f"Split off {quantity} {lot['unit']} of {lot['product']['name']}."
+
+
+@mcp.tool()
+def use_stock(name: str, quantity: float, outcome: str = "eaten") -> str:
+    """Use an amount of a product, drawing across its lots by policy (prefer-open,
+    then first-expiring-first-out) and spilling to the next lot as needed — the safe
+    way to 'use the milk' without picking a specific lot."""
+    res = _post("/stock/consume", {"name": name, "quantity": quantity, "outcome": outcome})
+    if res.get("consumed", 0) == 0:
+        return f"No stock matching '{name}'."
+    msg = f"Used {res['consumed']} of {name} across {len(res.get('draws', []))} lot(s)."
+    if res.get("shortfall"):
+        msg += f" Short by {res['shortfall']}."
+    return msg
+
+
+@mcp.tool()
 def bulk_add_stock(items: list, storage_method: str = "refrigerated",
                    category: str = "other", location: str = "", source: str = "") -> str:
     """Add many items at once (a grocery haul, a farm box, a butchered animal).

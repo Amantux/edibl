@@ -28,7 +28,8 @@ from ..extensions import db
 from ..models import (StockLot, Product, ShoppingItem, ConsumptionEvent,
                       InventoryEvent, utcnow, STORAGE_METHODS, OUTCOMES)
 from ..services.estimation import estimate_expiry, product_insights, waste_insights
-from ..services.inventory import add_lot, consume_lot, open_lot, reverse_event
+from ..services.inventory import (add_lot, consume_lot, open_lot, reverse_event,
+                                  adjust_lot, move_lot, split_lot)
 from ..schemas.serializers import iso
 
 _LOGGER = logging.getLogger("edibl.assistant")
@@ -268,6 +269,40 @@ def h_open_stock(gid, name):
     return res.summary + ".", res.undo
 
 
+def h_adjust_stock(gid, name, quantity):
+    """Correct the soonest-to-expire matching lot to a measured amount."""
+    lots = _match_lots(gid, name)
+    if not lots:
+        return f"No stock matching '{name}' to correct."
+    res = adjust_lot(lots[0], new_quantity=quantity, quantity_kind="exact",
+                     actor_user_id=None, source_app="assistant")
+    return res.summary + ".", res.undo
+
+
+def h_move_stock(gid, name, location):
+    """Move the soonest-to-expire matching lot to another location."""
+    lots = _match_lots(gid, name)
+    if not lots:
+        return f"No stock matching '{name}' to move."
+    res = move_lot(lots[0], location_id=_find_location(gid, location),
+                   actor_user_id=None, source_app="assistant")
+    return res.summary + ".", res.undo
+
+
+def h_split_stock(gid, name, quantity, location=""):
+    """Split an amount off the soonest-to-expire matching lot into a new position."""
+    lots = _match_lots(gid, name)
+    if not lots:
+        return f"No stock matching '{name}' to split."
+    try:
+        res = split_lot(lots[0], amount=quantity,
+                        location_id=_find_location(gid, location) if location else None,
+                        actor_user_id=None, source_app="assistant")
+    except ValueError as e:
+        return f"Can't split that: {e}."
+    return res.summary + ".", res.undo
+
+
 def h_add_to_shopping_list(gid, name, quantity=1, unit="count"):
     item = ShoppingItem(name=name, quantity=float(quantity or 1),
                         unit=unit or "count", source="manual", group_id=gid)
@@ -368,6 +403,26 @@ TOOLS = {
                        "name": {"type": "string"}}, "required": ["name"]},
                    "Mark a package opened (e.g. an opened carton) — separate from "
                    "using it up. Affects freshness, not quantity."),
+    "adjust_stock": (h_adjust_stock,
+                     {"type": "object", "properties": {
+                         "name": {"type": "string"},
+                         "quantity": {"type": "number",
+                                      "description": "the measured/known amount"}},
+                      "required": ["name", "quantity"]},
+                     "Correct a lot to a measured amount (e.g. after weighing a bin). "
+                     "Sets an exact quantity; reversible."),
+    "move_stock": (h_move_stock,
+                   {"type": "object", "properties": {
+                       "name": {"type": "string"}, "location": {"type": "string"}},
+                    "required": ["name", "location"]},
+                   "Move a lot to another location (e.g. a thawed portion to the fridge)."),
+    "split_stock": (h_split_stock,
+                    {"type": "object", "properties": {
+                        "name": {"type": "string"}, "quantity": {"type": "number"},
+                        "location": {"type": "string"}},
+                     "required": ["name", "quantity"]},
+                    "Split an amount off a lot into a new position (e.g. portioning). "
+                    "Conserves the total; reversible."),
     "add_to_shopping_list": (h_add_to_shopping_list,
                              {"type": "object", "properties": {
                                  "name": {"type": "string"},
@@ -386,8 +441,9 @@ TOOLS = {
 
 
 # Tools that change data (surfaced in the chat UI with an Undo control).
-_MUTATING = {"add_stock", "update_stock", "delete_stock",
-             "record_consumption", "open_stock", "add_to_shopping_list"}
+_MUTATING = {"add_stock", "update_stock", "delete_stock", "record_consumption",
+             "open_stock", "adjust_stock", "move_stock", "split_stock",
+             "add_to_shopping_list"}
 _READONLY_LABELS = {
     "do_i_have": "Checked stock", "whats_in_stock": "Listed stock",
     "expiring_soon": "Checked what's expiring", "grouped_stock": "Grouped stock",

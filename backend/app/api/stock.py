@@ -357,6 +357,114 @@ def unconsume(lot_id):
     return jsonify(stock_out(s))
 
 
+@bp.post("/stock/<lot_id>/adjust")
+@login_required
+def adjust(lot_id):
+    """Correct a lot to a measured amount (e.g. estimated 2 kg → measured 1.6 kg).
+    Body: {quantity, quantityKind?, reason?}. Reversible via the ledger."""
+    s = _get(lot_id)
+    data = request.get_json(force=True) or {}
+    if data.get("quantity") is None:
+        return jsonify({"error": "quantity required"}), 422
+    res = inventory.adjust_lot(
+        s, new_quantity=data["quantity"],
+        quantity_kind=(data.get("quantityKind") or "exact"), reason=data.get("reason", ""),
+        actor_user_id=current_user().id, source_app=data.get("sourceApp", "web"),
+        idempotency_key=data.get("idempotencyKey"))
+    return jsonify({**stock_out(res.lot), "eventId": res.event.id if res.event else None})
+
+
+@bp.post("/stock/<lot_id>/move")
+@login_required
+def move(lot_id):
+    """Move a whole lot to another location. Body: {locationId}. Reversible."""
+    s = _get(lot_id)
+    data = request.get_json(force=True) or {}
+    if not _valid_location(s.group_id, data.get("locationId")):
+        return jsonify({"error": "unknown location"}), 422
+    res = inventory.move_lot(s, location_id=data.get("locationId") or None,
+                             actor_user_id=current_user().id,
+                             source_app=data.get("sourceApp", "web"),
+                             idempotency_key=data.get("idempotencyKey"))
+    return jsonify({**stock_out(res.lot), "eventId": res.event.id if res.event else None})
+
+
+@bp.post("/stock/<lot_id>/split")
+@login_required
+def split(lot_id):
+    """Split some off a lot into a new position (conserves total). Body:
+    {quantity, locationId?, packageState?}. Reversible (re-merges)."""
+    s = _get(lot_id)
+    data = request.get_json(force=True) or {}
+    if not _valid_location(s.group_id, data.get("locationId")):
+        return jsonify({"error": "unknown location"}), 422
+    try:
+        res = inventory.split_lot(
+            s, amount=data.get("quantity"), location_id=data.get("locationId") or None,
+            package_state=data.get("packageState"), actor_user_id=current_user().id,
+            source_app=data.get("sourceApp", "web"),
+            idempotency_key=data.get("idempotencyKey"))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 422
+    return jsonify({"source": stock_out(res.lot), "new": stock_out(res.extra["newLot"]),
+                    "eventId": res.event.id if res.event else None}), 201
+
+
+@bp.post("/stock/merge")
+@login_required
+def merge():
+    """Merge one lot into another (same product + unit; conserves total). Body:
+    {srcId, dstId}. Reversible."""
+    data = request.get_json(force=True) or {}
+    src = _get(data.get("srcId") or "")
+    dst = _get(data.get("dstId") or "")
+    try:
+        res = inventory.merge_lots(src, dst, actor_user_id=current_user().id,
+                                   source_app=data.get("sourceApp", "web"),
+                                   idempotency_key=data.get("idempotencyKey"))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 422
+    return jsonify({**stock_out(res.lot), "eventId": res.event.id if res.event else None})
+
+
+@bp.post("/stock/consume")
+@login_required
+def consume_by_product():
+    """Consume an amount of a PRODUCT, drawing across its lots by an explicit
+    selection policy (default: prefer-open, then FEFO) and spilling to the next lot
+    when one runs out. Body: {productId | name, quantity, outcome?, policy?}.
+    Returns each lot's resulting event so every draw is independently reversible."""
+    from ..services.inventory import selection
+    gid = current_group().id
+    data = request.get_json(force=True) or {}
+    pid = data.get("productId")
+    product = None
+    if pid:
+        product = db.session.get(Product, pid)
+        if product and product.group_id != gid:
+            product = None
+    if not product and data.get("name"):
+        product = (db.session.query(Product)
+                   .filter_by(group_id=gid, name=data["name"].strip()).first())
+    if not product:
+        return jsonify({"error": "productId or a known product name is required"}), 404
+    if data.get("quantity") is None:
+        return jsonify({"error": "quantity required"}), 422
+
+    policy = data.get("policy") or selection.PREFER_OPEN_FEFO
+    lots = [s for s in product.stock if not s.finished]
+    picks, shortfall = selection.plan_consumption(lots, data["quantity"], policy)
+    results = []
+    for p in picks:
+        res = inventory.consume_lot(
+            p.lot, amount=p.take, outcome=data.get("outcome"),
+            actor_user_id=current_user().id, source_app=data.get("sourceApp", "web"))
+        results.append({"lot": stock_out(res.lot), "amount": p.take,
+                        "eventId": res.event.id if res.event else None})
+    return jsonify({"consumed": round(sum(p.take for p in picks), 4),
+                    "shortfall": shortfall, "policy": policy, "draws": results})
+
+
 @bp.get("/inventory/events")
 @login_required
 def list_events():

@@ -50,6 +50,7 @@ class Group(IDMixin, TimestampMixin, db.Model):
     tokens = relationship("ApiToken", back_populates="group", cascade="all, delete-orphan")
     settings = relationship("Setting", back_populates="group", cascade="all, delete-orphan")
     events = relationship("InventoryEvent", back_populates="group", cascade="all, delete-orphan")
+    acquisition_lots = relationship("AcquisitionLot", cascade="all, delete-orphan")
 
 
 class User(IDMixin, TimestampMixin, db.Model):
@@ -189,9 +190,36 @@ EVENT_TYPES = (
 )
 
 
+class AcquisitionLot(IDMixin, TimestampMixin, db.Model):
+    """A batch acquired or produced together — one purchase, one cooking batch, one
+    farm box, one butchering session. Separated from physical placement so a single
+    acquisition can live as several positions (5 lb of chicken → 2 lb fridge + 3
+    freezer portions) while keeping its own date/source/cost/lot facts.
+    See docs/stock-redesign/DESIGN.md §4.5."""
+    __tablename__ = "acquisition_lots"
+    product_id: Mapped[str] = mapped_column(String(36), ForeignKey("products.id"))
+    acquired_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    source: Mapped[str] = mapped_column(String(64), default="")        # store/butcher/farm/cooked
+    receipt_ref: Mapped[str] = mapped_column(String(128), default="")
+    original_quantity: Mapped[float] = mapped_column(Float, nullable=True)
+    unit: Mapped[str] = mapped_column(String(32), default="count")
+    cost: Mapped[float] = mapped_column(Float, nullable=True)          # money-as-float; Numeric TODO
+    currency: Mapped[str] = mapped_column(String(8), default="")
+    lot_code: Mapped[str] = mapped_column(String(64), default="")
+    provenance: Mapped[str] = mapped_column(String(64), default="manual")
+    # Lineage: the acquisition(s) this one was produced FROM (cooking/portioning).
+    derived_from: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_by: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
+    group_id: Mapped[str] = mapped_column(String(36), ForeignKey("groups.id"), index=True)
+    positions = relationship("StockLot", back_populates="acquisition_lot")
+
+
 class StockLot(IDMixin, TimestampMixin, db.Model):
     __tablename__ = "stock_lots"
     product_id: Mapped[str] = mapped_column(String(36), ForeignKey("products.id"))
+    acquisition_lot_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("acquisition_lots.id"), nullable=True, index=True)
+    acquisition_lot = relationship("AcquisitionLot", back_populates="positions")
     location_id: Mapped[str] = mapped_column(String(36), ForeignKey("locations.id"), nullable=True)
     quantity: Mapped[float] = mapped_column(Float, default=1)
     unit: Mapped[str] = mapped_column(String(32), default="count")
@@ -347,5 +375,5 @@ __all__ = [
     "StockLot", "STORAGE_METHODS", "FRESHNESS_LEVELS", "LIFECYCLE_STATES", "OUTCOMES",
     "GOOD_OUTCOMES", "LOSS_OUTCOMES", "PACKAGE_STATES", "QUANTITY_KINDS", "EVENT_TYPES",
     "ShelfLifeProfile", "ShoppingItem", "ConsumptionEvent", "PlannedItem", "Setting",
-    "InventoryEvent",
+    "InventoryEvent", "AcquisitionLot",
 ]

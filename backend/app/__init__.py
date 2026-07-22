@@ -70,6 +70,7 @@ def _ensure_columns():
             "quantity_kind": "VARCHAR(16) DEFAULT 'exact'",
             "provenance": "VARCHAR(64) DEFAULT 'manual'",
             "confidence": "FLOAT",
+            "acquisition_lot_id": "VARCHAR(36)",
         },
         "consumption_events": {
             "outcome": "VARCHAR(16) DEFAULT 'eaten'",
@@ -114,6 +115,31 @@ def _ensure_columns():
     # provenance in the new inventory-event ledger. Idempotent + no-op on fresh DBs.
     if "stock_lots" in existing_tables and "inventory_events" in existing_tables:
         _backfill_inventory_events()
+    if "stock_lots" in existing_tables and "acquisition_lots" in existing_tables:
+        _backfill_acquisition_lots()
+
+
+def _backfill_acquisition_lots():
+    """Give every position that lacks one an AcquisitionLot from its purchase facts.
+    Runs once per position (skips lots that already link one), and self-quiesces:
+    when no unlinked lots remain it does nothing. New command-path adds link their
+    own acquisition lot, so this mainly catches legacy + bulk/import lots."""
+    from .models import StockLot, AcquisitionLot
+    unlinked = (db.session.query(StockLot)
+                .filter(StockLot.acquisition_lot_id.is_(None)).all())
+    if not unlinked:
+        return
+    for lot in unlinked:
+        acq = AcquisitionLot(
+            product_id=lot.product_id, acquired_at=lot.purchase_date, source=lot.source,
+            original_quantity=lot.quantity, unit=lot.unit, cost=lot.cost,
+            lot_code=lot.lot_code, provenance=lot.provenance or "migration",
+            created_by=lot.created_by, group_id=lot.group_id)
+        db.session.add(acq)
+        db.session.flush()
+        lot.acquisition_lot_id = acq.id
+    db.session.commit()
+    _LOGGER.info("stock redesign: linked %d positions to acquisition lots", len(unlinked))
 
 
 def _backfill_inventory_events():

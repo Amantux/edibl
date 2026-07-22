@@ -122,7 +122,20 @@ def stock_out(s):
         "expiryStatus": expiry_status(s.expiry_date),
         "cost": s.cost, "source": s.source, "lotCode": s.lot_code,
         "finished": s.finished, "notes": s.notes, "attrs": s.attrs or {},
+        "acquisitionLotId": getattr(s, "acquisition_lot_id", None),
+        "acquisition": acquisition_out(s.acquisition_lot)
+        if getattr(s, "acquisition_lot", None) else None,
         "createdAt": iso(s.created_at),
+    }
+
+
+def acquisition_out(a):
+    """The batch a position came from — its purchase/production facts + lineage."""
+    return {
+        "id": a.id, "source": a.source, "acquiredAt": iso(a.acquired_at),
+        "originalQuantity": a.original_quantity, "unit": a.unit,
+        "cost": a.cost, "currency": a.currency, "lotCode": a.lot_code,
+        "provenance": a.provenance, "derivedFrom": a.derived_from or {},
     }
 
 

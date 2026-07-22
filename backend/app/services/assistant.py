@@ -29,7 +29,7 @@ from ..models import (StockLot, Product, ShoppingItem, ConsumptionEvent,
                       InventoryEvent, utcnow, STORAGE_METHODS, OUTCOMES)
 from ..services.estimation import estimate_expiry, product_insights, waste_insights
 from ..services.inventory import (add_lot, consume_lot, open_lot, reverse_event,
-                                  adjust_lot, move_lot, split_lot)
+                                  adjust_lot, move_lot, split_lot, freeze_lot, thaw_lot)
 from ..schemas.serializers import iso
 
 _LOGGER = logging.getLogger("edibl.assistant")
@@ -269,6 +269,24 @@ def h_open_stock(gid, name):
     return res.summary + ".", res.undo
 
 
+def h_freeze_stock(gid, name):
+    """Freeze the soonest-to-expire matching lot (extends shelf life)."""
+    lots = _match_lots(gid, name)
+    if not lots:
+        return f"No stock matching '{name}' to freeze."
+    res = freeze_lot(lots[0], actor_user_id=None, source_app="assistant")
+    return res.summary + ".", res.undo
+
+
+def h_thaw_stock(gid, name):
+    """Thaw the soonest-to-expire matching lot (shortens shelf life)."""
+    lots = _match_lots(gid, name)
+    if not lots:
+        return f"No stock matching '{name}' to thaw."
+    res = thaw_lot(lots[0], actor_user_id=None, source_app="assistant")
+    return res.summary + ".", res.undo
+
+
 def h_adjust_stock(gid, name, quantity):
     """Correct the soonest-to-expire matching lot to a measured amount."""
     lots = _match_lots(gid, name)
@@ -423,6 +441,14 @@ TOOLS = {
                      "required": ["name", "quantity"]},
                     "Split an amount off a lot into a new position (e.g. portioning). "
                     "Conserves the total; reversible."),
+    "freeze_stock": (h_freeze_stock,
+                     {"type": "object", "properties": {"name": {"type": "string"}},
+                      "required": ["name"]},
+                     "Freeze a lot — extends its shelf life; records the freeze date."),
+    "thaw_stock": (h_thaw_stock,
+                   {"type": "object", "properties": {"name": {"type": "string"}},
+                    "required": ["name"]},
+                   "Thaw a frozen lot — shortens shelf life; records the thaw date."),
     "add_to_shopping_list": (h_add_to_shopping_list,
                              {"type": "object", "properties": {
                                  "name": {"type": "string"},
@@ -443,7 +469,7 @@ TOOLS = {
 # Tools that change data (surfaced in the chat UI with an Undo control).
 _MUTATING = {"add_stock", "update_stock", "delete_stock", "record_consumption",
              "open_stock", "adjust_stock", "move_stock", "split_stock",
-             "add_to_shopping_list"}
+             "freeze_stock", "thaw_stock", "add_to_shopping_list"}
 _READONLY_LABELS = {
     "do_i_have": "Checked stock", "whats_in_stock": "Listed stock",
     "expiring_soon": "Checked what's expiring", "grouped_stock": "Grouped stock",

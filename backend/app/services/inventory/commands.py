@@ -20,12 +20,13 @@ from typing import Optional
 from sqlalchemy.exc import IntegrityError
 
 from ...extensions import db
-from ...models import (StockLot, ConsumptionEvent, InventoryEvent, utcnow,
-                       gen_uuid, OUTCOMES, LOSS_OUTCOMES)
+from ...models import (StockLot, ConsumptionEvent, InventoryEvent, AcquisitionLot,
+                       utcnow, gen_uuid, OUTCOMES, LOSS_OUTCOMES)
 
 # Event types a reversal knows how to compensate. Reversing anything else (add,
 # import, or a reverse itself) is rejected rather than silently no-op'd.
-REVERSIBLE_TYPES = frozenset({"consume", "open", "adjust", "move", "split", "merge"})
+REVERSIBLE_TYPES = frozenset({"consume", "open", "adjust", "move", "split", "merge",
+                              "freeze", "thaw"})
 _NUMERIC_KINDS = frozenset({"exact", "estimated", "approximate"})
 
 
@@ -92,6 +93,15 @@ def _commit_or_replay(replay):
         raise
 
 
+def _parse_iso(v):
+    if not v:
+        return None
+    try:
+        return datetime.fromisoformat(str(v).replace("Z", "").replace("+00:00", ""))
+    except ValueError:
+        return None
+
+
 def _days_kept(purchase) -> Optional[int]:
     if not purchase:
         return None
@@ -106,6 +116,24 @@ def _label(lot: StockLot) -> str:
 
 def _numeric(lot: StockLot) -> bool:
     return (getattr(lot, "quantity_kind", "exact") or "exact") in _NUMERIC_KINDS
+
+
+def _ensure_acquisition(lot: StockLot, *, source=None, derived_from=None) -> AcquisitionLot:
+    """Create the acquisition batch a position belongs to, if it has none. One
+    acquisition can span several positions (split), so callers pass an existing
+    id to share it. Returns the linked AcquisitionLot."""
+    if lot.acquisition_lot_id:
+        return db.session.get(AcquisitionLot, lot.acquisition_lot_id)
+    acq = AcquisitionLot(
+        product_id=lot.product_id, acquired_at=lot.purchase_date,
+        source=(source if source is not None else lot.source),
+        original_quantity=lot.quantity, unit=lot.unit, cost=lot.cost,
+        lot_code=lot.lot_code, provenance=lot.provenance or "manual",
+        derived_from=derived_from or {}, created_by=lot.created_by, group_id=lot.group_id)
+    db.session.add(acq)
+    db.session.flush()
+    lot.acquisition_lot_id = acq.id
+    return acq
 
 
 # --------------------------------------------------------------------------- #
@@ -133,6 +161,7 @@ def add_lot(lot: StockLot, *, actor_user_id=None, source_app="web",
     lot.confidence = confidence
     db.session.add(lot)
     db.session.flush()
+    _ensure_acquisition(lot)  # every command-path add belongs to an acquisition batch
     summary = f"Added {_label(lot)}"
     # A non-numeric (presence/unknown) add carries NO quantity delta — never a fake 1.
     delta = lot.quantity if _numeric(lot) else None
@@ -325,6 +354,16 @@ def reverse_event(event: InventoryEvent, *, actor_user_id=None, source_app="web"
             new_lot.quantity = 0
             new_lot.finished = True
         summary = "Undid the split"
+    elif event.type in ("freeze", "thaw"):
+        changed = event.state_changes or {}
+        if lot is not None:
+            prev_storage = changed.get("storage_method", [None])[0]
+            if prev_storage is not None:
+                lot.storage_method = prev_storage
+            if "expiry_date" in changed:
+                lot.expiry_date = _parse_iso(changed["expiry_date"][0])
+                lot.expiry_estimated = bool(changed.get("expiry_estimated", [False, False])[0])
+        summary = "Reverted the preservation change"
     elif event.type == "merge":
         # Undo a merge = pull the merged amount back out of the destination.
         moved = float((event.state_changes or {}).get("moved", 0) or 0)
@@ -453,7 +492,8 @@ def split_lot(lot: StockLot, *, amount, location_id=None, package_state=None,
         state=lot.state, purchase_date=lot.purchase_date, opened_date=lot.opened_date,
         expiry_date=lot.expiry_date, expiry_estimated=lot.expiry_estimated,
         source=lot.source, provenance="split", attrs=dict(lot.attrs or {}), group_id=gid,
-        created_by=lot.created_by)
+        created_by=lot.created_by,
+        acquisition_lot_id=lot.acquisition_lot_id)  # a split shares the acquisition batch
     db.session.add(new_lot)
     db.session.flush()
     name = lot.product.name if lot.product else "item"
@@ -583,13 +623,14 @@ def reconcile_location(gid, *, location_id=None, counts=None, missing=None,
     return ReconcileResult(batch, summary, counted, removed, added, ids)
 
 
-def reverse_reconciliation(gid, batch_id, *, actor_user_id=None,
-                           source_app="web") -> ReconcileResult:
-    """Undo a whole reconciliation batch in one transaction (compensating events,
-    newest first). Idempotent: events already reversed are skipped."""
+def reverse_reconciliation(gid, batch_id, *, key="reconcile_batch",
+                           actor_user_id=None, source_app="web") -> ReconcileResult:
+    """Undo a whole batch operation in one transaction (compensating events, newest
+    first). Idempotent: events already reversed are skipped. `key` selects the batch
+    tag — "reconcile_batch" for reconciliations, "transform_batch" for transforms."""
     events = (db.session.query(InventoryEvent)
               .filter_by(group_id=gid)
-              .filter(InventoryEvent.state_changes["reconcile_batch"].as_string() == batch_id)
+              .filter(InventoryEvent.state_changes[key].as_string() == batch_id)
               .order_by(InventoryEvent.at.desc()).all())
     undone = []
     for ev in events:
@@ -625,3 +666,126 @@ def reverse_reconciliation(gid, batch_id, *, actor_user_id=None,
     db.session.commit()
     return ReconcileResult(batch_id, f"Undid reconciliation ({len(undone)} changes)",
                            0, 0, 0, undone)
+
+
+# --------------------------------------------------------------------------- #
+# freeze / thaw — preservation changes that recompute the effective expiry
+# --------------------------------------------------------------------------- #
+def _represerve(lot, storage, event_type, summary_verb, *, actor_user_id, source_app,
+                idempotency_key, attr_date_key):
+    gid = lot.group_id
+
+    def replay():
+        prior = _existing_event(gid, idempotency_key)
+        if prior is None:
+            return None
+        return CommandResult(lot, prior, prior.summary, {}, idempotent_replay=True)
+
+    replayed = replay()
+    if replayed is not None:
+        return replayed
+
+    from ...services.estimation import estimate_expiry
+    prev_storage = lot.storage_method
+    prev_expiry = lot.expiry_date
+    prev_est = lot.expiry_estimated
+    lot.storage_method = storage
+    # Recompute the effective shelf life for the new preservation state.
+    base = lot.opened_date or lot.purchase_date or utcnow()
+    product = lot.product
+    new_expiry, estimated = estimate_expiry(
+        base, product.category if product else "other", storage,
+        product.shelf_life_days if product else None,
+        group_id=gid, product_id=lot.product_id)
+    lot.expiry_date = new_expiry
+    lot.expiry_estimated = estimated
+    lot.attrs = {**(lot.attrs or {}), attr_date_key: utcnow().isoformat()}
+    name = product.name if product else "item"
+    summary = f"{summary_verb} {name}"
+    from ...schemas.serializers import iso as _iso
+    ev = _emit(gid, event_type, actor_user_id=actor_user_id, source_app=source_app,
+               summary=summary, src=lot.id,
+               state_changes={"storage_method": [prev_storage, storage],
+                              "expiry_date": [_iso(prev_expiry), _iso(new_expiry)],
+                              "expiry_estimated": [prev_est, estimated]},
+               idempotency_key=idempotency_key)
+    collision = _commit_or_replay(replay)
+    if collision is not None:
+        return collision
+    return CommandResult(lot, ev, summary, {})
+
+
+def freeze_lot(lot, *, actor_user_id=None, source_app="web", idempotency_key=None):
+    """Freeze a position: extends the effective shelf life; records the freeze date."""
+    return _represerve(lot, "frozen", "freeze", "Froze", actor_user_id=actor_user_id,
+                       source_app=source_app, idempotency_key=idempotency_key,
+                       attr_date_key="freezeDate")
+
+
+def thaw_lot(lot, *, actor_user_id=None, source_app="web", idempotency_key=None):
+    """Thaw a position: shortens the effective shelf life; records the thaw date."""
+    return _represerve(lot, "refrigerated", "thaw", "Thawed", actor_user_id=actor_user_id,
+                       source_app=source_app, idempotency_key=idempotency_key,
+                       attr_date_key="thawDate")
+
+
+# --------------------------------------------------------------------------- #
+# transform — consume source position(s) → produce new position(s), with lineage
+# --------------------------------------------------------------------------- #
+@dataclass
+class TransformResult:
+    batch_id: str
+    summary: str
+    produced: list          # produced StockLots
+    event_ids: list
+
+
+def transform(gid, *, sources, products, actor_user_id=None, source_app="web"):
+    """A kitchen transformation in ONE transaction: draw from source positions and
+    create new positions (cooked/leftover/portioned), preserving lineage — the
+    produced acquisition lot records which source acquisitions it came from.
+      * sources  — [(lot, amount)]   consumed with outcome=other (a transform)
+      * products — [StockLot]         freshly built, not yet added
+    Batch-tagged so the whole transformation reverses as one operation. Lineage is
+    advisory: a leftover with no declared sources is still valid."""
+    batch = gen_uuid()
+    tag = {"transform_batch": batch}
+    ids = []
+    source_acq = []
+
+    for lot, amount in (sources or []):
+        amt = min(round(float(amount), 4), lot.quantity or 0)
+        if amt <= 0:
+            continue
+        if lot.acquisition_lot_id:
+            source_acq.append(lot.acquisition_lot_id)
+        lot.quantity = round((lot.quantity or 0) - amt, 4)
+        if lot.quantity <= 0:
+            lot.finished = True
+            lot.quantity = 0
+        ev = _emit(gid, "consume", actor_user_id=actor_user_id, source_app=source_app,
+                   summary=f"Used {amt} {lot.unit} of "
+                           f"{lot.product.name if lot.product else 'item'} (transform)",
+                   src=lot.id, delta_value=-Decimal(str(amt)), delta_unit=lot.unit,
+                   reason="other", state_changes={**tag})
+        ids.append(ev.id)
+
+    produced = []
+    for lot in (products or []):
+        db.session.add(lot)
+        db.session.flush()
+        acq = _ensure_acquisition(lot, source="cooked",
+                                  derived_from={"acquisitions": source_acq})
+        acq.provenance = "transform"
+        numeric = (lot.quantity_kind or "exact") in _NUMERIC_KINDS
+        ev = _emit(gid, "add", actor_user_id=actor_user_id, source_app=source_app,
+                   summary=f"Made {_label(lot)}", dst=lot.id,
+                   delta_value=(lot.quantity if numeric else None), delta_unit=lot.unit,
+                   provenance="transform", state_changes={**tag})
+        ids.append(ev.id)
+        produced.append(lot)
+
+    summary = (f"Transformed {len(sources or [])} source(s) into "
+               f"{len(produced)} item(s)")
+    db.session.commit()
+    return TransformResult(batch, summary, produced, ids)

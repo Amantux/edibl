@@ -325,6 +325,45 @@ def use_stock(name: str, quantity: float, outcome: str = "eaten") -> str:
 
 
 @mcp.tool()
+def freeze_stock(name: str) -> str:
+    """Freeze the soonest-to-expire lot matching `name` — extends its shelf life and
+    records the freeze date. Reversible."""
+    lot = _find_lot(name)
+    if not lot:
+        return f"No stock matching '{name}'."
+    _post(f"/stock/{lot['id']}/freeze", {})
+    return f"Froze {lot['product']['name']}."
+
+
+@mcp.tool()
+def thaw_stock(name: str) -> str:
+    """Thaw the soonest-to-expire frozen lot matching `name` — shortens shelf life
+    and records the thaw date. Reversible."""
+    lot = _find_lot(name)
+    if not lot:
+        return f"No stock matching '{name}'."
+    _post(f"/stock/{lot['id']}/thaw", {})
+    return f"Thawed {lot['product']['name']}."
+
+
+@mcp.tool()
+def make_from(source_name: str, source_quantity: float, product_name: str,
+              product_quantity: float = 1, product_unit: str = "portion",
+              category: str = "other") -> str:
+    """Turn stock into other stock, preserving lineage (e.g. 'made chicken stock
+    from the carcass', 'cooked 2 lb chicken into 4 servings'). Consumes
+    `source_quantity` of `source_name` and creates the product."""
+    src = _find_lot(source_name)
+    if not src:
+        return f"No stock matching '{source_name}'."
+    res = _post("/stock/transform", {
+        "sources": [{"lotId": src["id"], "quantity": source_quantity}],
+        "products": [{"name": product_name, "quantity": product_quantity,
+                      "unit": product_unit, "category": category}]})
+    return res.get("summary", f"Made {product_name}.")
+
+
+@mcp.tool()
 def bulk_add_stock(items: list, storage_method: str = "refrigerated",
                    category: str = "other", location: str = "", source: str = "") -> str:
     """Add many items at once (a grocery haul, a farm box, a butchered animal).

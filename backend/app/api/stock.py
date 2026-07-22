@@ -465,6 +465,69 @@ def consume_by_product():
                     "shortfall": shortfall, "policy": policy, "draws": results})
 
 
+@bp.post("/stock/<lot_id>/freeze")
+@login_required
+def freeze(lot_id):
+    """Freeze a lot — extends the effective shelf life; records the freeze date."""
+    s = _get(lot_id)
+    data = request.get_json(silent=True) or {}
+    res = inventory.freeze_lot(s, actor_user_id=current_user().id,
+                               source_app=data.get("sourceApp", "web"),
+                               idempotency_key=data.get("idempotencyKey"))
+    return jsonify({**stock_out(res.lot), "eventId": res.event.id if res.event else None})
+
+
+@bp.post("/stock/<lot_id>/thaw")
+@login_required
+def thaw(lot_id):
+    """Thaw a lot — shortens the effective shelf life; records the thaw date."""
+    s = _get(lot_id)
+    data = request.get_json(silent=True) or {}
+    res = inventory.thaw_lot(s, actor_user_id=current_user().id,
+                             source_app=data.get("sourceApp", "web"),
+                             idempotency_key=data.get("idempotencyKey"))
+    return jsonify({**stock_out(res.lot), "eventId": res.event.id if res.event else None})
+
+
+@bp.post("/stock/transform")
+@login_required
+def transform():
+    """Cook / portion / turn stock into other stock, preserving lineage. Body:
+    {sources:[{lotId, quantity}], products:[{name, quantity, unit, category, ...}]}.
+    Consumes the sources and creates the products in one reversible batch."""
+    gid = current_group().id
+    data = request.get_json(force=True) or {}
+    sources = []
+    for src in (data.get("sources") or []):
+        lot = _get(src.get("lotId") or "")
+        if src.get("quantity") is not None:
+            sources.append((lot, src["quantity"]))
+    products = []
+    for prod in (data.get("products") or []):
+        p = _resolve_product(prod)
+        if p:
+            products.append(_build_lot({**prod, "provenance": "transform"}, p, gid))
+    if not products:
+        return jsonify({"error": "at least one product is required"}), 422
+    res = inventory.transform(gid, sources=sources, products=products,
+                              actor_user_id=current_user().id,
+                              source_app=data.get("sourceApp", "web"))
+    return jsonify({"batchId": res.batch_id, "summary": res.summary,
+                    "produced": [stock_out(p) for p in res.produced],
+                    "eventIds": res.event_ids}), 201
+
+
+@bp.post("/inventory/transformations/<batch_id>/reverse")
+@login_required
+def reverse_transformation(batch_id):
+    """Undo a whole transformation batch (restore sources, archive products)."""
+    res = inventory.reverse_reconciliation(
+        current_group().id, batch_id, key="transform_batch",
+        actor_user_id=current_user().id)
+    return jsonify({"batchId": res.batch_id, "summary": res.summary,
+                    "reversed": res.event_ids})
+
+
 @bp.post("/locations/<location_id>/reconcile")
 @login_required
 def reconcile(location_id):

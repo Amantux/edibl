@@ -29,6 +29,10 @@ def _apply(p, data):
         p.family = str(data.get("family") or data.get("group") or "").strip()
     if "defaultUnit" in data and data["defaultUnit"]:
         p.default_unit = data["defaultUnit"]
+    if "trackingMode" in data:
+        from ..models import TRACKING_MODES
+        tm = (data.get("trackingMode") or "").strip().lower()
+        p.tracking_mode = tm if tm in TRACKING_MODES else ""
     if "shelfLifeDays" in data:
         p.shelf_life_days = data["shelfLifeDays"] or None
 

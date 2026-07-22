@@ -465,6 +465,53 @@ def consume_by_product():
                     "shortfall": shortfall, "policy": policy, "draws": results})
 
 
+@bp.post("/locations/<location_id>/reconcile")
+@login_required
+def reconcile(location_id):
+    """Commit a location walk as ONE reversible operation. Body:
+    {counts:[{lotId,quantity}], missing:[lotId], additions:[{name,quantity,unit,…}]}.
+    Corrects counted lots, marks missing ones gone, and adds newly-found items —
+    all tagged with one batch id so the whole thing undoes together."""
+    gid = current_group().id
+    if not _valid_location(gid, location_id):
+        return jsonify({"error": "unknown location"}), 404
+    data = request.get_json(force=True) or {}
+
+    counts = []
+    for c in (data.get("counts") or []):
+        lot = _get(c.get("lotId") or "")
+        if c.get("quantity") is not None:
+            counts.append((lot, c["quantity"]))
+    missing = [_get(lid) for lid in (data.get("missing") or [])]
+
+    new_lots = []
+    for add in (data.get("additions") or []):
+        payload = {**add, "locationId": location_id}
+        product = _resolve_product(payload)
+        if not product:
+            continue
+        new_lots.append(_build_lot(payload, product, gid))
+
+    res = inventory.reconcile_location(
+        gid, location_id=location_id, counts=counts, missing=missing,
+        new_lots=new_lots, actor_user_id=current_user().id,
+        source_app=data.get("sourceApp", "web"))
+    return jsonify({"batchId": res.batch_id, "summary": res.summary,
+                    "counted": res.counted, "removed": res.removed,
+                    "added": res.added, "eventIds": res.event_ids})
+
+
+@bp.post("/inventory/reconciliations/<batch_id>/reverse")
+@login_required
+def reverse_reconciliation(batch_id):
+    """Undo an entire reconciliation batch in one operation."""
+    res = inventory.reverse_reconciliation(
+        current_group().id, batch_id, actor_user_id=current_user().id,
+        source_app="web")
+    return jsonify({"batchId": res.batch_id, "summary": res.summary,
+                    "reversed": res.event_ids})
+
+
 @bp.get("/inventory/events")
 @login_required
 def list_events():

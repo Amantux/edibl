@@ -21,7 +21,7 @@ from sqlalchemy.exc import IntegrityError
 
 from ...extensions import db
 from ...models import (StockLot, ConsumptionEvent, InventoryEvent, utcnow,
-                       OUTCOMES, LOSS_OUTCOMES)
+                       gen_uuid, OUTCOMES, LOSS_OUTCOMES)
 
 # Event types a reversal knows how to compensate. Reversing anything else (add,
 # import, or a reverse itself) is rejected rather than silently no-op'd.
@@ -505,3 +505,123 @@ def merge_lots(src: StockLot, dst: StockLot, *, actor_user_id=None, source_app="
     if collision is not None:
         return collision
     return CommandResult(dst, ev, summary, {"mergedFrom": src.id})
+
+
+# --------------------------------------------------------------------------- #
+# reconcile — a whole-location count committed as ONE reversible batch
+# --------------------------------------------------------------------------- #
+@dataclass
+class ReconcileResult:
+    batch_id: str
+    summary: str
+    counted: int
+    removed: int
+    added: int
+    event_ids: list
+
+
+def reconcile_location(gid, *, location_id=None, counts=None, missing=None,
+                       new_lots=None, actor_user_id=None, source_app="web") -> ReconcileResult:
+    """Apply a location walk in ONE transaction, tagged with a shared batch id so
+    the whole thing undoes as a single operation (reverse_reconciliation):
+      * counts   — [(lot, quantity)]  → correct each to the counted amount (adjust)
+      * missing  — [lot]              → mark gone (consume, outcome=discarded)
+      * new_lots — [StockLot]         → newly-discovered items (add), already built
+    Realistic periodic upkeep: you don't record every teaspoon; you reconcile."""
+    batch = gen_uuid()
+    tag = {"reconcile_batch": batch}
+    ids = []
+    counted = removed = added = 0
+
+    for lot, qty in (counts or []):
+        old = lot.quantity or 0
+        new = max(round(float(qty), 4), 0)
+        if new == round(old, 4):
+            continue
+        lot.quantity = new
+        lot.quantity_kind = "exact"
+        lot.finished = new <= 0
+        ev = _emit(gid, "adjust", actor_user_id=actor_user_id, source_app=source_app,
+                   summary=f"Counted {new} {lot.unit}", src=lot.id,
+                   delta_value=Decimal(str(new)) - Decimal(str(old)), delta_unit=lot.unit,
+                   state_changes={**tag, "quantity": [old, new]})
+        ids.append(ev.id)
+        counted += 1
+
+    for lot in (missing or []):
+        amt = lot.quantity or 0
+        if amt <= 0:
+            continue
+        ce = ConsumptionEvent(product_id=lot.product_id, quantity=amt, unit=lot.unit,
+                              reason="discarded", outcome="discarded", group_id=gid)
+        db.session.add(ce)
+        db.session.flush()
+        lot.quantity = 0
+        lot.finished = True
+        ev = _emit(gid, "consume", actor_user_id=actor_user_id, source_app=source_app,
+                   summary=f"Marked {lot.product.name if lot.product else 'item'} missing",
+                   src=lot.id, delta_value=-Decimal(str(amt)), delta_unit=lot.unit,
+                   reason="discarded",
+                   state_changes={**tag, "consumption_event_id": ce.id})
+        ids.append(ev.id)
+        removed += 1
+
+    for lot in (new_lots or []):
+        lot.provenance = lot.provenance or "reconcile"
+        db.session.add(lot)
+        db.session.flush()
+        numeric = (lot.quantity_kind or "exact") in _NUMERIC_KINDS
+        ev = _emit(gid, "add", actor_user_id=actor_user_id, source_app=source_app,
+                   summary=f"Found {_label(lot)}", dst=lot.id,
+                   delta_value=(lot.quantity if numeric else None), delta_unit=lot.unit,
+                   provenance="reconcile", state_changes=dict(tag))
+        ids.append(ev.id)
+        added += 1
+
+    summary = f"Reconciled: {counted} corrected, {removed} removed, {added} added"
+    db.session.commit()
+    return ReconcileResult(batch, summary, counted, removed, added, ids)
+
+
+def reverse_reconciliation(gid, batch_id, *, actor_user_id=None,
+                           source_app="web") -> ReconcileResult:
+    """Undo a whole reconciliation batch in one transaction (compensating events,
+    newest first). Idempotent: events already reversed are skipped."""
+    events = (db.session.query(InventoryEvent)
+              .filter_by(group_id=gid)
+              .filter(InventoryEvent.state_changes["reconcile_batch"].as_string() == batch_id)
+              .order_by(InventoryEvent.at.desc()).all())
+    undone = []
+    for ev in events:
+        if _reversal_of(ev.id) is not None:
+            continue  # already undone
+        lot = None
+        if ev.type == "adjust":
+            lot = db.session.get(StockLot, ev.src_position_id)
+            prev = (ev.state_changes or {}).get("quantity", [None])[0]
+            if lot is not None and prev is not None:
+                lot.quantity = round(float(prev), 4)
+                lot.finished = lot.quantity <= 0
+        elif ev.type == "consume":
+            lot = db.session.get(StockLot, ev.src_position_id)
+            amt = abs(float(ev.delta_value or 0))
+            if lot is not None:
+                lot.quantity = round((lot.quantity or 0) + amt, 4)
+                if lot.quantity > 0:
+                    lot.finished = False
+            ce_id = (ev.state_changes or {}).get("consumption_event_id")
+            ce = db.session.get(ConsumptionEvent, ce_id) if ce_id else None
+            if ce and ce.group_id == gid:
+                db.session.delete(ce)
+        elif ev.type == "add":
+            lot = db.session.get(StockLot, ev.dst_position_id)
+            if lot is not None:
+                lot.finished = True  # un-discover: archive the found lot
+                lot.quantity = 0
+        _emit(gid, "reverse", actor_user_id=actor_user_id, source_app=source_app,
+              summary=f"Undid reconcile {ev.type}", src=(lot.id if lot else None),
+              reversal_of=ev.id, state_changes={"reconcile_batch": batch_id})
+        undone.append(ev.id)
+    db.session.commit()
+    return ReconcileResult(batch_id, f"Undid reconciliation ({len(undone)} changes)",
+                           0, 0, 0, undone)

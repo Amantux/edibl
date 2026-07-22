@@ -74,10 +74,14 @@ def location_out(loc, with_counts=True):
 
 
 def product_out(p):
+    from ..services.tracking import effective_tracking_mode
     return {
         "id": p.id, "name": p.name, "brand": p.brand, "category": p.category,
         "family": p.family or "",
         "barcode": p.barcode, "defaultUnit": p.default_unit,
+        # Explicit tracking mode (may be "") plus the effective one the UI should use.
+        "trackingMode": getattr(p, "tracking_mode", "") or "",
+        "effectiveTrackingMode": effective_tracking_mode(p),
         "shelfLifeDays": p.shelf_life_days, "notes": p.notes,
         "createdAt": iso(p.created_at),
     }

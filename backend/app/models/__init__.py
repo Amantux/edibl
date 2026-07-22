@@ -123,6 +123,9 @@ CATEGORIES = (
     "wine", "spirits", "beer", "dry_goods", "condiment", "snack", "other",
 )
 UNITS = ("count", "g", "kg", "oz", "lb", "ml", "l", "pack", "bottle")
+# How much detail a product is tracked with. Chosen per item (defaulted by
+# category) so casual users can stay coarse and precise users can go fine-grained.
+TRACKING_MODES = ("presence", "level", "count", "measure", "package", "portions")
 
 
 class Product(IDMixin, TimestampMixin, db.Model):
@@ -135,6 +138,10 @@ class Product(IDMixin, TimestampMixin, db.Model):
     family: Mapped[str] = mapped_column(String(255), default="", index=True)
     barcode: Mapped[str] = mapped_column(String(64), default="", index=True)
     default_unit: Mapped[str] = mapped_column(String(32), default="count")
+    # How this product is normally tracked (TRACKING_MODES). "" = derive from
+    # category (see services.tracking.default_tracking_mode). Lets a spice track as
+    # "level", eggs as "count", meat as "measure" — user-changeable.
+    tracking_mode: Mapped[str] = mapped_column(String(16), default="")
     # Optional per-product override of the category shelf-life table (days).
     shelf_life_days: Mapped[int] = mapped_column(nullable=True)
     notes: Mapped[str] = mapped_column(Text, default="")
@@ -336,7 +343,7 @@ class InventoryEvent(IDMixin, db.Model):
 __all__ = [
     "db", "gen_uuid", "utcnow",
     "Group", "User", "ApiToken", "TOKEN_PREFIX", "generate_raw_token", "hash_token",
-    "Location", "LOCATION_KINDS", "Product", "CATEGORIES", "UNITS",
+    "Location", "LOCATION_KINDS", "Product", "CATEGORIES", "UNITS", "TRACKING_MODES",
     "StockLot", "STORAGE_METHODS", "FRESHNESS_LEVELS", "LIFECYCLE_STATES", "OUTCOMES",
     "GOOD_OUTCOMES", "LOSS_OUTCOMES", "PACKAGE_STATES", "QUANTITY_KINDS", "EVENT_TYPES",
     "ShelfLifeProfile", "ShoppingItem", "ConsumptionEvent", "PlannedItem", "Setting",

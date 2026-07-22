@@ -227,6 +227,28 @@ async function doConsume(outcome) {
 }
 // Open a package (orthogonal to using it) — turns a sealed carton into an open one.
 async function openPkg(s) { await api.post(`/stock/${s.id}/open`); await refresh() }
+// Correct amount — when a measured value differs from the tracked estimate.
+async function correctAmount(s) {
+  const v = prompt(`Correct amount for ${s.product?.name} (${s.unit}):`, s.quantity ?? '')
+  if (v === null || v === '') return
+  const res = await api.post(`/stock/${s.id}/adjust`, { quantity: Number(v), quantityKind: 'exact' })
+  if (res?.error) flash(res.error); else { flash('Corrected.'); await refresh() }
+}
+// Move a lot to another location (matched by name from the known locations).
+async function moveLot(s) {
+  const name = prompt(`Move ${s.product?.name} to which location?`, s.location?.name || '')
+  if (name === null) return
+  const loc = locations.value.find((l) => l.name.toLowerCase() === name.trim().toLowerCase())
+  if (!loc) { flash('No location by that name.'); return }
+  await api.post(`/stock/${s.id}/move`, { locationId: loc.id }); flash('Moved.'); await refresh()
+}
+// Split an amount off into a new position (e.g. portioning for the freezer).
+async function splitLot(s) {
+  const v = prompt(`Split how much off ${s.product?.name}? (${s.unit}, have ${s.quantity})`)
+  if (v === null || v === '') return
+  const res = await api.post(`/stock/${s.id}/split`, { quantity: Number(v) })
+  if (res?.error) flash(res.error); else { flash('Split off.'); await refresh() }
+}
 const lastUndo = ref(null)
 async function undoLast() {
   if (!lastUndo.value) return
@@ -297,6 +319,9 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
             <td style="text-align:right;white-space:nowrap">
               <button v-if="s.packageState === 'sealed'" class="ghost sm" @click="openPkg(s)">Open</button>
               <button class="secondary sm" @click="openConsume(s)">Use</button>
+              <button class="ghost sm" @click="correctAmount(s)" title="Correct amount">Correct</button>
+              <button class="ghost sm" @click="splitLot(s)" title="Split off a portion">Split</button>
+              <button class="ghost sm" @click="moveLot(s)" title="Move to another location">Move</button>
               <button class="ghost sm" @click="del(s)">✕</button></td>
           </tr>
         </template>

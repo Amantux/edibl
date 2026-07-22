@@ -62,7 +62,8 @@ def _ensure_columns():
 
     wanted = {
         "users": {"ha_user_id": "VARCHAR(255)", "is_owner": "BOOLEAN DEFAULT 0"},
-        "products": {"family": "VARCHAR(255) DEFAULT ''"},
+        "products": {"family": "VARCHAR(255) DEFAULT ''",
+                     "tracking_mode": "VARCHAR(16) DEFAULT ''"},
         "stock_lots": {
             "state": "VARCHAR(32) DEFAULT ''", "created_by": "VARCHAR(36)",
             "package_state": "VARCHAR(24) DEFAULT 'sealed'",

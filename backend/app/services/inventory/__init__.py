@@ -8,5 +8,6 @@ Every command is transactional, idempotency-keyed, appends an immutable
 """
 from .commands import (  # noqa: F401
     add_lot, open_lot, consume_lot, reverse_event, adjust_lot, move_lot,
-    split_lot, merge_lots, CommandResult, UnsupportedReversal,
+    split_lot, merge_lots, reconcile_location, reverse_reconciliation,
+    CommandResult, ReconcileResult, UnsupportedReversal,
 )

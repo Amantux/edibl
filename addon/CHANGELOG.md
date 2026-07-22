@@ -3,6 +3,13 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.5.18
+
+- **"Running low" in one tap.** Any stock item's ⋯ menu now has **Running low — add
+  to list**, which drops it onto the grocery list linked to the product and tagged
+  **low**. The shopping list shows that tag (and the note), so a quick delivery order
+  can prioritise what you're actually short on.
+
 ## 1.5.17
 
 A redesigned stock experience, an easier myMeal connection, and a nicer chat.

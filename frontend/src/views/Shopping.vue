@@ -9,6 +9,9 @@ const exportText = ref('')
 async function load() { items.value = await api.get('/shopping') }
 onMounted(load)
 
+// Friendly label for the source "tag" on a list item.
+function tagLabel(src) { return src === 'low_stock' ? 'low' : src.replace('_', ' ') }
+
 async function add() {
   if (!newItem.value.name.trim()) return
   await api.post('/shopping', { ...newItem.value })
@@ -44,7 +47,8 @@ async function copyForDelivery() {
       <tbody>
         <tr v-for="i in items" :key="i.id">
           <td><strong>{{ i.name }}</strong> <span class="muted">{{ i.quantity }} {{ i.unit }}</span>
-            <span v-if="i.source!=='manual'" class="chip" style="margin-left:6px">{{ i.source.replace('_',' ') }}</span></td>
+            <span v-if="i.source!=='manual'" class="chip" :class="{low: i.source==='low_stock'}" style="margin-left:6px">{{ tagLabel(i.source) }}</span>
+            <span v-if="i.note" class="muted" style="font-size:.78rem"> · {{ i.note }}</span></td>
           <td style="text-align:right;white-space:nowrap">
             <button class="secondary sm" @click="purchased(i)">Got it</button>
             <button class="ghost sm" @click="remove(i)">✕</button></td>
@@ -60,3 +64,7 @@ async function copyForDelivery() {
     <pre class="export">{{ exportText }}</pre>
   </div>
 </template>
+
+<style scoped>
+.chip.low { background: rgba(217,119,6,.14); color: var(--warning); }
+</style>

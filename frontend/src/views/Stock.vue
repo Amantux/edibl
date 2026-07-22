@@ -317,6 +317,15 @@ async function sheetDelete() {
   if (!s || !confirm(`Remove ${s.product?.name}? (No consumption logged — use "Use" for that.)`)) return
   await api.del('/stock/' + s.id); closeSheet(); await refresh()
 }
+// "Running low" — note it on the grocery list, tagged low, linked to the product.
+async function markLow(s) {
+  try {
+    await api.post('/shopping', { name: s.product?.name || 'item', quantity: 1,
+      unit: s.unit || 'count', source: 'low_stock', productId: s.product?.id, note: 'Running low' })
+    flash(`Noted “${s.product?.name}” as low — added to the shopping list.`)
+    closeSheet()
+  } catch (e) { flash(e.message || 'Could not add to list.') }
+}
 
 // ── Reconcile a location: walk it, correct counts, mark missing, add found ───
 const reconcileFor = ref(null)          // location object
@@ -545,6 +554,7 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
         <button v-if="sheetFor.storageMethod!=='frozen'" class="opt" @click="freezeLot(sheetFor);closeSheet()"><span class="em">❄️</span> Freeze</button>
         <button v-else class="opt" @click="thawLot(sheetFor);closeSheet()"><span class="em">💧</span> Thaw</button>
         <button v-if="sheetFor.packageState==='sealed'" class="opt" @click="openPkg(sheetFor);closeSheet()"><span class="em">📭</span> Mark opened</button>
+        <button class="opt" @click="markLow(sheetFor)"><span class="em">🛒</span> Running low — add to list</button>
         <div class="divider"></div>
         <button class="opt danger-opt" @click="sheetDelete"><span class="em">🗑️</span> Remove (no history)</button>
       </template>

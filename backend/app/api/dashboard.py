@@ -21,8 +21,11 @@ def dashboard():
     buckets = {"fresh": 0, "expiring": 0, "expired": 0, "unknown": 0}
     by_category, by_location = {}, {}
     total_value = 0.0
+    open_pkgs = 0
     for s in lots:
         buckets[expiry_status(s.expiry_date)] += 1
+        if (s.package_state or "sealed") == "opened":
+            open_pkgs += 1
         cat = s.product.category if s.product else "other"
         by_category[cat] = by_category.get(cat, 0) + 1
         loc = s.location.name if s.location else "Unassigned"
@@ -38,6 +41,7 @@ def dashboard():
             "products": db.session.query(Product).filter_by(group_id=gid).count(),
             "locations": db.session.query(Location).filter_by(group_id=gid).count(),
             "value": round(total_value, 2),
+            "open": open_pkgs,
             **buckets,
         },
         "byCategory": by_category, "byLocation": by_location,

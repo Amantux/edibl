@@ -3,6 +3,17 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.5.19
+
+- **A dashboard that's a launchpad, not just a readout.** The landing page now opens
+  with the same tap-through cards as the Stock page — **Use it or lose it**, **Open
+  packages**, **Restock**, **Reconcile a place** — each jumping straight to the right
+  view, plus a one-line "here's what needs attention" summary in the header.
+- **Restock now** on the dashboard lists what's below your reorder levels (reserved
+  stock accounted for) with one-tap **Add to list**.
+- At-a-glance tiles (items, locations) are now clickable, expiring items link through,
+  and the whole page shares the look and feel of the rest of the app.
+
 ## 1.5.18
 
 - **"Running low" in one tap.** Any stock item's ⋯ menu now has **Running low — add

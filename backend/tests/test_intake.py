@@ -63,3 +63,12 @@ def test_meta_exposes_the_freshness_scale(auth_client):
     assert len(scale) == 5
     assert scale[0]["level"] == 5 and scale[0]["key"] == "fresh"
     assert scale[-1]["level"] == 1 and scale[-1]["label"] == "Going off"
+
+
+def test_meta_exposes_domain_condition_scales(auth_client):
+    scales = auth_client.get("/api/v1/meta").get_json()["freshnessScales"]
+    # produce uses ripeness language; bakery uses staleness; both are 5-point.
+    assert [s["label"] for s in scales["produce"]][0] == "Unripe / firm"
+    assert scales["produce"][-1]["key"] == "spoiling"
+    assert [s["label"] for s in scales["bakery"]][0] == "Fresh-baked"
+    assert len(scales["default"]) == 5

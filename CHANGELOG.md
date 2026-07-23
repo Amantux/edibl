@@ -3,6 +3,13 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.5.26
+
+- **The condition scale now speaks the item's language.** Adding produce shows a
+  ripeness scale (Unripe → Ripe → Overripe), bakery shows staleness (Fresh-baked →
+  Stale), meat/seafood their own wording, and everything else the general
+  Fresh → Going-off scale — chosen automatically from the item's category.
+
 ## 1.5.25
 
 - **Adding stock is smarter and smoother.** As you type an item's name, Edibl now

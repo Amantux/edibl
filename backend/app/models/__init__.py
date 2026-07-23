@@ -202,16 +202,54 @@ FRESHNESS_LEVELS = (
 )
 LIFECYCLE_STATES = FRESHNESS_LEVELS  # back-compat alias
 
-# A simple 1–5 condition scale for intake (highest = freshest). The stored
-# `freshness`/`state` value is the `key`; `label` is what the UI shows. Free-text
-# freshness still works — this is the guided default on the add form.
-FRESHNESS_SCALE = (
-    {"level": 5, "key": "fresh", "label": "Fresh"},
-    {"level": 4, "key": "good", "label": "Good"},
-    {"level": 3, "key": "okay", "label": "Okay"},
-    {"level": 2, "key": "use soon", "label": "Use soon"},
-    {"level": 1, "key": "going off", "label": "Going off"},
-)
+# 1–5 condition scales for intake, keyed by domain (highest level = will-keep-
+# longest / best condition). The stored `freshness`/`state` value is the `key`;
+# `label` is what the UI shows. Produce uses ripeness language, bakery uses
+# staleness, etc. Free-text freshness still works — this is the guided default.
+FRESHNESS_SCALES = {
+    "default": (
+        {"level": 5, "key": "fresh", "label": "Fresh"},
+        {"level": 4, "key": "good", "label": "Good"},
+        {"level": 3, "key": "okay", "label": "Okay"},
+        {"level": 2, "key": "use soon", "label": "Use soon"},
+        {"level": 1, "key": "going off", "label": "Going off"},
+    ),
+    "produce": (
+        {"level": 5, "key": "unripe", "label": "Unripe / firm"},
+        {"level": 4, "key": "ripe", "label": "Ripe"},
+        {"level": 3, "key": "use soon", "label": "Ripe — use soon"},
+        {"level": 2, "key": "overripe", "label": "Very ripe"},
+        {"level": 1, "key": "spoiling", "label": "Overripe / spoiling"},
+    ),
+    "bakery": (
+        {"level": 5, "key": "fresh", "label": "Fresh-baked"},
+        {"level": 4, "key": "good", "label": "Day-old"},
+        {"level": 3, "key": "okay", "label": "Still good"},
+        {"level": 2, "key": "stale", "label": "Going stale"},
+        {"level": 1, "key": "hard", "label": "Stale / hard"},
+    ),
+    "meat": (
+        {"level": 5, "key": "fresh", "label": "Fresh"},
+        {"level": 4, "key": "good", "label": "Good"},
+        {"level": 3, "key": "okay", "label": "Okay"},
+        {"level": 2, "key": "use soon", "label": "Use soon"},
+        {"level": 1, "key": "off", "label": "Turning / off"},
+    ),
+}
+# Which categories share a scale (anything unlisted → "default").
+_SCALE_BY_CATEGORY = {
+    "produce": "produce", "bakery": "bakery",
+    "meat": "meat", "seafood": "meat",
+}
+# Back-compat: the old flat name is the default scale.
+FRESHNESS_SCALE = FRESHNESS_SCALES["default"]
+
+
+def freshness_scale_for(category: str) -> tuple:
+    """The 1–5 condition scale appropriate to a category (ripeness for produce,
+    staleness for bakery, …), defaulting to the general fresh→going-off scale."""
+    key = _SCALE_BY_CATEGORY.get((category or "").strip().lower(), "default")
+    return FRESHNESS_SCALES[key]
 
 # How a lot (or part of one) left inventory. "Good" outcomes (eaten) teach us the
 # item lasted at least that long; "loss" outcomes (spoiled/expired/discarded) are
@@ -436,7 +474,7 @@ __all__ = [
     "Group", "User", "ApiToken", "TOKEN_PREFIX", "generate_raw_token", "hash_token",
     "Location", "LOCATION_KINDS", "Product", "CATEGORIES", "UNITS", "TRACKING_MODES",
     "StockLot", "STORAGE_METHODS", "FRESHNESS_LEVELS", "FRESHNESS_SCALE",
-    "LIFECYCLE_STATES", "OUTCOMES",
+    "FRESHNESS_SCALES", "freshness_scale_for", "LIFECYCLE_STATES", "OUTCOMES",
     "GOOD_OUTCOMES", "LOSS_OUTCOMES", "PACKAGE_STATES", "QUANTITY_KINDS", "EVENT_TYPES",
     "ShelfLifeProfile", "ShoppingItem", "ConsumptionEvent", "PlannedItem", "Setting",
     "InventoryEvent", "AcquisitionLot", "FoodConcept", "ITEM_TYPES", "Reservation",

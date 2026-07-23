@@ -29,7 +29,15 @@ const bulk = ref(blankBulk())
 const omniQuery = ref('')
 const focus = ref('all')          // all | expiring | open | low
 const reorder = ref([])           // GET /shopping/reorder suggestions
-const freshnessScale = ref([])    // 1–5 condition scale for the add form
+const freshnessScales = ref({})   // per-domain 1–5 condition scales
+// The condition scale appropriate to the item's category (produce → ripeness,
+// bakery → staleness, …); updates live as classify fills the category.
+const _SCALE_BY_CAT = { produce: 'produce', bakery: 'bakery', meat: 'meat', seafood: 'meat' }
+const conditionScale = computed(() => {
+  const cat = (form.value.category || '').trim().toLowerCase()
+  const s = freshnessScales.value
+  return s[_SCALE_BY_CAT[cat] || 'default'] || s.default || []
+})
 const route = useRoute()
 
 // Every active lot flattened out of the grouped payload (for focused lists).
@@ -205,7 +213,7 @@ onMounted(async () => {
     ])
     locations.value = locs
     assistantCfg.value = cfg
-    freshnessScale.value = meta.freshnessScale || []
+    freshnessScales.value = meta.freshnessScales || { default: meta.freshnessScale || [] }
     await Promise.all([loadSuggest(), loadProducts(), load(), loadReorder()])
   } catch (e) { ui.error(e.message || 'Could not load stock.') }
   if (route.query.reconcile) openReconcile(String(route.query.reconcile))  // from Locations
@@ -700,10 +708,10 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
           <select v-model="form.locationId"><option value="">Unassigned</option>
             <option v-for="l in locations" :key="l.id" :value="l.id">{{ l.name }}</option></select></label>
       </div>
-      <label class="field" v-if="freshnessScale.length"><span>Condition (optional)</span>
+      <label class="field" v-if="conditionScale.length"><span>Condition (optional)</span>
         <select v-model="form.freshness">
           <option value="">Not tracked</option>
-          <option v-for="f in freshnessScale" :key="f.key" :value="f.key">{{ f.level }} · {{ f.label }}</option>
+          <option v-for="f in conditionScale" :key="f.key" :value="f.key">{{ f.level }} · {{ f.label }}</option>
         </select></label>
 
       <button type="button" class="ghost sm morebtn" @click="showMore = !showMore">

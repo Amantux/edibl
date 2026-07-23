@@ -48,7 +48,7 @@ def ready():
 def meta():
     """Enum reference data for the UI (categories, units, storage methods…)."""
     from ..models import (CATEGORIES, UNITS, STORAGE_METHODS, LOCATION_KINDS,
-                          FRESHNESS_LEVELS, FRESHNESS_SCALE, OUTCOMES)
+                          FRESHNESS_LEVELS, FRESHNESS_SCALE, FRESHNESS_SCALES, OUTCOMES)
     fresh = [s for s in FRESHNESS_LEVELS if s]
     return jsonify({
         # Categories / units / freshness are user-driven; these are seed
@@ -56,6 +56,8 @@ def meta():
         "categories": list(CATEGORIES), "units": list(UNITS),
         "storageMethods": list(STORAGE_METHODS), "locationKinds": list(LOCATION_KINDS),
         "freshnessLevels": fresh, "lifecycleStates": fresh,  # alias
-        "freshnessScale": [dict(s) for s in FRESHNESS_SCALE],
+        "freshnessScale": [dict(s) for s in FRESHNESS_SCALE],  # default (back-compat)
+        # Per-domain 1–5 condition scales (produce=ripeness, bakery=staleness, …).
+        "freshnessScales": {k: [dict(s) for s in v] for k, v in FRESHNESS_SCALES.items()},
         "outcomes": list(OUTCOMES),
     })

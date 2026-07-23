@@ -201,6 +201,35 @@ can talk to Edibl through the MCP path above — "do I have eggs?", "add milk". 
 Edibl's own chat box can reuse HA's conversation agent directly with
 `llm_provider: homeassistant` (completion-only).
 
+## Sensors & notifications without the integration (plain REST)
+
+Edibl exposes a single sensor-shaped snapshot at **`GET /api/v1/ha/sensors`** — no
+HACS integration required. Behind Ingress the add-on is reachable at
+`http://<slug>:7746`; otherwise map port 7746 and use a token.
+
+```yaml
+# configuration.yaml — one REST resource, several sensors
+rest:
+  - resource: http://local-edibl:7746/api/v1/ha/sensors
+    headers:
+      Authorization: !secret edibl_token   # an Edibl API key (Settings → Access & keys)
+    scan_interval: 900
+    sensor:
+      - name: Edibl expiring soon
+        value_template: "{{ value_json.expiring_soon }}"
+        json_attributes: [expiring, next_expiry_item, next_expiry_days, attention]
+      - name: Edibl to restock
+        value_template: "{{ value_json.to_restock }}"
+        json_attributes: [restock]
+      - name: Edibl items in stock
+        value_template: "{{ value_json.items_in_stock }}"
+```
+
+Then automate off `sensor.edibl_expiring_soon`, or let Edibl build the message for
+you — **`POST /api/v1/ha/notify`** posts a "use soon / restock" persistent
+notification to Home Assistant. Wire it to an automation (e.g. daily at 17:00) via a
+`rest_command`.
+
 Edibl is the source of truth for what's actually on hand; myMeal owns recipes.
 Point the same MCP server at myMeal's agent too — see
 [`integration.md`](integration.md).

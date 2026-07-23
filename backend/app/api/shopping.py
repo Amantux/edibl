@@ -112,14 +112,6 @@ def suggest():
 # --------------------------------------------------------------------------- #
 # Reservations — earmark stock for a planned meal (not free for reorder)
 # --------------------------------------------------------------------------- #
-def _reserved_by_product(gid):
-    out = {}
-    for r in db.session.query(Reservation).filter_by(group_id=gid).all():
-        if r.product_id:
-            out[r.product_id] = out.get(r.product_id, 0) + (r.quantity or 0)
-    return out
-
-
 @bp.get("/reservations")
 @login_required
 def list_reservations():
@@ -170,35 +162,6 @@ def reorder():
     """Suggest what to buy from per-product replenishment policies, accounting for
     reserved stock and unknown/estimated amounts. Does NOT auto-add — returns the
     ranked suggestions so the user (or a follow-up POST /shopping) decides."""
-    gid = current_group().id
-    reserved = _reserved_by_product(gid)
-    suggestions = []
-    products = (db.session.query(Product).filter_by(group_id=gid).all())
-    for p in products:
-        if p.do_not_suggest:
-            continue
-        threshold = p.reorder_threshold if p.reorder_threshold is not None else p.min_quantity
-        if threshold is None and not p.staple:
-            continue  # no policy → not a reorder candidate
-        lots = [s for s in p.stock if not s.finished]
-        # Only exact/estimated amounts count toward the numeric on-hand; presence/
-        # unknown lots mean we can't be sure, so we flag rather than assume a number.
-        numeric = [s for s in lots if (s.quantity_kind or "exact")
-                   in ("exact", "estimated", "approximate")]
-        uncertain = len(lots) - len(numeric)
-        on_hand = round(sum(s.quantity or 0 for s in numeric), 4)
-        available = round(on_hand - reserved.get(p.id, 0), 4)
-        thr = threshold if threshold is not None else 1
-        if available > thr:
-            continue
-        target = p.target_quantity if p.target_quantity is not None else (thr or 1)
-        need = round(max(target - available, thr - available, 1), 4)
-        suggestions.append({
-            "productId": p.id, "name": p.name, "unit": p.default_unit,
-            "onHand": on_hand, "reserved": reserved.get(p.id, 0),
-            "available": available, "threshold": thr, "suggestedQuantity": need,
-            "staple": bool(p.staple),
-            "uncertain": uncertain > 0,  # some stock is presence/unknown
-        })
-    suggestions.sort(key=lambda s: (s["available"], s["name"].lower()))
+    from ..services.reorder import reorder_suggestions
+    suggestions = reorder_suggestions(current_group().id)
     return jsonify({"suggestions": suggestions, "count": len(suggestions)})

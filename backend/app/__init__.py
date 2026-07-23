@@ -240,10 +240,11 @@ def _register_blueprints(app):
     from .api.assistant import bp as assistant_bp
     from .api.data import bp as data_bp
     from .api.misc import bp as misc_bp
+    from .api.ha import bp as ha_bp
 
     for bp in (users_bp, tokens_bp, locations_bp, products_bp, stock_bp,
                shopping_bp, dashboard_bp, integrations_bp, assistant_bp,
-               data_bp, misc_bp):
+               data_bp, misc_bp, ha_bp):
         app.register_blueprint(bp, url_prefix="/api/v1")
 
 

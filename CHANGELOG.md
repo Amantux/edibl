@@ -3,6 +3,14 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.5.27
+
+- **Home Assistant sensors & notifications.** A new `GET /api/v1/ha/sensors` feed
+  exposes items-in-stock, expiring-soon, expired, open-packages, and to-restock (with
+  the actual item lists as attributes) — drop it into a REST sensor and automate off
+  it. `POST /api/v1/ha/notify` sends a "use soon / restock" persistent notification
+  you can trigger from a daily automation. See docs/home-assistant.md.
+
 ## 1.5.26
 
 - **The condition scale now speaks the item's language.** Adding produce shows a

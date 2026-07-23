@@ -3,6 +3,12 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.5.24
+
+- Maintenance release — republishes the add-on so Home Assistant picks up the
+  latest build. (If HA still doesn't show an update, reload the add-on store:
+  Settings → Add-ons → ⋮ → Check for updates / Reload, then hard-refresh.)
+
 ## 1.5.22
 
 A visual polish pass — verified on phone, tablet, and desktop.

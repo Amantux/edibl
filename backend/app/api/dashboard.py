@@ -72,9 +72,15 @@ def runout():
     gid = current_group().id
     on_hand = {}
     for s in _active(gid):
+        # Only count lots with a real number — a presence/unknown lot has no
+        # amount to forecast against, and would otherwise read as "0 / ~0 days".
+        if (s.quantity_kind or "exact") not in ("exact", "estimated", "approximate"):
+            continue
         on_hand[s.product_id] = on_hand.get(s.product_id, 0) + (s.quantity or 0)
     out = []
     for pid, qty in on_hand.items():
+        if qty <= 0:
+            continue  # already out — not "running low"
         days_left, daily = predict_runout(gid, pid, qty)
         if days_left is None:
             continue

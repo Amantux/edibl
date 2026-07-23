@@ -66,7 +66,7 @@ async function del(l) {
           <div class="muted" style="font-size:.8rem">{{ l.kind.replace('_',' ') }}<span v-if="l.parent"> · in {{ l.parent.name }}</span></div></div>
         <button class="ghost sm" :aria-label="`Delete ${l.name}`" @click.stop="del(l)">✕</button></div>
       <div class="row" style="margin-top:10px;gap:6px">
-        <span class="badge">{{ l.stockCount }} items</span>
+        <span class="badge">{{ l.stockCount }} item{{ l.stockCount === 1 ? '' : 's' }}</span>
         <span v-if="l.childCount" class="badge">{{ l.childCount }} sub</span>
         <span v-if="l.tempC != null" class="badge">{{ l.tempC }}°C</span>
         <span class="grow"></span><span class="muted" style="font-size:.72rem">view →</span></div>

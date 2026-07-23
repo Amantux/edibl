@@ -524,11 +524,11 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
               <strong>{{ g.group }}</strong> <span v-if="g.category" class="chip">{{ g.category }}</span></td>
             <td class="muted">{{ g.products.join(', ') }}
               <span v-if="g.productCount > 1">· {{ g.productCount }} kinds</span></td>
-            <td>{{ g.totalQuantity }} {{ g.unit }} <span class="muted">· {{ g.lotCount }} lot{{ g.lotCount>1?'s':'' }}</span>
-              <div v-if="g.summary" class="muted" style="font-size:.7rem">{{ g.summary }}</div></td>
-            <td><span class="badge" :class="g.nextExpiryStatus">{{ nextExp(g) }}</span>
+            <td style="min-width:130px">{{ g.summary }}
+              <div class="muted" style="font-size:.7rem">{{ g.lotCount }} lot{{ g.lotCount>1?'s':'' }}</div></td>
+            <td style="white-space:nowrap"><span class="badge" :class="g.nextExpiryStatus">{{ nextExp(g) }}</span>
               <span v-if="g.expiring || g.expired" class="muted" style="font-size:.7rem">
-                {{ g.expired ? g.expired + ' expired' : g.expiring + ' soon' }}</span></td>
+                {{ g.expired ? '· ' + g.expired + ' expired' : '· ' + g.expiring + ' soon' }}</span></td>
             <td></td>
           </tr>
           <tr v-for="s in (expanded[g.group] ? g.lots : [])" :key="s.id" class="lot">

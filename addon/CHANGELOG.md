@@ -3,6 +3,20 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.5.22
+
+A visual polish pass — verified on phone, tablet, and desktop.
+
+- **No more sideways scroll or clipped content.** Page headers now wrap their
+  actions below the title instead of pushing the page wide, buttons never break
+  across two lines, and wide tables scroll neatly inside their card.
+- **Clearer "on hand".** The stock list now reads naturally — "2 cartons · 1 open",
+  a plain "1" for simple items, and "some" for things you only track as present
+  (no more confusing "0 count"). Expiry tags stay on one line.
+- **Truer "running low".** The predicted-runout list no longer shows items whose
+  amount is unknown as "runs out in ~0 days".
+- Small fixes: "1 item" vs "N items", tag chips no longer wrap mid-word.
+
 ## 1.5.21
 
 A frontend consistency + accessibility pass across the whole app.

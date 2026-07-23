@@ -30,17 +30,19 @@ def _lot_quantity(s):
 
 
 def _group_summary(g):
-    """Dimension-safe, package-aware human summary, e.g.
-    "2 cartons: 1 open, 1 sealed" or "unknown amount". Never an invalid total."""
+    """Dimension-safe, human on-hand summary, e.g. "2 carton · 1 open, 1 sealed",
+    "6", "some", "unknown amount". The package breakdown is only appended when
+    something is actually open (the interesting case) — an all-sealed group just
+    shows its amount, so simple items stay uncluttered. Never an invalid total."""
     from ..services.quantity import aggregate
     parts = [q.describe() for q in aggregate(g["_qtys"])]
     amount = ", ".join(parts) if parts else "none"
-    pkg = []
     if g["openCount"]:
-        pkg.append(f"{g['openCount']} open")
-    if g["sealedCount"]:
-        pkg.append(f"{g['sealedCount']} sealed")
-    return f"{amount}: {', '.join(pkg)}" if pkg else amount
+        pkg = [f"{g['openCount']} open"]
+        if g["sealedCount"]:
+            pkg.append(f"{g['sealedCount']} sealed")
+        return f"{amount} · {', '.join(pkg)}"
+    return amount
 
 
 def _get(lot_id):

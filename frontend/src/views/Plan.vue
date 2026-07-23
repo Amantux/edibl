@@ -37,6 +37,18 @@ async function order() {
   try { const r = await api.post('/plan/order'); ui.success(`Added ${r.added} item(s) to the shopping list.`) }
   catch (e) { ui.error(e.message || 'Could not order.') }
 }
+async function cook() {
+  if (!confirm('Deduct this meal\'s ingredients from your stock?')) return
+  try {
+    const r = await api.post('/plan/cook', { clear: true })
+    const used = r.cooked.filter((c) => c.consumed > 0).length
+    const short = r.cooked.filter((c) => c.shortfall > 0)
+    ui.success(short.length
+      ? `Deducted ${used} ingredient(s). Short on: ${short.map((s) => s.name).join(', ')}.`
+      : `Deducted all ${used} ingredient(s) from stock.`)
+    await load()
+  } catch (e) { ui.error(e.message || 'Could not deduct ingredients.') }
+}
 async function clearPlan() {
   if (!confirm('Clear the whole meal plan?')) return
   try { await api.post('/plan/clear'); ui.info('Meal plan cleared.'); await load() }
@@ -49,7 +61,8 @@ async function remove(id) {
 
 <template>
   <div class="page-head"><h1>🍽️ Meal plan</h1><div class="grow"></div>
-    <button v-if="plan?.shortfall.length" @click="order">🛒 Order the {{ plan.shortfall.length }} missing</button>
+    <button v-if="plan?.planned.length" @click="cook">🍳 Made it</button>
+    <button v-if="plan?.shortfall.length" class="secondary" @click="order">🛒 Order the {{ plan.shortfall.length }} missing</button>
     <button v-if="plan?.planned.length" class="secondary" @click="clearPlan">Clear</button></div>
 
   <div v-if="loadError" class="card" style="border-color:var(--danger)">

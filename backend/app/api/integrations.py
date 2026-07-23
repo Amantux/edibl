@@ -172,6 +172,61 @@ def order():
     return jsonify({"added": len(added), "items": [shopping_out(i) for i in added]})
 
 
+@bp.post("/plan/cook")
+@login_required
+def cook():
+    """"I made this" — deduct a meal's ingredients from real stock. For each
+    ingredient, match a food/beverage product and consume the needed amount across
+    its lots (prefer-open, then first-expiring, spilling). Body: {ingredients?:
+    [{name, quantity?, unit?}], clear?: bool}. With no ingredients, uses the current
+    plan. Returns per-ingredient consumed/shortfall; `clear` removes satisfied
+    planned items. Never guesses across food types — an unmatched item is reported."""
+    from ..services import matching
+    from ..services.inventory import selection, consume_lot
+    gid = current_group().id
+    data = request.get_json(force=True) or {}
+    ingredients = data.get("ingredients")
+    planned_by_key = {}
+    if not ingredients:
+        rows = db.session.query(PlannedItem).filter_by(group_id=gid).all()
+        ingredients = []
+        for p in rows:
+            ingredients.append({"name": p.name, "quantity": p.quantity, "unit": p.unit})
+            planned_by_key[p.name.lower()] = p
+
+    results = []
+    for it in ingredients:
+        name = (it.get("name") or "").strip()
+        if not name:
+            continue
+        qty = float(it.get("quantity") or 1)
+        cands = matching.match_products(gid, name, item_types={"food", "beverage"})
+        product = cands[0].product if cands else None
+        consumed, shortfall = 0.0, qty
+        if product:
+            lots = [s for s in product.stock if not s.finished]
+            picks, shortfall = selection.plan_consumption(lots, qty)
+            for pk in picks:
+                consume_lot(pk.lot, amount=pk.take, outcome="eaten",
+                            actor_user_id=None, source_app="plan")
+                consumed += pk.take
+        results.append({"name": name, "consumed": round(consumed, 4),
+                        "shortfall": round(shortfall, 4), "matched": bool(product)})
+
+    cleared = 0
+    if data.get("clear"):
+        for r in results:
+            p = planned_by_key.get(r["name"].lower())
+            if p is not None and r["shortfall"] <= 0:
+                db.session.delete(p)
+                cleared += 1
+        if cleared:
+            db.session.commit()
+
+    return jsonify({"cooked": results, "cleared": cleared,
+                    "meal": data.get("meal", "")})
+
+
 @bp.delete("/plan/<item_id>")
 @login_required
 def delete_planned(item_id):

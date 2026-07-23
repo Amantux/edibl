@@ -3,6 +3,14 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.5.28
+
+- **"Made it" on the meal plan.** One tap deducts a meal's ingredients from your
+  actual stock (matching food/beverage products, preferring open packages and
+  soonest-to-expire, spilling across lots), tells you what you were short on, and
+  clears the satisfied planned items — closing the loop from plan to inventory. It
+  never matches a non-food consumable.
+
 ## 1.5.27
 
 - **Home Assistant sensors & notifications.** A new `GET /api/v1/ha/sensors` feed

@@ -39,6 +39,7 @@ def create_app(config_object=Config):
 
     from . import models  # noqa: F401
     with app.app_context():
+        _enable_sqlite_pragmas()
         db.create_all()
         _ensure_columns()
         _seed_reference_data()
@@ -50,6 +51,23 @@ def create_app(config_object=Config):
     _register_errors(app)
     _register_security_headers(app)
     return app
+
+
+def _enable_sqlite_pragmas():
+    """WAL + a busy timeout + FK enforcement on every SQLite connection — better
+    concurrency (readers don't block the writer) and integrity for a single-file DB.
+    No-op on non-SQLite. Registered before the first connection is used."""
+    from sqlalchemy import event
+    if db.engine.dialect.name != "sqlite":
+        return
+
+    @event.listens_for(db.engine, "connect")
+    def _set_pragmas(dbapi_connection, _record):  # noqa: ANN001
+        cur = dbapi_connection.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA busy_timeout=5000")
+        cur.execute("PRAGMA foreign_keys=ON")
+        cur.close()
 
 
 def _ensure_columns():
@@ -79,6 +97,8 @@ def _ensure_columns():
             "provenance": "VARCHAR(64) DEFAULT 'manual'",
             "confidence": "FLOAT",
             "acquisition_lot_id": "VARCHAR(36)",
+            "best_by": "DATETIME", "use_by": "DATETIME",
+            "expiry_basis": "VARCHAR(16) DEFAULT ''", "expiry_confidence": "FLOAT",
         },
         "consumption_events": {
             "outcome": "VARCHAR(16) DEFAULT 'eaten'",

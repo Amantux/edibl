@@ -46,6 +46,39 @@ def export():
     })
 
 
+@bp.get("/export/backup.db")
+@owner_required
+def backup_db():
+    """A consistent, whole-database SQLite backup file (all households) — a real
+    point-in-time copy taken with SQLite's online backup API, safe even while the
+    app is writing (unlike copying the file). Owner-only. Non-SQLite → 400."""
+    import sqlite3
+    import tempfile
+    engine = db.engine
+    if engine.dialect.name != "sqlite":
+        return jsonify({"error": "backup.db is only available on SQLite"}), 400
+    src_path = engine.url.database
+    if not src_path:
+        return jsonify({"error": "no database file"}), 400
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    src = sqlite3.connect(src_path)
+    dst = sqlite3.connect(tmp.name)
+    try:
+        with dst:
+            src.backup(dst)   # online backup — consistent snapshot
+    finally:
+        src.close()
+        dst.close()
+    import os
+    with open(tmp.name, "rb") as f:
+        data = f.read()
+    os.unlink(tmp.name)
+    stamp = utcnow().strftime("%Y%m%d-%H%M%S")
+    return Response(data, mimetype="application/x-sqlite3", headers={
+        "Content-Disposition": f'attachment; filename="edibl-backup-{stamp}.db"'})
+
+
 @bp.get("/export/stock.csv")
 @login_required
 def export_csv():

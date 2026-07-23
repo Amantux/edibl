@@ -3,6 +3,17 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.5.29
+
+- **Honest expiry.** Edibl now keeps the raw dates from the pack (best-by, use-by)
+  separately from its own forecast, and tells you which it's using: "Best by Aug 12",
+  "Use by Aug 12", or "Est. good until Aug 9" — hover any expiry tag to see the basis.
+  Freezing/thawing update the forecast and say so.
+- **A real database backup.** Settings → "💾 Backup database" downloads a consistent
+  point-in-time copy of the whole database (taken safely even while Edibl is running).
+- **Sturdier storage.** The database now runs in WAL mode with a busy timeout and
+  foreign-key enforcement — better under concurrent access, safer on a single file.
+
 ## 1.5.28
 
 - **"Made it" on the meal plan.** One tap deducts a meal's ingredients from your

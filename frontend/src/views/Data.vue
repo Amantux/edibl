@@ -199,6 +199,12 @@ async function exportCsv() {
   const res = await fetch(apiUrl('/export/stock.csv'), { headers: getToken() ? { Authorization: getToken() } : {} })
   triggerBlob(await res.blob(), 'edibl-stock.csv')
 }
+async function backupDb() {
+  const res = await fetch(apiUrl('/export/backup.db'), { headers: getToken() ? { Authorization: getToken() } : {} })
+  if (!res.ok) return
+  const stamp = new Date().toISOString().slice(0, 10)
+  triggerBlob(await res.blob(), `edibl-backup-${stamp}.db`)
+}
 async function importFile(e) {
   const file = e.target.files?.[0]; e.target.value = ''
   if (!file) return
@@ -339,6 +345,7 @@ async function importFile(e) {
     <div class="row wrap">
       <button @click="exportJson">⬇️ Export JSON (full)</button>
       <button class="secondary" @click="exportCsv">⬇️ Stock as CSV</button>
+      <button class="secondary" @click="backupDb" title="A consistent copy of the whole database file">💾 Backup database</button>
     </div>
   </div>
 

@@ -32,6 +32,34 @@ def expiry_status(expiry):
     return "fresh"
 
 
+def _fmt_date(d):
+    return d.strftime("%b ") + str(d.day) if d else None
+
+
+def expiry_explain(s):
+    """Plain-language basis for a lot's effective expiry — so estimates never
+    masquerade as printed facts. e.g. 'Best by Aug 12', 'Est. good until Aug 9
+    (rough — no purchase date)'."""
+    d = getattr(s, "expiry_date", None)
+    if not d:
+        return "No expiry tracked"
+    basis = getattr(s, "expiry_basis", "") or ("estimated" if s.expiry_estimated else "user")
+    conf = getattr(s, "expiry_confidence", None)
+    date = _fmt_date(d)
+    if basis == "use_by":
+        return f"Use by {date}"
+    if basis == "best_by":
+        return f"Best by {date}"
+    if basis in ("frozen",):
+        return f"Frozen — good until ~{date}"
+    if basis in ("thawed",):
+        return f"Thawed — use by ~{date}"
+    if basis == "estimated":
+        note = " (rough — no purchase date)" if (conf is not None and conf < 0.5) else ""
+        return f"Est. good until {date}{note}"
+    return f"Expires {date}"
+
+
 def _numeric_kind(s):
     """True when the lot's amount is a real number (exact/estimated/approximate),
     False for presence/unknown (where `quantity` must not surface a value)."""
@@ -146,6 +174,10 @@ def stock_out(s):
         "freshness": s.state or "", "state": s.state or "",
         "purchaseDate": iso(s.purchase_date), "openedDate": iso(s.opened_date),
         "expiryDate": iso(s.expiry_date), "expiryEstimated": s.expiry_estimated,
+        "bestBy": iso(getattr(s, "best_by", None)), "useBy": iso(getattr(s, "use_by", None)),
+        "expiryBasis": getattr(s, "expiry_basis", "") or "",
+        "expiryConfidence": getattr(s, "expiry_confidence", None),
+        "expiryExplain": expiry_explain(s),
         "daysToExpiry": _days_to_expiry(s.expiry_date),
         "expiryStatus": expiry_status(s.expiry_date),
         "cost": s.cost, "source": s.source, "lotCode": s.lot_code,

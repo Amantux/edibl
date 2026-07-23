@@ -699,6 +699,8 @@ def _represerve(lot, storage, event_type, summary_verb, *, actor_user_id, source
         group_id=gid, product_id=lot.product_id)
     lot.expiry_date = new_expiry
     lot.expiry_estimated = estimated
+    lot.expiry_basis = "frozen" if storage == "frozen" else "thawed"
+    lot.expiry_confidence = 0.6
     lot.attrs = {**(lot.attrs or {}), attr_date_key: utcnow().isoformat()}
     name = product.name if product else "item"
     summary = f"{summary_verb} {name}"

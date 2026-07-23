@@ -323,9 +323,16 @@ class StockLot(IDMixin, TimestampMixin, db.Model):
     confidence: Mapped[float] = mapped_column(Float, nullable=True)
     purchase_date: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     opened_date: Mapped[datetime] = mapped_column(DateTime, nullable=True)
-    expiry_date: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    expiry_date: Mapped[datetime] = mapped_column(DateTime, nullable=True)  # effective forecast
     # True when expiry was estimated from a shelf-life profile (vs printed date).
     expiry_estimated: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Raw date FACTS kept alongside the effective forecast (printed on the pack).
+    best_by: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    use_by: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    # How the effective expiry_date was derived + how sure we are (0–1), so the UI
+    # can explain it honestly. EXPIRY_BASES: use_by/best_by/user/estimated/frozen/thawed.
+    expiry_basis: Mapped[str] = mapped_column(String(16), default="")
+    expiry_confidence: Mapped[float] = mapped_column(Float, nullable=True)
     cost: Mapped[float] = mapped_column(Float, nullable=True)
     source: Mapped[str] = mapped_column(String(64), default="")  # store/butcher/farm
     lot_code: Mapped[str] = mapped_column(String(64), default="")

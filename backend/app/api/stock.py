@@ -115,20 +115,44 @@ def _quantity_kind(data):
     return "exact"
 
 
+def _expiry_facts(data, product, gid, storage, purchase):
+    """Reconcile the date facts on a pack into ONE effective expiry_date, keeping the
+    raw facts and recording HOW it was derived + confidence, so the UI can explain it.
+    Priority: use-by (hard) > best-by > user-entered expiry > estimated."""
+    use_by = _parse_dt(data.get("useBy"))
+    best_by = _parse_dt(data.get("bestBy"))
+    user_expiry = _parse_dt(data.get("expiryDate"))
+    if use_by:
+        return {"expiry_date": use_by, "expiry_estimated": False, "use_by": use_by,
+                "best_by": best_by, "expiry_basis": "use_by", "expiry_confidence": 0.95}
+    if best_by:
+        return {"expiry_date": best_by, "expiry_estimated": False, "best_by": best_by,
+                "use_by": None, "expiry_basis": "best_by", "expiry_confidence": 0.85}
+    if user_expiry:
+        return {"expiry_date": user_expiry, "expiry_estimated": False, "best_by": None,
+                "use_by": None, "expiry_basis": "user", "expiry_confidence": 0.9}
+    est, _flag = estimate_expiry(purchase, product.category, storage,
+                                 product.shelf_life_days, group_id=gid, product_id=product.id)
+    # Estimated from the (implicit "bought today") purchase date + shelf-life table:
+    # moderate confidence. Imports with truly no date can pass expiryConfidence lower.
+    conf = 0.6
+    if data.get("expiryConfidence") is not None:
+        try:
+            conf = float(data["expiryConfidence"])
+        except (TypeError, ValueError):
+            pass
+    return {"expiry_date": est, "expiry_estimated": True, "best_by": None,
+            "use_by": None, "expiry_basis": "estimated", "expiry_confidence": conf}
+
+
 def _build_lot(data, product, gid):
     storage = data.get("storageMethod") or "refrigerated"
     if storage not in STORAGE_METHODS:
         storage = "refrigerated"
     state = (data.get("freshness") or data.get("state") or "").strip()
     purchase = _parse_dt(data.get("purchaseDate")) or utcnow()
-    expiry = _parse_dt(data.get("expiryDate"))
-    estimated = False
-    if not expiry:
-        # Personalized: learns from this household's own spoilage history for the
-        # product, falling back to the category/storage table.
-        expiry, estimated = estimate_expiry(purchase, product.category, storage,
-                                            product.shelf_life_days,
-                                            group_id=gid, product_id=product.id)
+    facts = _expiry_facts(data, product, gid, storage, purchase)
+    expiry, estimated = facts["expiry_date"], facts["expiry_estimated"]
     kind = _quantity_kind(data)
     # A presence/unknown lot carries NO meaningful number: store 0 as an internal
     # placeholder (never the misleading default 1); quantity_kind is the source of
@@ -140,8 +164,10 @@ def _build_lot(data, product, gid):
         storage_method=storage, package_state=_package_state(data),
         quantity_kind=kind,
         state=state, purchase_date=purchase, opened_date=_parse_dt(data.get("openedDate")),
-        expiry_date=expiry, expiry_estimated=estimated, cost=data.get("cost"),
-        source=data.get("source", ""), lot_code=data.get("lotCode", ""),
+        expiry_date=expiry, expiry_estimated=estimated,
+        best_by=facts["best_by"], use_by=facts["use_by"],
+        expiry_basis=facts["expiry_basis"], expiry_confidence=facts["expiry_confidence"],
+        cost=data.get("cost"), source=data.get("source", ""), lot_code=data.get("lotCode", ""),
         notes=data.get("notes", ""), attrs=data.get("attrs") or {}, group_id=gid,
         created_by=current_user().id,
     )
@@ -268,11 +294,16 @@ def update(lot_id):
     if "freshness" in data or "state" in data:
         s.state = (data.get("freshness") or data.get("state") or "").strip()
     for k, attr in {"expiryDate": "expiry_date", "openedDate": "opened_date",
-                    "purchaseDate": "purchase_date"}.items():
+                    "purchaseDate": "purchase_date", "bestBy": "best_by", "useBy": "use_by"}.items():
         if k in data:
             setattr(s, attr, _parse_dt(data[k]))
-            if k == "expiryDate":
-                s.expiry_estimated = False
+    # A user-set date is a known fact, not an estimate — record the basis.
+    if "useBy" in data and data["useBy"]:
+        s.expiry_date, s.expiry_estimated, s.expiry_basis, s.expiry_confidence = s.use_by, False, "use_by", 0.95
+    elif "bestBy" in data and data["bestBy"]:
+        s.expiry_date, s.expiry_estimated, s.expiry_basis, s.expiry_confidence = s.best_by, False, "best_by", 0.85
+    elif "expiryDate" in data and data["expiryDate"]:
+        s.expiry_estimated, s.expiry_basis, s.expiry_confidence = False, "user", 0.9
     for k, attr in {"cost": "cost", "source": "source", "lotCode": "lot_code",
                     "notes": "notes", "finished": "finished"}.items():
         if k in data:

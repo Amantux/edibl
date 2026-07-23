@@ -91,7 +91,7 @@ let scanStream = null
 function blankForm() {
   return { productName: '', category: '', family: '', quantity: 1, unit: 'count',
     storageMethod: 'refrigerated', freshness: '', locationId: '', source: '',
-    barcode: '', expiryDate: '', itemType: 'food' }
+    barcode: '', bestBy: '', itemType: 'food' }
 }
 function blankBulk() {
   return { shared: { storageMethod: 'refrigerated', category: '', family: '', locationId: '', source: '' },
@@ -271,7 +271,7 @@ function nextExp(g) {
 async function submitAdd(keepOpen) {
   if (!form.value.productName.trim()) return
   const body = { ...form.value }
-  for (const k of ['expiryDate', 'locationId', 'barcode', 'freshness', 'family', 'source', 'category']) {
+  for (const k of ['bestBy', 'locationId', 'barcode', 'freshness', 'family', 'source', 'category']) {
     if (!body[k]) delete body[k]
   }
   try {
@@ -282,7 +282,7 @@ async function submitAdd(keepOpen) {
     // Keep the "haul" context (location / storage / category / group / unit /
     // source); reset only the item-specific fields, and refocus for the next one.
     Object.assign(form.value, { productName: '', quantity: 1, barcode: '',
-      expiryDate: '', freshness: '', itemType: 'food' })
+      bestBy: '', freshness: '', itemType: 'food' })
     ui.success('Added — keep going.')
     refresh()  // background; don't block the next entry
     await nextTick(); nameInput.value?.focus()
@@ -541,7 +541,7 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
             <span v-if="s.freshness" class="chip">{{ s.freshness }}</span></td>
           <td class="muted">{{ s.location?.name || '—' }}</td>
           <td>{{ s.quantityKind === 'exact' ? (s.quantity + ' ' + s.unit) : s.quantityText }}</td>
-          <td><span class="badge" :class="s.expiryStatus">{{ expLabel(s) }}</span></td>
+          <td><span class="badge" :class="s.expiryStatus" :title="s.expiryExplain">{{ expLabel(s) }}</span></td>
           <td style="text-align:right;white-space:nowrap">
             <button v-if="s.packageState === 'sealed'" class="ghost sm" @click="openPkg(s)">Open</button>
             <button class="secondary sm" @click="openConsume(s)">Use</button>
@@ -578,7 +578,7 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
             <td>{{ s.quantityKind === 'exact' ? (s.quantity + ' ' + s.unit) : s.quantityText }}
               <span class="chip">{{ s.storageMethod.replace('_',' ') }}</span>
               <span v-if="s.packageState === 'opened'" class="chip">open</span></td>
-            <td><span class="badge" :class="s.expiryStatus">{{ expLabel(s) }}</span>
+            <td><span class="badge" :class="s.expiryStatus" :title="s.expiryExplain">{{ expLabel(s) }}</span>
               <span v-if="s.expiryEstimated" class="muted" style="font-size:.7rem"> est</span></td>
             <td style="text-align:right;white-space:nowrap">
               <button v-if="s.packageState === 'sealed'" class="ghost sm" @click="openPkg(s)">Open</button>
@@ -602,7 +602,7 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
           <td>{{ s.quantityKind === 'exact' ? (s.quantity + ' ' + s.unit) : s.quantityText }}</td>
           <td><span class="chip">{{ s.storageMethod.replace('_',' ') }}</span>
             <span v-if="s.packageState === 'opened'" class="chip">open</span></td>
-          <td><span class="badge" :class="s.expiryStatus">{{ expLabel(s) }}</span></td>
+          <td><span class="badge" :class="s.expiryStatus" :title="s.expiryExplain">{{ expLabel(s) }}</span></td>
           <td style="text-align:right;white-space:nowrap">
             <button class="secondary sm" @click="openConsume(s)">Use</button>
             <button class="ghost sm" :aria-label="`Remove ${s.product?.name}`" @click="del(s)">✕</button></td>
@@ -731,8 +731,8 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
         <div class="row">
           <label class="field" style="flex:1"><span>Source (where from)</span>
             <input v-model="form.source" placeholder="e.g. Costco, farm share" /></label>
-          <label class="field" style="flex:1"><span>Expiry (blank = estimate)</span>
-            <input type="date" v-model="form.expiryDate" /></label>
+          <label class="field" style="flex:1"><span>Best-by date (blank = estimate)</span>
+            <input type="date" v-model="form.bestBy" /></label>
         </div>
         <div class="row">
           <label class="field" style="flex:1"><span>Barcode</span>

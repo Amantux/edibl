@@ -3,6 +3,14 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.5.30
+
+- **A review queue for AI detections.** Lower-confidence items from a photo/receipt
+  (or a future vision/agent source) can be sent to a **"To review"** list instead of
+  added blind — each shows its confidence, flags when you **already have** that
+  product, and lets you tweak the amount before confirming or dismissing. Bulk-add
+  gains a "🔎 Send to review" option.
+
 ## 1.5.29
 
 - **Honest expiry.** Edibl now keeps the raw dates from the pack (best-by, use-by)

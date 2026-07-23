@@ -53,6 +53,7 @@ class Group(IDMixin, TimestampMixin, db.Model):
     acquisition_lots = relationship("AcquisitionLot", cascade="all, delete-orphan")
     concepts = relationship("FoodConcept", cascade="all, delete-orphan")
     reservations = relationship("Reservation", cascade="all, delete-orphan")
+    detections = relationship("Detection", cascade="all, delete-orphan")
 
 
 class User(IDMixin, TimestampMixin, db.Model):
@@ -406,6 +407,24 @@ class PlannedItem(IDMixin, TimestampMixin, db.Model):
     group = relationship("Group", back_populates="planned")
 
 
+class Detection(IDMixin, TimestampMixin, db.Model):
+    """A low-confidence AI/vision detection staged for review before it touches
+    inventory (ADR-0004). The user confirms (→ a stock lot) or dismisses; a match to
+    an existing product is flagged so a re-detection isn't added twice."""
+    __tablename__ = "detections"
+    name: Mapped[str] = mapped_column(String(255))
+    quantity: Mapped[float] = mapped_column(Float, nullable=True)
+    unit: Mapped[str] = mapped_column(String(32), default="count")
+    category: Mapped[str] = mapped_column(String(64), default="")
+    storage_method: Mapped[str] = mapped_column(String(24), default="")
+    confidence: Mapped[float] = mapped_column(Float, nullable=True)
+    source: Mapped[str] = mapped_column(String(32), default="vision")   # vision/receipt/agent
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    matched_product_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
+    group_id: Mapped[str] = mapped_column(String(36), ForeignKey("groups.id"), index=True)
+
+
 class Setting(IDMixin, TimestampMixin, db.Model):
     """Per-household runtime settings (e.g. the chat LLM provider) editable from
     the UI. These override the add-on / env defaults, so a provider can be set up
@@ -485,4 +504,5 @@ __all__ = [
     "GOOD_OUTCOMES", "LOSS_OUTCOMES", "PACKAGE_STATES", "QUANTITY_KINDS", "EVENT_TYPES",
     "ShelfLifeProfile", "ShoppingItem", "ConsumptionEvent", "PlannedItem", "Setting",
     "InventoryEvent", "AcquisitionLot", "FoodConcept", "ITEM_TYPES", "Reservation",
+    "Detection",
 ]

@@ -4,7 +4,7 @@ from flask import Blueprint, request, jsonify, abort
 
 from ..extensions import db
 from ..models import (StockLot, Product, Location, ConsumptionEvent, InventoryEvent,
-                      utcnow, STORAGE_METHODS, PACKAGE_STATES, QUANTITY_KINDS)
+                      Detection, utcnow, STORAGE_METHODS, PACKAGE_STATES, QUANTITY_KINDS)
 from ..auth import login_required, current_group, current_user
 from ..schemas.serializers import stock_out, expiry_status
 from ..services.estimation import estimate_expiry, product_insights
@@ -758,6 +758,102 @@ def classify():
     if not name:
         return jsonify({"error": "name required"}), 422
     return jsonify(assistant.classify_food(name))
+
+
+def _detection_out(d):
+    return {"id": d.id, "name": d.name, "quantity": d.quantity, "unit": d.unit,
+            "category": d.category, "storageMethod": d.storage_method,
+            "confidence": d.confidence, "source": d.source, "status": d.status,
+            "matchedProductId": d.matched_product_id,
+            "matchedProductName": (db.session.get(Product, d.matched_product_id).name
+                                   if d.matched_product_id else None),
+            "createdAt": d.created_at.isoformat() if d.created_at else None}
+
+
+@bp.post("/stock/detect")
+@login_required
+def detect():
+    """Stage AI/vision/agent-detected items for review instead of adding them
+    directly (ADR-0004). Body: { items: [{name, quantity?, unit?, category?,
+    confidence?}], source? }. Each is deduped against existing products so a
+    re-detection is flagged, not silently duplicated. Returns the staged rows."""
+    from ..services import matching
+    gid = current_group().id
+    data = request.get_json(force=True) or {}
+    source = (data.get("source") or "vision")[:32]
+    staged = []
+    for it in (data.get("items") or []):
+        name = (it.get("name") or "").strip()
+        if not name:
+            continue
+        cands = matching.match_products(gid, name)
+        matched = cands[0].product.id if (cands and cands[0].score >= 0.8) else None
+        d = Detection(
+            name=name, quantity=it.get("quantity"), unit=it.get("unit") or "count",
+            category=(it.get("category") or "").strip(),
+            storage_method=(it.get("storageMethod") or "").strip(),
+            confidence=it.get("confidence"), source=source,
+            matched_product_id=matched, created_by=current_user().id, group_id=gid)
+        db.session.add(d)
+        staged.append(d)
+    db.session.commit()
+    return jsonify({"staged": len(staged), "detections": [_detection_out(d) for d in staged]}), 201
+
+
+@bp.get("/stock/detections")
+@login_required
+def list_detections():
+    status = request.args.get("status", "pending")
+    q = db.session.query(Detection).filter_by(group_id=current_group().id)
+    if status != "all":
+        q = q.filter(Detection.status == status)
+    rows = q.order_by(Detection.created_at.desc()).all()
+    return jsonify({"detections": [_detection_out(d) for d in rows], "total": len(rows)})
+
+
+def _get_detection(det_id):
+    d = db.session.get(Detection, det_id)
+    if not d or d.group_id != current_group().id:
+        abort(404)
+    return d
+
+
+@bp.post("/stock/detections/<det_id>/confirm")
+@login_required
+def confirm_detection(det_id):
+    """Accept a staged detection → create the stock lot, mark it confirmed. Body may
+    override any field (quantity, unit, category, storageMethod, locationId, …)."""
+    d = _get_detection(det_id)
+    if d.status != "pending":
+        return jsonify({"error": "already resolved"}), 409
+    over = request.get_json(silent=True) or {}
+    payload = {"productName": d.name, "quantity": d.quantity, "unit": d.unit,
+               "category": d.category or None, "storageMethod": d.storage_method or None,
+               "provenance": d.source, "confidence": d.confidence, **over}
+    if payload.get("category") is None:
+        payload.pop("category")
+    if payload.get("storageMethod") is None:
+        payload.pop("storageMethod")
+    product = _resolve_product(payload)
+    if not product:
+        return jsonify({"error": "could not resolve product"}), 422
+    if not _valid_location(current_group().id, payload.get("locationId")):
+        return jsonify({"error": "unknown location"}), 422
+    lot = _build_lot(payload, product, current_group().id)
+    res = inventory.add_lot(lot, actor_user_id=current_user().id, source_app="review",
+                            provenance=d.source, confidence=d.confidence)
+    d.status = "confirmed"
+    db.session.commit()
+    return jsonify({**stock_out(res.lot), "detectionId": d.id})
+
+
+@bp.post("/stock/detections/<det_id>/dismiss")
+@login_required
+def dismiss_detection(det_id):
+    d = _get_detection(det_id)
+    d.status = "dismissed"
+    db.session.commit()
+    return jsonify(_detection_out(d))
 
 
 @bp.post("/stock/bulk")

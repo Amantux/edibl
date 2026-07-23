@@ -68,6 +68,23 @@ const smart = computed(() => ({
 async function loadReorder() {
   try { reorder.value = (await api.get('/shopping/reorder')).suggestions || [] } catch (e) { reorder.value = [] }
 }
+// AI/vision detections staged for review (ADR-0004).
+const detections = ref([])
+async function loadDetections() {
+  try { detections.value = (await api.get('/stock/detections')).detections || [] } catch (e) { detections.value = [] }
+}
+async function confirmDetection(d) {
+  try {
+    await api.post(`/stock/detections/${d.id}/confirm`, { quantity: d.quantity })
+    ui.success(`Added ${d.name}.`)
+    await Promise.all([loadDetections(), refresh()])
+    if (!detections.value.length) focus.value = 'all'
+  } catch (e) { ui.error(e.message || 'Could not add.') }
+}
+async function dismissDetection(d) {
+  try { await api.post(`/stock/detections/${d.id}/dismiss`); await loadDetections()
+    if (!detections.value.length) focus.value = 'all' } catch (e) { ui.error(e.message) }
+}
 function setFocus(f) { focus.value = focus.value === f ? 'all' : f }
 // Omnibox: a plain query filters; an "add …" phrase opens Add; anything else asks Edibl.
 function omniSubmit() {
@@ -214,7 +231,7 @@ onMounted(async () => {
     locations.value = locs
     assistantCfg.value = cfg
     freshnessScales.value = meta.freshnessScales || { default: meta.freshnessScale || [] }
-    await Promise.all([loadSuggest(), loadProducts(), load(), loadReorder()])
+    await Promise.all([loadSuggest(), loadProducts(), load(), loadReorder(), loadDetections()])
   } catch (e) { ui.error(e.message || 'Could not load stock.') }
   if (route.query.reconcile) openReconcile(String(route.query.reconcile))  // from Locations
 })
@@ -349,6 +366,17 @@ async function submitBulk() {
   const res = await api.post('/stock/bulk', { shared, items: rows })
   showBulk.value = false; bulk.value = blankBulk(); receiptText.value = ''
   flash(`Added ${res.created} items.`); await refresh()
+}
+// Stage the parsed rows into the review queue instead of adding directly — for
+// lower-confidence extractions you want to double-check first.
+async function stageForReview() {
+  const rows = bulk.value.rows.filter((r) => r.name.trim())
+  if (!rows.length) return
+  try {
+    const r = await api.post('/stock/detect', { items: rows, source: 'receipt' })
+    showBulk.value = false; bulk.value = blankBulk(); receiptText.value = ''
+    ui.success(`${r.staged} item(s) sent to review.`); await loadDetections()
+  } catch (e) { ui.error(e.message || 'Could not stage for review.') }
 }
 
 // consume with outcome + freshness
@@ -492,6 +520,11 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
       <div class="st-title">Reconcile a place</div>
       <div class="st-peek">Walk a location and fix what's really there.</div>
     </button>
+    <button v-if="detections.length" class="smart" :class="{active:focus==='review'}" @click="setFocus('review')">
+      <div class="st-top"><span class="st-n">{{ detections.length }}</span><span>🔎</span></div>
+      <div class="st-title">To review</div>
+      <div class="st-peek">{{ detections.slice(0,3).map(d=>d.name).join(' · ') }}</div>
+    </button>
   </div>
 
   <div class="toolbar">
@@ -510,6 +543,28 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
   </div>
 
   <div v-if="loading" class="muted">Loading…</div>
+
+  <!-- Review queue: AI/vision detections awaiting confirm/dismiss -->
+  <div v-else-if="focus==='review'" class="card tablewrap" style="padding:0">
+    <table v-if="detections.length">
+      <thead><tr><th>Detected item</th><th>Amount</th><th>Confidence</th><th></th></tr></thead>
+      <tbody>
+        <tr v-for="d in detections" :key="d.id">
+          <td><strong>{{ d.name }}</strong>
+            <span v-if="d.category" class="chip">{{ d.category }}</span>
+            <span v-if="d.matchedProductName" class="muted" style="font-size:.75rem"> · already have “{{ d.matchedProductName }}”</span>
+            <span class="muted" style="font-size:.72rem"> · via {{ d.source }}</span></td>
+          <td><input type="number" step="any" min="0" v-model.number="d.quantity" style="width:80px" /> {{ d.unit }}</td>
+          <td><span class="badge" :class="(d.confidence!=null && d.confidence<0.6) ? 'expiring' : ''">
+            {{ d.confidence!=null ? Math.round(d.confidence*100)+'%' : '—' }}</span></td>
+          <td style="text-align:right;white-space:nowrap">
+            <button class="sm" @click="confirmDetection(d)">Add</button>
+            <button class="ghost sm" @click="dismissDetection(d)">Dismiss</button></td>
+        </tr>
+      </tbody>
+    </table>
+    <div v-else class="empty"><div class="ico">🔎</div><p>Nothing to review.</p></div>
+  </div>
 
   <!-- Running-low (reorder) focus -->
   <div v-else-if="focus==='low'" class="card tablewrap" style="padding:0">
@@ -797,6 +852,7 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
       </details>
       <div class="row" style="justify-content:flex-end;margin-top:14px">
         <button class="secondary" @click="showBulk=false">Cancel</button>
+        <button class="secondary" @click="stageForReview" title="Double-check before adding">🔎 Send to review</button>
         <button @click="submitBulk">Add all</button></div>
     </div>
   </div>

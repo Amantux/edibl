@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import jwt
 from flask import current_app, g, request, jsonify
 from passlib.hash import bcrypt
+from sqlalchemy.exc import IntegrityError
 
 from .extensions import db
 from .models import User, Group, ApiToken, hash_token, TOKEN_PREFIX
@@ -54,15 +55,22 @@ def _default_user() -> User:
             user.is_owner = True
             db.session.commit()
         return user
-    group = Group(name=DEFAULT_GROUP)
-    db.session.add(group)
-    db.session.flush()
-    _seed_defaults(group.id)
-    user = User(name="Local", email=DEFAULT_EMAIL,
-                password_hash=hash_password("unused"), is_owner=True, group_id=group.id)
-    db.session.add(user)
-    db.session.commit()
-    return user
+    # Concurrency-safe: several first-load requests can race to create the shared
+    # local user. Let one win; the losers roll back and re-read the winner's row
+    # (a UNIQUE violation on users.email would otherwise 500 the request).
+    try:
+        group = Group(name=DEFAULT_GROUP)
+        db.session.add(group)
+        db.session.flush()
+        _seed_defaults(group.id)
+        user = User(name="Local", email=DEFAULT_EMAIL,
+                    password_hash=hash_password("unused"), is_owner=True, group_id=group.id)
+        db.session.add(user)
+        db.session.commit()
+        return user
+    except IntegrityError:
+        db.session.rollback()
+        return db.session.query(User).filter_by(email=DEFAULT_EMAIL).first()
 
 
 # Ingress requests reach the add-on FROM the HA Supervisor, whose address on the
@@ -127,8 +135,14 @@ def _ingress_user():
                 email=f"ha:{ha_id}", password_hash=hash_password("unused"),
                 is_owner=not has_owner, ha_user_id=ha_id, group_id=group.id)
     db.session.add(user)
-    db.session.commit()
-    return user
+    # Race-safe: parallel first-load requests from one HA user can collide on the
+    # ha_user_id/email unique index — let one win, re-read for the rest.
+    try:
+        db.session.commit()
+        return user
+    except IntegrityError:
+        db.session.rollback()
+        return db.session.query(User).filter_by(ha_user_id=ha_id).first()
 
 
 def _user_from_api_token(raw: str):

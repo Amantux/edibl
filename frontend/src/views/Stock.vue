@@ -83,7 +83,7 @@ let scanStream = null
 function blankForm() {
   return { productName: '', category: '', family: '', quantity: 1, unit: 'count',
     storageMethod: 'refrigerated', freshness: '', locationId: '', source: '',
-    barcode: '', expiryDate: '' }
+    barcode: '', expiryDate: '', itemType: 'food' }
 }
 function blankBulk() {
   return { shared: { storageMethod: 'refrigerated', category: '', family: '', locationId: '', source: '' },
@@ -165,7 +165,37 @@ function applyProductDefaults() {
   }
 }
 
+// Contextualize a NEW item via the classifier (LLM when configured, else a keyword
+// heuristic): auto-fill category / unit / storage / group / type so the user rarely
+// needs "More options". Fills the default sentinels only — never clobbers real input.
+const classifying = ref(false)
+const classifyHint = ref('')
+let classifyToken = 0
+async function classifyAndFill() {
+  const name = (form.value.productName || '').trim()
+  classifyHint.value = ''
+  if (name.length < 2 || productMap.value[name.toLowerCase()]) return  // known product → skip
+  const token = ++classifyToken
+  classifying.value = true
+  try {
+    const c = await api.post('/stock/classify', { name })
+    if (token !== classifyToken) return   // a newer classify superseded this one
+    if (!form.value.category && c.category) form.value.category = c.category
+    if (!form.value.family && c.family) form.value.family = c.family
+    if ((!form.value.unit || form.value.unit === 'count') && c.unit) form.value.unit = c.unit
+    if (form.value.storageMethod === 'refrigerated' && c.storageMethod) form.value.storageMethod = c.storageMethod
+    form.value.itemType = c.itemType || 'food'
+    classifyHint.value = c.category
+      ? `✨ ${c.category}${c.storageMethod ? ' · ' + c.storageMethod.replace('_', ' ') : ''}` : ''
+  } catch (e) { /* best-effort — silent */ } finally { if (token === classifyToken) classifying.value = false }
+}
+function onNameChange() { applyProductDefaults(); classifyAndFill() }
+
 onMounted(async () => {
+  // Open the add modal IMMEDIATELY on a deep-link so it feels instant; the field
+  // dropdowns then populate as their data arrives (below).
+  if (route.query.add) openAdd()
+  if (route.query.focus) focus.value = String(route.query.focus)
   // Fetch independent resources in parallel instead of a long await chain.
   try {
     const [locs, cfg, meta] = await Promise.all([
@@ -178,8 +208,6 @@ onMounted(async () => {
     freshnessScale.value = meta.freshnessScale || []
     await Promise.all([loadSuggest(), loadProducts(), load(), loadReorder()])
   } catch (e) { ui.error(e.message || 'Could not load stock.') }
-  if (route.query.add) openAdd()          // deep-link from the Dashboard "Add stock"
-  if (route.query.focus) focus.value = String(route.query.focus)
   if (route.query.reconcile) openReconcile(String(route.query.reconcile))  // from Locations
 })
 
@@ -238,13 +266,16 @@ async function submitAdd(keepOpen) {
   for (const k of ['expiryDate', 'locationId', 'barcode', 'freshness', 'family', 'source', 'category']) {
     if (!body[k]) delete body[k]
   }
-  await api.post('/stock', body)
+  try {
+    await api.post('/stock', body)
+  } catch (e) { ui.error(e.message || 'Could not add the item.'); return }
+  classifyHint.value = ''
   if (keepOpen) {
     // Keep the "haul" context (location / storage / category / group / unit /
     // source); reset only the item-specific fields, and refocus for the next one.
     Object.assign(form.value, { productName: '', quantity: 1, barcode: '',
-      expiryDate: '', freshness: '' })
-    flash('Added — keep going.')
+      expiryDate: '', freshness: '', itemType: 'food' })
+    ui.success('Added — keep going.')
     refresh()  // background; don't block the next entry
     await nextTick(); nameInput.value?.focus()
   } else {
@@ -654,9 +685,12 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
   <div v-if="showAdd" class="modal-backdrop" @click.self="showAdd = false; stopScan()">
     <div class="card modal" v-trap="() => { showAdd = false; stopScan() }" aria-label="Add stock">
       <h2>Add stock</h2>
-      <label class="field"><span>What is it?</span>
+      <label class="field" style="margin-bottom:6px"><span>What is it?</span>
         <input ref="nameInput" v-model="form.productName" list="dl-names" placeholder="e.g. Organic milk"
-          @input="onNameInput" @change="applyProductDefaults" @keyup.enter="add" /></label>
+          @input="onNameInput" @change="onNameChange" @keyup.enter="add" /></label>
+      <p class="muted" style="font-size:.75rem;margin:0 0 12px;min-height:1.1em">
+        <span v-if="classifying">✨ classifying…</span>
+        <span v-else-if="classifyHint">{{ classifyHint }} — auto-filled, edit anything below.</span></p>
       <div class="row">
         <label class="field" style="width:110px"><span>Quantity</span>
           <input type="number" min="0" v-model.number="form.quantity" @keyup.enter="add" /></label>

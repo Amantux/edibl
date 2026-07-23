@@ -1176,6 +1176,117 @@ def extract_items(text=None, image=None, media_type="image/jpeg"):
 
 
 # --------------------------------------------------------------------------- #
+# Food classification — contextualize an item as it's entered (category, unit,
+# storage, item type, tracking mode, canonical group, shelf life). Uses the LLM
+# when configured, and always falls back to a fast keyword heuristic so the add
+# form gets sensible defaults even with no model.
+# --------------------------------------------------------------------------- #
+_CLASSIFY_SYSTEM = (
+    "You classify a single kitchen/grocery item for an inventory app. Given an "
+    "item name, return ONLY a JSON object (no prose, no markdown) with keys:\n"
+    "  category: one of produce, dairy, meat, seafood, bakery, frozen, beverage, "
+    "wine, spirits, beer, dry_goods, condiment, snack, other\n"
+    "  unit: a sensible default purchase unit (count, g, kg, oz, lb, ml, l, "
+    "carton, bottle, can, jar, bag, box, pack, bunch, portion)\n"
+    "  storage: one of fresh, refrigerated, frozen, vacuum_sealed, pantry\n"
+    "  itemType: food, beverage, or consumable (consumable = non-food like foil, "
+    "bags, dishwasher tablets)\n"
+    "  tracking: presence, level, count, measure, package, or portions\n"
+    "  family: a short canonical group name (e.g. 'Milk' for 'Organic whole milk')\n"
+    "  shelfLifeDays: integer estimate of typical shelf life once bought, or null\n"
+    "Be accurate and concise. Return the JSON object only."
+)
+
+# Keyword → (category, unit, storage) heuristic. Order matters (first match wins).
+_KW = [
+    (("milk", "cream", "yogurt", "yoghurt", "cheese", "butter", "kefir"), ("dairy", "carton", "refrigerated")),
+    (("chicken", "beef", "pork", "lamb", "turkey", "bacon", "sausage", "steak", "mince"), ("meat", "lb", "refrigerated")),
+    (("salmon", "tuna", "shrimp", "prawn", "cod", "fish"), ("seafood", "lb", "refrigerated")),
+    (("lettuce", "spinach", "kale", "tomato", "onion", "pepper", "carrot", "cucumber",
+      "apple", "banana", "berry", "berries", "grape", "lemon", "lime", "avocado",
+      "cilantro", "parsley", "herb", "broccoli", "potato", "garlic", "ginger"), ("produce", "count", "refrigerated")),
+    (("bread", "bagel", "roll", "croissant", "muffin", "tortilla"), ("bakery", "count", "pantry")),
+    (("wine",), ("wine", "bottle", "pantry")),
+    (("beer", "lager", "ale", "ipa"), ("beer", "can", "refrigerated")),
+    (("whiskey", "vodka", "gin", "rum", "tequila", "spirit"), ("spirits", "bottle", "pantry")),
+    (("juice", "soda", "cola", "water", "tea", "coffee", "kombucha"), ("beverage", "bottle", "refrigerated")),
+    (("flour", "sugar", "rice", "pasta", "oat", "cereal", "bean", "lentil", "salt"), ("dry_goods", "kg", "pantry")),
+    (("oil", "vinegar", "sauce", "ketchup", "mustard", "mayo", "jam", "honey", "syrup",
+      "paprika", "cumin", "spice", "pepper", "seasoning", "stock", "broth"), ("condiment", "bottle", "pantry")),
+    (("chip", "cracker", "cookie", "candy", "chocolate", "snack", "nuts"), ("snack", "pack", "pantry")),
+    (("foil", "wrap", "bag", "napkin", "towel", "filter", "tablet", "detergent", "soap"), ("other", "pack", "pantry")),
+    (("ice cream", "frozen", "pizza"), ("frozen", "pack", "frozen")),
+]
+
+
+_NONFOOD = ("foil", "wrap", "bag", "napkin", "towel", "filter", "tablet",
+            "detergent", "soap", "paper", "sponge")
+
+
+def _heuristic_classify(name):
+    n = (name or "").lower()
+    for keys, (cat, unit, storage) in _KW:
+        if any(k in n for k in keys):
+            item_type = ("consumable" if any(k in n for k in _NONFOOD)
+                         else "beverage" if cat in ("beverage", "wine", "spirits", "beer")
+                         else "food")
+            return {"category": cat, "unit": unit, "storage": storage, "itemType": item_type}
+    it = "consumable" if any(k in n for k in _NONFOOD) else "food"
+    return {"category": "other", "unit": "count", "storage": "pantry", "itemType": it}
+
+
+def _normalize_classification(name, raw):
+    """Coerce a (possibly LLM) classification onto Edibl's known values, filling
+    any gaps from the heuristic + category-based defaults."""
+    from ..models import (CATEGORIES, STORAGE_METHODS, ITEM_TYPES, TRACKING_MODES)
+    from .tracking import default_tracking_mode
+
+    h = _heuristic_classify(name)
+    raw = raw or {}
+
+    def pick(key, valid, fallback):
+        v = str(raw.get(key, "") or "").strip().lower()
+        return v if v in valid else fallback
+
+    category = pick("category", set(CATEGORIES), h["category"])
+    storage = pick("storage", set(STORAGE_METHODS), h["storage"])
+    item_type = pick("itemType", set(ITEM_TYPES), h.get("itemType", "food"))
+    tracking = pick("tracking", set(TRACKING_MODES), default_tracking_mode(category))
+    unit = str(raw.get("unit", "") or "").strip().lower() or h["unit"]
+    family = str(raw.get("family", "") or "").strip()
+    shelf = raw.get("shelfLifeDays")
+    try:
+        shelf = int(shelf) if shelf not in (None, "") else None
+    except (TypeError, ValueError):
+        shelf = None
+    return {"name": name, "category": category, "unit": unit, "storageMethod": storage,
+            "itemType": item_type, "trackingMode": tracking, "family": family,
+            "shelfLifeDays": shelf}
+
+
+def classify_food(name):
+    """Contextualize a food item. Returns a normalized classification dict plus a
+    `source` of llm | heuristic. Never raises — degrades to the heuristic."""
+    name = (name or "").strip()
+    if not name:
+        return {"name": "", "source": "none"}
+    cfg = _cfg()
+    if cfg["provider"] in _PROVIDERS:
+        try:
+            reply = _complete(cfg, _CLASSIFY_SYSTEM, name)
+            raw = None
+            if reply:
+                s, e = reply.find("{"), reply.rfind("}")
+                if s != -1 and e != -1 and e > s:
+                    raw = json.loads(reply[s:e + 1])
+            if isinstance(raw, dict):
+                return {**_normalize_classification(name, raw), "source": "llm"}
+        except Exception as exc:  # noqa: BLE001 — fall back to the heuristic
+            _LOGGER.info("classify via '%s' failed, using heuristic: %s", cfg["provider"], exc)
+    return {**_normalize_classification(name, None), "source": "heuristic"}
+
+
+# --------------------------------------------------------------------------- #
 # OpenAI-style providers (OpenAI + Ollama share the function-calling shape)
 # --------------------------------------------------------------------------- #
 def _openai_tools():

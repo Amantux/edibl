@@ -75,9 +75,14 @@ def _resolve_product(data):
     family = (data.get("family") or data.get("group") or "").strip()
     p = db.session.query(Product).filter_by(group_id=gid, name=name).first()
     if not p:
+        from ..models import ITEM_TYPES, TRACKING_MODES
+        it = (data.get("itemType") or "food").strip().lower()
+        tm = (data.get("trackingMode") or "").strip().lower()
         p = Product(name=name, category=(data.get("category") or "other").strip(),
                     family=family, barcode=data.get("barcode") or "",
-                    default_unit=data.get("unit") or "count", group_id=gid)
+                    default_unit=data.get("unit") or "count",
+                    item_type=it if it in ITEM_TYPES else "food",
+                    tracking_mode=tm if tm in TRACKING_MODES else "", group_id=gid)
         db.session.add(p)
         db.session.flush()
     elif family and not p.family:
@@ -708,6 +713,20 @@ def extract():
     result = assistant.extract_items(text=data.get("text", ""), image=image,
                                      media_type=data.get("mediaType", "image/jpeg"))
     return jsonify(result)
+
+
+@bp.post("/stock/classify")
+@login_required
+def classify():
+    """Contextualize a food item as it's typed: category, unit, storage, item type,
+    tracking mode, canonical group, and a shelf-life hint. Uses the configured LLM
+    when available, else a fast keyword heuristic. Body: { name }. Read-only."""
+    from ..services import assistant
+    data = request.get_json(force=True) or {}
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "name required"}), 422
+    return jsonify(assistant.classify_food(name))
 
 
 @bp.post("/stock/bulk")

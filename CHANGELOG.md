@@ -3,6 +3,18 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.5.25
+
+- **Adding stock is smarter and smoother.** As you type an item's name, Edibl now
+  classifies it — auto-filling the category, unit, storage, group, and food type —
+  so you rarely need "More options". It uses your configured AI model when there is
+  one, and a built-in classifier otherwise (works with no setup).
+- **Add from anywhere, instantly.** The Dashboard's "Add stock" button now opens the
+  add form immediately instead of waiting for the page to load.
+- **Reliability fix:** a fast first page-load (which now fetches several things at
+  once) could hit a race that returned a server error on brand-new/standalone
+  installs — fixed so the shared local user is created safely under concurrency.
+
 ## 1.5.24
 
 - Maintenance release — republishes the add-on so Home Assistant picks up the

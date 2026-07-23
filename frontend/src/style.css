@@ -74,6 +74,8 @@ tbody tr.clickable { cursor:pointer; } tbody tr.clickable:hover td { background:
 .modal { width:min(520px,100%); max-height:88vh; overflow:auto; }
 .empty { text-align:center; padding:44px 20px; color:var(--muted); } .empty .ico { font-size:40px; opacity:.5; }
 .divider { height:1px; background:var(--border); margin:14px 0; }
+.settings-sec { text-transform:uppercase; font-size:.72rem; font-weight:700; letter-spacing:.05em; color:var(--muted); margin:22px 2px 8px; }
+.settings-sec:first-of-type { margin-top:8px; }
 pre.export { background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius-sm); padding:12px; white-space:pre-wrap; font-family:ui-monospace,monospace; font-size:.85rem; max-height:320px; overflow:auto; }
 
 /* Let wide tables scroll inside their card at any width instead of clipping

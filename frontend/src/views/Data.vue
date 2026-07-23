@@ -219,6 +219,7 @@ async function importFile(e) {
 <template>
   <div class="page-head"><h1>⚙️ Settings</h1></div>
 
+  <div class="settings-sec">Connections</div>
   <div class="card">
     <h2>Chat assistant</h2>
     <div v-if="s">
@@ -303,6 +304,7 @@ async function importFile(e) {
     <div v-else class="muted">Loading…</div>
   </div>
 
+  <div class="settings-sec">Your data</div>
   <!-- Access & keys -->
   <div class="card">
     <h2>🔑 Access &amp; keys</h2>

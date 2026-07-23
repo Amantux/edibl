@@ -3,13 +3,15 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api'
 import { ui } from '../ui'
+import AddStockModal from '../components/AddStockModal.vue'
 const router = useRouter()
 const d = ref(null)
 const runout = ref([])
 const lifecycle = ref([])
 const reorder = ref([])
+const showAdd = ref(false)
 
-onMounted(async () => {
+async function loadDash() {
   try {
     // Parallel — the landing page shouldn't wait on four round-trips in series.
     const [dash, ro, lc, re] = await Promise.all([
@@ -19,7 +21,8 @@ onMounted(async () => {
     d.value = dash; runout.value = ro.items
     lifecycle.value = lc.items; reorder.value = re.suggestions || []
   } catch (e) { ui.error(e.message || 'Could not load the dashboard.') }
-})
+}
+onMounted(loadDash)
 
 // One-line "here's what needs attention" summary under the title.
 const attention = computed(() => {
@@ -47,7 +50,9 @@ async function addToList(sug) {
   <div class="page-head"><h1>Kitchen</h1>
     <span v-if="d" class="muted" style="font-size:.9rem">· {{ attention }}</span>
     <div class="grow"></div>
-    <button @click="go('/stock?add=1')">＋ Add stock</button></div>
+    <button @click="showAdd = true">＋ Add stock</button></div>
+
+  <AddStockModal v-model="showAdd" @added="loadDash" />
 
   <div v-if="d">
     <!-- Needs attention: tap through to the matching stock view -->

@@ -3,6 +3,16 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.5.31
+
+- **Add from the home page, in place.** The Dashboard's "Add stock" now opens the add
+  form right there — no jumping to another screen. (Add is now one shared, consistent
+  dialog everywhere.)
+- **Bulk add is smart too.** Typing an item name in a bulk row auto-fills its
+  category, unit, and storage, just like the single add.
+- **Tidier Settings.** The settings page is grouped into **Connections** (assistant,
+  myMeal) and **Your data** (keys, export/backup, import).
+
 ## 1.5.30
 
 - **A review queue for AI detections.** Lower-confidence items from a photo/receipt

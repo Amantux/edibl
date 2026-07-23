@@ -23,12 +23,18 @@ def test_add_stock_classifies_and_lands_in_the_list(app_url, page):
     assert page.get_by_text("Greek yogurt", exact=False).count() > 0
 
 
-def test_dashboard_add_opens_the_modal(app_url, page):
+def test_dashboard_adds_in_place_without_navigating(app_url, page):
     page.goto(f"{app_url}/#/", wait_until="networkidle")
     page.wait_for_timeout(700)
     page.get_by_role("button", name="＋ Add stock").click()
     page.wait_for_selector(".modal", timeout=5000)
-    assert page.query_selector(".modal") is not None
+    page.wait_for_timeout(300)
+    page.locator('input[placeholder^="e.g. Organic"]').fill("Sourdough")
+    page.get_by_role("button", name="Add", exact=True).click()
+    page.wait_for_timeout(700)
+    # the modal closed and we're STILL on the dashboard (no route change to /stock)
+    assert page.query_selector(".modal") is None
+    assert page.url.endswith("#/")
 
 
 def test_use_shows_an_undo_toast(app_url, page):

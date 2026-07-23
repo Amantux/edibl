@@ -1,16 +1,15 @@
 <script setup>
-import { ref, computed, reactive, onMounted, nextTick } from 'vue'
+import { ref, computed, reactive, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../api'
 import { askEdibl } from '../chat'
 import { ui } from '../ui'
+import AddStockModal from '../components/AddStockModal.vue'
 
+const addInitialName = ref('')
 const groups = ref([])            // grouped view (all stock)
 const flatItems = ref([])         // freezer / wine views
 const suggest = ref({ categories: [], units: [], families: [], freshness: [], storageMethods: [], names: [] })
-const products = ref([])          // known products -> smart prefill on name match
-const showMore = ref(false)       // progressive disclosure in the Add modal
-const nameInput = ref(null)
 const locations = ref([])
 const loading = ref(true)
 const filter = ref({ view: 'all' })
@@ -22,22 +21,14 @@ const receiptText = ref('')
 const extracting = ref(false)
 const consumeFor = ref(null)
 const consumeQty = ref(null)
-const form = ref(blankForm())
 const bulk = ref(blankBulk())
 
 // ── Task-first landing: omnibox + smart lists + focus ────────────────────────
 const omniQuery = ref('')
 const focus = ref('all')          // all | expiring | open | low
 const reorder = ref([])           // GET /shopping/reorder suggestions
-const freshnessScales = ref({})   // per-domain 1–5 condition scales
 // The condition scale appropriate to the item's category (produce → ripeness,
 // bakery → staleness, …); updates live as classify fills the category.
-const _SCALE_BY_CAT = { produce: 'produce', bakery: 'bakery', meat: 'meat', seafood: 'meat' }
-const conditionScale = computed(() => {
-  const cat = (form.value.category || '').trim().toLowerCase()
-  const s = freshnessScales.value
-  return s[_SCALE_BY_CAT[cat] || 'default'] || s.default || []
-})
 const route = useRoute()
 
 // Every active lot flattened out of the grouped payload (for focused lists).
@@ -90,7 +81,7 @@ function setFocus(f) { focus.value = focus.value === f ? 'all' : f }
 function omniSubmit() {
   const v = omniQuery.value.trim()
   if (!v) return
-  if (/^add\b/i.test(v)) { openAdd(); form.value.productName = v.replace(/^add\s+/i, ''); return }
+  if (/^add\b/i.test(v)) { openAdd(v.replace(/^add\s+/i, '')); return }
   askEdibl(v)
 }
 async function addToShopping(sug) {
@@ -101,15 +92,7 @@ async function addToShopping(sug) {
 }
 
 // barcode
-const scanning = ref(false)
-const scanVideo = ref(null)
-let scanStream = null
 
-function blankForm() {
-  return { productName: '', category: '', family: '', quantity: 1, unit: 'count',
-    storageMethod: 'refrigerated', freshness: '', locationId: '', source: '',
-    barcode: '', bestBy: '', itemType: 'food' }
-}
 function blankBulk() {
   return { shared: { storageMethod: 'refrigerated', category: '', family: '', locationId: '', source: '' },
     rows: [{ name: '', quantity: 1, unit: 'count', storageMethod: '' }] }
@@ -134,87 +117,21 @@ async function load() {
   }
   loading.value = false
 }
-const productMap = computed(() => {
-  const m = {}
-  for (const p of products.value) m[(p.name || '').trim().toLowerCase()] = p
-  return m
-})
-async function loadProducts() { try { products.value = await api.get('/products') } catch (e) { /* optional */ } }
-async function openAdd() {
-  showAdd.value = true; showMore.value = false
-  await nextTick(); nameInput.value?.focus()
+function openAdd(name = '') {
+  addInitialName.value = name
+  showAdd.value = true
 }
 // Where each known product mostly lives right now: product name → the location id
 // holding the most of its active lots. Powers the "put it with the others" default.
-const productLocationMode = computed(() => {
-  const counts = {}
-  for (const s of allLots.value) {
-    const name = (s.product?.name || '').trim().toLowerCase()
-    const loc = s.location?.id
-    if (!name || !loc) continue
-    ;(counts[name] = counts[name] || {})[loc] = (counts[name]?.[loc] || 0) + 1
-  }
-  const mode = {}
-  for (const [name, locs] of Object.entries(counts)) {
-    mode[name] = Object.entries(locs).sort((a, b) => b[1] - a[1])[0][0]
-  }
-  return mode
-})
 // Server-side item-name autocomplete: as you type, ask the backend for matching
 // product names (ranked by the matching service), debounced.
-const nameOptions = ref([])
-let nameTimer = null
-function onNameInput() {
-  clearTimeout(nameTimer)
-  const q = (form.value.productName || '').trim()
-  if (q.length < 1) { nameOptions.value = []; return }
-  nameTimer = setTimeout(async () => {
-    try { nameOptions.value = (await api.get('/products/autocomplete?q=' + encodeURIComponent(q))).names || [] }
-    catch (e) { /* keep last */ }
-  }, 180)
-}
 
 // Fill in what we already know about a named product (category/group/unit + where it
 // usually lives), so a repeat item needs only a name + quantity. Only fills blanks.
-function applyProductDefaults() {
-  const key = (form.value.productName || '').trim().toLowerCase()
-  const p = productMap.value[key]
-  if (p) {
-    if (!form.value.category) form.value.category = p.category || ''
-    if (!form.value.family) form.value.family = p.family || ''
-    if ((!form.value.unit || form.value.unit === 'count') && p.defaultUnit) form.value.unit = p.defaultUnit
-  }
-  // Put a matching item with the majority of its kind, unless a place was chosen.
-  if (!form.value.locationId && productLocationMode.value[key]) {
-    form.value.locationId = productLocationMode.value[key]
-  }
-}
 
 // Contextualize a NEW item via the classifier (LLM when configured, else a keyword
 // heuristic): auto-fill category / unit / storage / group / type so the user rarely
 // needs "More options". Fills the default sentinels only — never clobbers real input.
-const classifying = ref(false)
-const classifyHint = ref('')
-let classifyToken = 0
-async function classifyAndFill() {
-  const name = (form.value.productName || '').trim()
-  classifyHint.value = ''
-  if (name.length < 2 || productMap.value[name.toLowerCase()]) return  // known product → skip
-  const token = ++classifyToken
-  classifying.value = true
-  try {
-    const c = await api.post('/stock/classify', { name })
-    if (token !== classifyToken) return   // a newer classify superseded this one
-    if (!form.value.category && c.category) form.value.category = c.category
-    if (!form.value.family && c.family) form.value.family = c.family
-    if ((!form.value.unit || form.value.unit === 'count') && c.unit) form.value.unit = c.unit
-    if (form.value.storageMethod === 'refrigerated' && c.storageMethod) form.value.storageMethod = c.storageMethod
-    form.value.itemType = c.itemType || 'food'
-    classifyHint.value = c.category
-      ? `✨ ${c.category}${c.storageMethod ? ' · ' + c.storageMethod.replace('_', ' ') : ''}` : ''
-  } catch (e) { /* best-effort — silent */ } finally { if (token === classifyToken) classifying.value = false }
-}
-function onNameChange() { applyProductDefaults(); classifyAndFill() }
 
 onMounted(async () => {
   // Open the add modal IMMEDIATELY on a deep-link so it feels instant; the field
@@ -223,15 +140,13 @@ onMounted(async () => {
   if (route.query.focus) focus.value = String(route.query.focus)
   // Fetch independent resources in parallel instead of a long await chain.
   try {
-    const [locs, cfg, meta] = await Promise.all([
+    const [locs, cfg] = await Promise.all([
       api.get('/locations'),
       api.get('/assistant/config').catch(() => ({ enabled: false })),
-      api.get('/meta').catch(() => ({})),
     ])
     locations.value = locs
     assistantCfg.value = cfg
-    freshnessScales.value = meta.freshnessScales || { default: meta.freshnessScale || [] }
-    await Promise.all([loadSuggest(), loadProducts(), load(), loadReorder(), loadDetections()])
+    await Promise.all([loadSuggest(), load(), loadReorder(), loadDetections()])
   } catch (e) { ui.error(e.message || 'Could not load stock.') }
   if (route.query.reconcile) openReconcile(String(route.query.reconcile))  // from Locations
 })
@@ -285,72 +200,23 @@ function nextExp(g) {
   return d < 0 ? 'expired' : d + 'd'
 }
 
-async function submitAdd(keepOpen) {
-  if (!form.value.productName.trim()) return
-  const body = { ...form.value }
-  for (const k of ['bestBy', 'locationId', 'barcode', 'freshness', 'family', 'source', 'category']) {
-    if (!body[k]) delete body[k]
-  }
-  try {
-    await api.post('/stock', body)
-  } catch (e) { ui.error(e.message || 'Could not add the item.'); return }
-  classifyHint.value = ''
-  if (keepOpen) {
-    // Keep the "haul" context (location / storage / category / group / unit /
-    // source); reset only the item-specific fields, and refocus for the next one.
-    Object.assign(form.value, { productName: '', quantity: 1, barcode: '',
-      bestBy: '', freshness: '', itemType: 'food' })
-    ui.success('Added — keep going.')
-    refresh()  // background; don't block the next entry
-    await nextTick(); nameInput.value?.focus()
-  } else {
-    showAdd.value = false; form.value = blankForm(); await refresh()
-  }
-}
-const add = () => submitAdd(false)
-const addAnother = () => submitAdd(true)
-async function refresh() { await loadSuggest(); await loadProducts(); await load() }
+async function refresh() { await loadSuggest(); await load() }
 
 // barcode lookup / scan
-async function lookupBarcode() {
-  const code = form.value.barcode.trim()
-  if (!code) return
-  try {
-    const res = await api.get('/products/barcode/' + encodeURIComponent(code))
-    const hit = res.found ? res.product : res.suggestion
-    if (hit) {
-      form.value.productName = form.value.productName || hit.name || ''
-      if (hit.category) form.value.category = hit.category
-      if (hit.family) form.value.family = hit.family
-      applyProductDefaults()
-      flash(res.found ? `Known: ${hit.name}` : `Found “${hit.name}” — check details.`)
-    } else flash('Barcode not recognized — fill it in and it’ll be remembered.')
-  } catch (e) { /* offline optional */ }
-}
-const canScan = typeof window !== 'undefined' && 'BarcodeDetector' in window
-async function startScan() {
-  if (!canScan) { flash('Camera scan unsupported here — type the number.'); return }
-  scanning.value = true
-  try {
-    scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
-    await new Promise((r) => setTimeout(r, 50))
-    if (scanVideo.value) { scanVideo.value.srcObject = scanStream; await scanVideo.value.play() }
-    const detector = new window.BarcodeDetector()
-    const tick = async () => {
-      if (!scanning.value) return
-      try {
-        const codes = await detector.detect(scanVideo.value)
-        if (codes && codes.length) { form.value.barcode = codes[0].rawValue; stopScan(); await lookupBarcode(); return }
-      } catch (e) { /* frame not ready */ }
-      requestAnimationFrame(tick)
-    }
-    requestAnimationFrame(tick)
-  } catch (e) { scanning.value = false; flash('Camera error: ' + e.message) }
-}
-function stopScan() { scanning.value = false; if (scanStream) { scanStream.getTracks().forEach((t) => t.stop()); scanStream = null } }
 
 // bulk
 function addBulkRow() { bulk.value.rows.push({ name: '', quantity: 1, unit: 'count', storageMethod: '' }) }
+// Classify a manually-entered bulk row — fill its category/unit/storage if blank.
+async function classifyBulkRow(row) {
+  const name = (row.name || '').trim()
+  if (!name || (row.category && row.storageMethod)) return
+  try {
+    const c = await api.post('/stock/classify', { name })
+    if (!row.category) row.category = c.category
+    if (!row.storageMethod) row.storageMethod = c.storageMethod
+    if (!row.unit || row.unit === 'count') row.unit = c.unit
+  } catch (e) { /* best-effort */ }
+}
 function pasteBulk(text) {
   const rows = text.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
     const [name, qty, unit] = l.split(',').map((x) => (x || '').trim())
@@ -737,7 +603,7 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
     </div>
   </div>
 
-  <datalist id="dl-names"><option v-for="n in nameOptions" :key="n" :value="n" /></datalist>
+  <datalist id="dl-names"><option v-for="n in (suggest.names || [])" :key="n" :value="n" /></datalist>
   <datalist id="dl-cats"><option v-for="c in suggest.categories" :key="c" :value="c" /></datalist>
   <datalist id="dl-units"><option v-for="u in suggest.units" :key="u" :value="u" /></datalist>
   <datalist id="dl-fam"><option v-for="f in suggest.families" :key="f" :value="f" /></datalist>
@@ -745,66 +611,7 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
   <datalist id="dl-storage"><option v-for="s in suggest.storageMethods" :key="s" :value="s" /></datalist>
 
   <!-- Add stock -->
-  <div v-if="showAdd" class="modal-backdrop" @click.self="showAdd = false; stopScan()">
-    <div class="card modal" v-trap="() => { showAdd = false; stopScan() }" aria-label="Add stock">
-      <h2>Add stock</h2>
-      <label class="field" style="margin-bottom:6px"><span>What is it?</span>
-        <input ref="nameInput" v-model="form.productName" list="dl-names" placeholder="e.g. Organic milk"
-          @input="onNameInput" @change="onNameChange" @keyup.enter="add" /></label>
-      <p class="muted" style="font-size:.75rem;margin:0 0 12px;min-height:1.1em">
-        <span v-if="classifying">✨ classifying…</span>
-        <span v-else-if="classifyHint">{{ classifyHint }} — auto-filled, edit anything below.</span></p>
-      <div class="row">
-        <label class="field" style="width:110px"><span>Quantity</span>
-          <input type="number" min="0" v-model.number="form.quantity" @keyup.enter="add" /></label>
-        <label class="field" style="width:120px"><span>Unit</span>
-          <input v-model="form.unit" list="dl-units" /></label>
-        <label class="field" style="flex:1"><span>Location</span>
-          <select v-model="form.locationId"><option value="">Unassigned</option>
-            <option v-for="l in locations" :key="l.id" :value="l.id">{{ l.name }}</option></select></label>
-      </div>
-      <label class="field" v-if="conditionScale.length"><span>Condition (optional)</span>
-        <select v-model="form.freshness">
-          <option value="">Not tracked</option>
-          <option v-for="f in conditionScale" :key="f.key" :value="f.key">{{ f.level }} · {{ f.label }}</option>
-        </select></label>
-
-      <button type="button" class="ghost sm morebtn" @click="showMore = !showMore">
-        {{ showMore ? '▾ Fewer options' : '▸ More options — category, storage, expiry, barcode…' }}</button>
-
-      <template v-if="showMore">
-        <div class="row">
-          <label class="field" style="flex:1"><span>Category</span>
-            <input v-model="form.category" list="dl-cats" placeholder="e.g. dairy" /></label>
-          <label class="field" style="flex:1"><span>Group (shows together, e.g. Milk)</span>
-            <input v-model="form.family" list="dl-fam" placeholder="optional" /></label>
-        </div>
-        <div class="row">
-          <label class="field" style="flex:1"><span>Storage</span>
-            <input v-model="form.storageMethod" list="dl-storage" /></label>
-        </div>
-        <div class="row">
-          <label class="field" style="flex:1"><span>Source (where from)</span>
-            <input v-model="form.source" placeholder="e.g. Costco, farm share" /></label>
-          <label class="field" style="flex:1"><span>Best-by date (blank = estimate)</span>
-            <input type="date" v-model="form.bestBy" /></label>
-        </div>
-        <div class="row">
-          <label class="field" style="flex:1"><span>Barcode</span>
-            <input v-model="form.barcode" placeholder="scan or type" @keyup.enter="lookupBarcode" @blur="lookupBarcode" /></label>
-          <button type="button" class="secondary" style="align-self:flex-end;height:38px" @click="startScan">📷 Scan</button>
-        </div>
-        <div v-if="scanning" class="scanbox"><video ref="scanVideo" muted playsinline></video>
-          <button type="button" class="ghost sm" @click="stopScan">Stop</button></div>
-      </template>
-
-      <p class="muted" style="font-size:.8rem;margin-top:4px">Leave expiry blank — Edibl estimates it and learns from your history.</p>
-      <div class="row" style="justify-content:flex-end;margin-top:6px;gap:8px">
-        <button class="secondary" @click="showAdd=false; stopScan()">Cancel</button>
-        <button class="secondary" :disabled="!form.productName.trim()" @click="addAnother">Add &amp; another</button>
-        <button :disabled="!form.productName.trim()" @click="add">Add</button></div>
-    </div>
-  </div>
+  <AddStockModal v-model="showAdd" :initial-name="addInitialName" @added="refresh" />
 
   <!-- Bulk add -->
   <div v-if="showBulk" class="modal-backdrop" @click.self="showBulk = false">
@@ -841,7 +648,7 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
       </div>
       <div class="divider"></div>
       <div v-for="(r,i) in bulk.rows" :key="i" class="row" style="margin-bottom:8px">
-        <input v-model="r.name" list="dl-names" placeholder="Item name" style="flex:2" />
+        <input v-model="r.name" list="dl-names" placeholder="Item name" style="flex:2" @change="classifyBulkRow(r)" />
         <input type="number" v-model.number="r.quantity" placeholder="qty" style="width:80px" />
         <input v-model="r.unit" list="dl-units" placeholder="unit" style="width:90px" />
         <input v-model="r.storageMethod" list="dl-storage" placeholder="(default)" style="width:130px" />

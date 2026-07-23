@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api'
 import { ui } from '../ui'
+import { useLiveRefresh } from '../live'
 import AddStockModal from '../components/AddStockModal.vue'
 const router = useRouter()
 const d = ref(null)
@@ -11,7 +12,7 @@ const lifecycle = ref([])
 const reorder = ref([])
 const showAdd = ref(false)
 
-async function loadDash() {
+async function loadDash(silent = false) {
   try {
     // Parallel — the landing page shouldn't wait on four round-trips in series.
     const [dash, ro, lc, re] = await Promise.all([
@@ -20,9 +21,11 @@ async function loadDash() {
     ])
     d.value = dash; runout.value = ro.items
     lifecycle.value = lc.items; reorder.value = re.suggestions || []
-  } catch (e) { ui.error(e.message || 'Could not load the dashboard.') }
+  } catch (e) { if (!silent) ui.error(e.message || 'Could not load the dashboard.') }
 }
-onMounted(loadDash)
+onMounted(() => loadDash())
+// Live sync from chat / other devices (silent so background refreshes don't toast).
+useLiveRefresh(() => loadDash(true))
 
 // One-line "here's what needs attention" summary under the title.
 const attention = computed(() => {

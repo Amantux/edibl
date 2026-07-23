@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import { api } from '../api'
 import { askEdibl } from '../chat'
 import { ui } from '../ui'
+import { useLiveRefresh } from '../live'
 import AddStockModal from '../components/AddStockModal.vue'
 
 const addInitialName = ref('')
@@ -107,16 +108,22 @@ async function loadSuggest() {
   }
 }
 
-async function load() {
-  loading.value = true
+async function load(silent = false) {
+  if (!silent) loading.value = true
   if (filter.value.view === 'all') {
     groups.value = (await api.get('/stock/grouped')).groups
   } else {
     const path = filter.value.view === 'freezer' ? '/dashboard/freezer' : '/dashboard/wine'
     flatItems.value = (await api.get(path)).items
   }
-  loading.value = false
+  if (!silent) loading.value = false
 }
+// Live sync: refresh silently when the chat changes stock, the tab regains focus,
+// or on a light poll (catches MCP / Home Assistant / other-device changes).
+async function liveReload() {
+  try { await Promise.all([load(true), loadReorder(), loadDetections()]) } catch (e) { /* silent */ }
+}
+useLiveRefresh(liveReload)
 function openAdd(name = '') {
   addInitialName.value = name
   showAdd.value = true

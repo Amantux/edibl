@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api'
 import { ui } from '../ui'
+import { useLiveRefresh } from '../live'
 const router = useRouter()
 const locs = ref([])
 const loading = ref(true)
@@ -26,16 +27,17 @@ function expLabel(s) {
 function reconcileHere(l) { router.push(`/stock?reconcile=${l.id}`) }
 function addHere() { router.push('/stock?add=1') }
 
-async function load() {
-  loading.value = true
+async function load(silent = false) {
+  if (!silent) loading.value = true
   try { locs.value = await api.get('/locations') }
-  catch (e) { ui.error(e.message || 'Could not load locations.') }
-  finally { loading.value = false }
+  catch (e) { if (!silent) ui.error(e.message || 'Could not load locations.') }
+  finally { if (!silent) loading.value = false }
 }
 onMounted(async () => {
   try { const [m] = await Promise.all([api.get('/meta'), load()]); meta.value = m }
   catch (e) { /* load() surfaces its own error */ }
 })
+useLiveRefresh(() => load(true))   // live sync from chat / other devices
 async function create() {
   if (!form.value.name.trim()) return
   const body = { ...form.value }; if (!body.parentId) delete body.parentId

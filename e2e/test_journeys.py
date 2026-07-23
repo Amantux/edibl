@@ -66,6 +66,26 @@ def test_condition_scale_is_ripeness_for_produce(app_url, page):
     assert any("Unripe" in (o or "") for o in opts)   # ripeness, not fresh→going-off
 
 
+def test_stock_updates_on_focus_after_external_change(app_url, page):
+    import json
+    import urllib.request
+    page.goto(f"{app_url}/#/stock", wait_until="networkidle")
+    page.wait_for_timeout(800)
+    assert page.get_by_text("Liveupdatewidget", exact=False).count() == 0
+    # An external change (as if from MCP / Home Assistant / another device):
+    req = urllib.request.Request(
+        app_url + "/api/v1/stock",
+        data=json.dumps({"name": "Liveupdatewidget", "quantity": 1}).encode(),
+        headers={"Content-Type": "application/json"}, method="POST")
+    urllib.request.urlopen(req)
+    # It's not in the open UI yet…
+    assert page.get_by_text("Liveupdatewidget", exact=False).count() == 0
+    # …until the tab regains focus, which triggers a silent refetch.
+    page.evaluate("() => window.dispatchEvent(new Event('focus'))")
+    page.wait_for_timeout(900)
+    assert page.get_by_text("Liveupdatewidget", exact=False).count() > 0
+
+
 def test_no_horizontal_overflow_on_key_pages(app_url, page):
     for path in ["/", "/stock", "/shopping", "/locations"]:
         page.set_viewport_size({"width": 768, "height": 900})

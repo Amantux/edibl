@@ -2,19 +2,21 @@
 import { ref, onMounted } from 'vue'
 import { api } from '../api'
 import { ui } from '../ui'
+import { useLiveRefresh } from '../live'
 const items = ref([])
 const newItem = ref({ name: '', quantity: 1, unit: 'count' })
 const copied = ref(false)
 const exportText = ref('')
 const loading = ref(true)
 
-async function load() {
-  loading.value = true
+async function load(silent = false) {
+  if (!silent) loading.value = true
   try { items.value = await api.get('/shopping') }
-  catch (e) { ui.error(e.message || 'Could not load the shopping list.') }
-  finally { loading.value = false }
+  catch (e) { if (!silent) ui.error(e.message || 'Could not load the shopping list.') }
+  finally { if (!silent) loading.value = false }
 }
-onMounted(load)
+onMounted(() => load())
+useLiveRefresh(() => load(true))   // live sync from chat / other devices
 
 // Friendly label for the source "tag" on a list item.
 function tagLabel(src) { return src === 'low_stock' ? 'low' : src.replace('_', ' ') }

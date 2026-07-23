@@ -2,6 +2,7 @@
 import { ref, nextTick, onMounted, watch } from 'vue'
 import { api } from '../api'
 import { chatOpen, chatPrefill } from '../chat'
+import { dataChanged } from '../live'
 
 const open = ref(false)
 const cfg = ref({ enabled: false, provider: 'rules', model: null })
@@ -54,6 +55,8 @@ async function send(text) {
     const payload = msgs.value.map((m) => ({ role: m.role, content: m.content }))
     const res = await api.post('/assistant/chat', { messages: payload })
     msgs.value.push({ role: 'assistant', content: res.reply, actions: res.actions || [] })
+    // If the assistant changed anything, tell the open views to refresh.
+    if ((res.actions || []).some((a) => a.undoable)) dataChanged()
   } catch (e) {
     msgs.value.push({ role: 'assistant', content: '⚠️ ' + (e.message || 'Something went wrong.') })
   } finally {
@@ -68,6 +71,7 @@ async function undoAction(a) {
   try {
     await api.post('/assistant/undo', { undo: a.undo })
     a.undone = true
+    dataChanged()   // the undo reverted a change — refresh the open views
   } catch (e) {
     msgs.value.push({ role: 'assistant', content: '⚠️ Undo failed: ' + (e.message || 'error') })
     await scrollDown()

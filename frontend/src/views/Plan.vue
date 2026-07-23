@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { api } from '../api'
 import { ui } from '../ui'
+import { useLiveRefresh } from '../live'
 const plan = ref(null)
 const integ = ref(null)
 const raw = ref('')
@@ -9,15 +10,16 @@ const busy = ref(false)
 const loading = ref(true)
 const loadError = ref('')
 
-async function load() {
-  loading.value = true; loadError.value = ''
+async function load(silent = false) {
+  if (!silent) { loading.value = true; loadError.value = '' }
   try {
     const [p, i] = await Promise.all([api.get('/plan'), api.get('/integrations/status')])
     plan.value = p; integ.value = i
-  } catch (e) { loadError.value = e.message || 'Could not load the meal plan.' }
-  finally { loading.value = false }
+  } catch (e) { if (!silent) loadError.value = e.message || 'Could not load the meal plan.' }
+  finally { if (!silent) loading.value = false }
 }
-onMounted(load)
+onMounted(() => load())
+useLiveRefresh(() => load(true))   // live sync from chat / other devices
 
 async function ingest() {
   // Parse "2 eggs", "200 g flour", "milk" lines into ingredient objects.

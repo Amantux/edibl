@@ -3,6 +3,14 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.5.32
+
+- **The screen keeps up now.** When stock changes from the **chat assistant**, or from
+  another device / Home Assistant / an automation, the open page updates its numbers on
+  its own — instantly for chat, and for outside changes as soon as you return to the tab
+  (plus a quiet periodic refresh while you're looking). No more manual reloads. Applies
+  to Dashboard, Stock, Shopping, Meal plan, and Locations.
+
 ## 1.5.31
 
 - **Add from the home page, in place.** The Dashboard's "Add stock" now opens the add

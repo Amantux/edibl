@@ -3,7 +3,7 @@
 // omnibox). Fetches its own reference data on open, classifies + autocompletes as
 // you type, defaults a repeat item to where most of its kind already lives, supports
 // barcode scan, and emits `added` after each add so the host can refresh.
-import { ref, computed, nextTick, watch } from 'vue'
+import { ref, computed, nextTick, watch, onBeforeUnmount } from 'vue'
 import { api } from '../api'
 import { ui } from '../ui'
 
@@ -179,12 +179,10 @@ const canScan = typeof navigator !== 'undefined' && !!navigator.mediaDevices?.ge
 const ONE_D = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'code_93', 'codabar', 'itf']
 const SCAN_FORMATS = [...ONE_D, 'qr_code', 'data_matrix', 'aztec', 'pdf417']
 
-// A detected code. Only 1D product barcodes drive the lookup; a 2D QR is flagged
-// instead. When the engine can't report a format (ZXing path), a bare 8–14 digit
-// string is treated as a product barcode (UPC/EAN); anything else is "not a code".
-async function onScanned(rawValue, format) {
+// A detected code, already classified by its engine. Only 1D product barcodes
+// drive the lookup; a 2D QR is flagged instead of being looked up as a UPC.
+async function onScanned(rawValue, is1D) {
   stopScan()
-  const is1D = format ? ONE_D.includes(format) : /^\d{8,14}$/.test(rawValue)
   if (is1D) { form.value.barcode = rawValue; await lookupBarcode() }
   else ui.info('That looks like a QR/2D code, not a product barcode — type the item name.')
 }
@@ -201,7 +199,7 @@ async function startNativeScan() {
     if (!scanning.value) return
     try {
       const codes = await detector.detect(scanVideo.value)
-      if (codes && codes.length) { await onScanned(codes[0].rawValue, codes[0].format); return }
+      if (codes && codes.length) { await onScanned(codes[0].rawValue, ONE_D.includes(codes[0].format)); return }
     } catch (e) { /* frame not ready */ }
     requestAnimationFrame(tick)
   }
@@ -210,12 +208,25 @@ async function startNativeScan() {
 
 async function startZxingScan() {
   // ZXing reuses the stream we already opened (attaches it to the preview element),
-  // so there's only ever one camera session; its controls.stop() ends decoding.
-  const { BrowserMultiFormatReader } = await import('@zxing/browser')
+  // so there's only ever one camera session. Classify by the real symbology it
+  // reports (2D = QR/DataMatrix/Aztec/PDF417/MaxiCode), not by guessing.
+  const { BrowserMultiFormatReader, BarcodeFormat } = await import('@zxing/browser')
+  const TWO_D = new Set([BarcodeFormat.QR_CODE, BarcodeFormat.DATA_MATRIX,
+    BarcodeFormat.AZTEC, BarcodeFormat.PDF_417, BarcodeFormat.MAXICODE,
+    BarcodeFormat.MICRO_QR_CODE])
   zxingReader = new BrowserMultiFormatReader()
+  let handled = false
   zxingControls = await zxingReader.decodeFromStream(
     scanStream, scanVideo.value,
-    (result) => { if (result && scanning.value) onScanned(result.getText(), undefined) },
+    (result, _err, controls) => {
+      if (!result || handled) return
+      handled = true
+      // Stop via the controls handed to the callback: the very first frame can fire
+      // synchronously, before the awaited promise assigns zxingControls, so relying
+      // on the outer handle would leave the decode loop running.
+      try { controls.stop() } catch (e) { /* noop */ }
+      onScanned(result.getText(), !TWO_D.has(result.getBarcodeFormat()))
+    },
   )
 }
 
@@ -236,6 +247,9 @@ function stopScan() {
   zxingControls = null
   if (scanStream) { scanStream.getTracks().forEach((t) => t.stop()); scanStream = null }
 }
+// Release the camera if the view is torn down while scanning (route change / phone
+// Back button) — those paths never run close(), so without this the camera leaks.
+onBeforeUnmount(stopScan)
 
 // Open behaviour: (re)load data, reset the form, prefill + classify a supplied name.
 watch(() => props.modelValue, async (v) => {

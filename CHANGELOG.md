@@ -20,6 +20,11 @@ CI** on every release push, so Home Assistant always sees an update.
   callers now get a clean 401 while ingress and keyed clients keep working.
 - Poll interval for the Home Assistant integration is now adjustable (its options),
   and Edibl warns at startup if it's left open on the network with no front door.
+- **AI product descriptions (Ollama web search).** Look a product up online and
+  store a short, factual **searchable description** so search finds it by what it
+  actually is. Batch-enrich from **Settings → AI product descriptions**, or per
+  product via the API. Set an Ollama search key (add-on option `ollama_search_key`
+  / `EDIBL_OLLAMA_SEARCH_KEY`). First real Alembic delta migration (`0002`).
 - **"Find myMeal" is much faster.** Candidate add-on hosts are now probed in
   parallel with a short timeout (instead of one-at-a-time), so discovery returns in
   ~1–2s even when several candidate addresses don't answer.

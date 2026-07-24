@@ -1,9 +1,9 @@
 from flask import Blueprint, request, jsonify, abort
 
-from ..extensions import db
+from ..extensions import db, limiter
 from ..models import (Product, StockLot, FoodConcept, ITEM_TYPES, CATEGORIES, UNITS,
                       FRESHNESS_LEVELS, STORAGE_METHODS)
-from ..auth import login_required, current_group
+from ..auth import login_required, owner_required, current_group
 from ..schemas.serializers import product_out, concept_out
 from ..services.estimation import product_insights
 
@@ -58,7 +58,7 @@ def list_products():
     if search:
         like = f"%{search}%"
         q = q.filter(db.or_(Product.name.ilike(like), Product.brand.ilike(like),
-                            Product.barcode.ilike(like)))
+                            Product.barcode.ilike(like), Product.search_text.ilike(like)))
     if request.args.get("category"):
         q = q.filter(Product.category == request.args["category"])
     return jsonify([product_out(p) for p in q.order_by(Product.name.asc()).all()])
@@ -220,3 +220,71 @@ def update_concept(concept_id):
     _apply_concept(c, request.get_json(force=True) or {})
     db.session.commit()
     return jsonify(concept_out(c))
+
+
+def _describe_fields(p):
+    return {"name": p.name, "brand": p.brand, "category": p.category}
+
+
+_SEARCH_TEXT_MAX = 600  # keep search_text bounded (LLM/web output is untrusted)
+_BATCH_FETCH = 10
+_BATCH_BUDGET_S = 60    # stay well under the gunicorn worker timeout (120s)
+
+
+def _apply_description(p, result):
+    text = result["description"]
+    if result.get("keywords"):
+        text = f"{text} {' '.join(result['keywords'])}"
+    p.search_text = text.strip()[:_SEARCH_TEXT_MAX]
+
+
+@bp.post("/products/<product_id>/describe")
+@limiter.limit("20/minute")
+@login_required
+def describe_product(product_id):
+    """Look the product up online (Ollama web search) and store a short searchable
+    description. Returns it, or 4xx when unavailable."""
+    from ..services import enrich
+
+    p = _get(product_id)
+    if not enrich.enabled():
+        return jsonify({"error": "Web search isn't configured. Set an Ollama search "
+                                 "key (EDIBL_OLLAMA_SEARCH_KEY)."}), 409
+    result = enrich.describe(_describe_fields(p))
+    if not result:
+        return jsonify({"error": "Couldn't find a description for this product online."}), 422
+    _apply_description(p, result)
+    db.session.commit()
+    return jsonify({"searchText": p.search_text, "description": result["description"],
+                    "keywords": result.get("keywords", []),
+                    "sources": result.get("sources", [])})
+
+
+@bp.post("/products/describe-missing")
+@limiter.limit("6/hour")
+@owner_required
+def describe_missing():
+    """Batch-enrich products with no search_text yet. Owner-only (bulk external,
+    paid calls). Commits per item so a worker-kill keeps completed work, and stops
+    before the worker timeout; returns how many remain so the UI can resume."""
+    import time
+
+    from ..services import enrich
+
+    if not enrich.enabled():
+        return jsonify({"error": "Web search isn't configured."}), 409
+    missing = (db.session.query(Product)
+               .filter(Product.group_id == current_group().id,
+                       db.or_(Product.search_text.is_(None), Product.search_text == "")))
+    products = missing.limit(_BATCH_FETCH).all()
+    deadline = time.monotonic() + _BATCH_BUDGET_S
+    done = 0
+    for p in products:
+        if time.monotonic() > deadline:
+            break
+        result = enrich.describe(_describe_fields(p))
+        if result:
+            _apply_description(p, result)
+            db.session.commit()  # per item — partial progress survives a timeout
+            done += 1
+    return jsonify({"described": done, "scanned": len(products), "remaining": missing.count()})

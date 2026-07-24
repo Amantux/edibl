@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
 import { api, apiUrl, getToken } from '../api'
+import { ui } from '../ui'
 
 const importing = ref(false)
 const result = ref('')
@@ -152,6 +153,16 @@ async function migratePg() {
     pgResult.value = await api.post('/migrate/postgres', { targetUrl: pgUrl.value.trim() })
     pgMsg.value = ''
   } catch (e) { pgMsg.value = '⚠️ ' + (e.message || 'Migration failed.') } finally { pgBusy.value = false }
+}
+
+// AI descriptions: look products up online (Ollama web search) for searchable text.
+const aiBusy = ref(false)
+async function describeProducts() {
+  aiBusy.value = true
+  try {
+    const r = await api.post('/products/describe-missing', {})
+    ui.success(r.described ? `Described ${r.described} product(s).` : 'Nothing to describe.')
+  } catch (e) { ui.error(e.message || 'Enrichment failed.') } finally { aiBusy.value = false }
 }
 
 onMounted(() => {
@@ -389,6 +400,15 @@ async function importFile(e) {
       <p class="muted" style="margin:0;font-size:.85rem">{{ pgResult.next }}</p>
     </div>
     <p v-if="pgMsg" class="muted" style="font-size:.85rem;margin-top:8px">{{ pgMsg }}</p>
+  </div>
+
+  <div class="card">
+    <h2>✨ AI product descriptions</h2>
+    <p class="muted" style="margin-top:0">Look products up online (Ollama web search) and store a short searchable
+      description, so search finds them by what they actually are. Needs an Ollama search key
+      (add-on option <code>ollama_search_key</code> / <code>EDIBL_OLLAMA_SEARCH_KEY</code>).</p>
+    <button class="secondary" :disabled="aiBusy" @click="describeProducts">
+      {{ aiBusy ? 'Describing…' : 'Describe products missing a description' }}</button>
   </div>
 
   <div class="card">

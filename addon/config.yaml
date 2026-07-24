@@ -50,6 +50,7 @@ options:
   mcp_server_token: ""
   database_url: ""
   migrate_from_sqlite: false
+  ollama_search_key: ""
 schema:
   disable_auth: bool
   llm_provider: "list(|ollama|openai|anthropic|homeassistant)"
@@ -67,3 +68,6 @@ schema:
   # once to copy your existing SQLite data into it, then leave it on (it's a no-op
   # once the target has data). See DOCS → External database.
   migrate_from_sqlite: bool
+  # Optional Ollama API key (ollama.com) for AI product descriptions — look items
+  # up online for a short searchable description. Blank = feature off.
+  ollama_search_key: password?

@@ -27,6 +27,8 @@ export EDIBL_MCP_SERVER_TOKEN="$(gets mcp_server_token)"
 # Optional external Postgres; blank keeps the built-in SQLite in /data.
 export EDIBL_DATABASE_URL="$(gets database_url)"
 export EDIBL_MIGRATE_FROM_SQLITE="$(getb migrate_from_sqlite)"
+# Optional Ollama web-search key for AI product descriptions.
+export EDIBL_OLLAMA_SEARCH_KEY="$(gets ollama_search_key)"
 
 # Behind HA ingress the requests come from the trusted supervisor proxy.
 export EDIBL_PROXY_HOPS="1"

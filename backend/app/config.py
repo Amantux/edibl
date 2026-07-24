@@ -64,6 +64,9 @@ class Config:
     LLM_AGENT_ID = os.environ.get("EDIBL_LLM_AGENT_ID", "").strip()
     LLM_TIMEOUT = int(os.environ.get("EDIBL_LLM_TIMEOUT", "60"))
     LLM_MAX_STEPS = int(os.environ.get("EDIBL_LLM_MAX_STEPS", "6"))
+    # Ollama hosted web-search key (ollama.com) for AI product descriptions. The
+    # model/base for phrasing come from the existing ollama LLM provider config.
+    OLLAMA_SEARCH_KEY = os.environ.get("EDIBL_OLLAMA_SEARCH_KEY", "")
 
     # --- Barcode enrichment ----------------------------------------------
     # When a scanned barcode isn't known locally, optionally look it up in the

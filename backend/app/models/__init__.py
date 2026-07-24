@@ -164,6 +164,8 @@ class Product(IDMixin, TimestampMixin, db.Model):
     name: Mapped[str] = mapped_column(String(255))
     brand: Mapped[str] = mapped_column(String(255), default="")
     category: Mapped[str] = mapped_column(String(64), default="other")
+    # AI-generated (Ollama web search) searchable description; included in search.
+    search_text: Mapped[str] = mapped_column(Text, default="")
     # Canonical identity (nullable; derived from `family` at migration) + what kind
     # of thing this is (non-food is excluded from recipe/expiry logic).
     concept_id: Mapped[str | None] = mapped_column(

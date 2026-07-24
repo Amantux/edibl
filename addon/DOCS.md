@@ -32,6 +32,7 @@ Data is stored in the add-on's persistent `/data` (survives updates).
 | `mcp_enabled` | Run the MCP tool server (for HA's MCP Client / other agents). |
 | `mcp_server_token` | Optional legacy static bearer for the MCP endpoint. You can instead mint a scoped **MCP** key in the UI (Settings → Access & keys) — see below. |
 | `database_url` | **Optional.** External Postgres instead of the built-in SQLite — see [External database](#external-database-postgres). Blank = SQLite in `/data` (recommended). |
+| `ollama_search_key` | **Optional.** An [Ollama](https://ollama.com) API key for **AI product descriptions**: look products up online for a short searchable description (Settings → *AI product descriptions*). Blank = off. |
 
 ## Access & keys (hardened mode)
 

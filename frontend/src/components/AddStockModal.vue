@@ -153,6 +153,8 @@ const addAnother = () => submitAdd(true)
 const scanning = ref(false)
 const scanVideo = ref(null)
 let scanStream = null
+let zxingReader = null
+let zxingControls = null
 async function lookupBarcode() {
   const code = (form.value.barcode || '').trim()
   if (!code) return
@@ -168,42 +170,72 @@ async function lookupBarcode() {
     } else ui.info('Barcode not recognized — fill it in and it’ll be remembered.')
   } catch (e) { /* offline optional */ }
 }
-const canScan = typeof window !== 'undefined' && 'BarcodeDetector' in window
+// Scanning works wherever the browser can open the camera. Chromium uses the
+// native BarcodeDetector; Safari and Firefox — including iOS, which has no
+// BarcodeDetector at all — fall back to a bundled ZXing decoder, so iPhones scan too.
+const canScan = typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia
 // 1D product symbologies vs 2D. Only 1D codes are looked up as product barcodes; a
 // 2D QR is understood as "not a product code" rather than fed to the barcode lookup.
 const ONE_D = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'code_93', 'codabar', 'itf']
 const SCAN_FORMATS = [...ONE_D, 'qr_code', 'data_matrix', 'aztec', 'pdf417']
+
+// A detected code. Only 1D product barcodes drive the lookup; a 2D QR is flagged
+// instead. When the engine can't report a format (ZXing path), a bare 8–14 digit
+// string is treated as a product barcode (UPC/EAN); anything else is "not a code".
+async function onScanned(rawValue, format) {
+  stopScan()
+  const is1D = format ? ONE_D.includes(format) : /^\d{8,14}$/.test(rawValue)
+  if (is1D) { form.value.barcode = rawValue; await lookupBarcode() }
+  else ui.info('That looks like a QR/2D code, not a product barcode — type the item name.')
+}
+
+async function startNativeScan() {
+  if (scanVideo.value) { scanVideo.value.srcObject = scanStream; await scanVideo.value.play() }
+  let formats = SCAN_FORMATS
+  try {
+    const supported = await window.BarcodeDetector.getSupportedFormats()
+    formats = SCAN_FORMATS.filter((f) => supported.includes(f))
+  } catch (e) { /* fall back to detector defaults */ }
+  const detector = new window.BarcodeDetector(formats.length ? { formats } : undefined)
+  const tick = async () => {
+    if (!scanning.value) return
+    try {
+      const codes = await detector.detect(scanVideo.value)
+      if (codes && codes.length) { await onScanned(codes[0].rawValue, codes[0].format); return }
+    } catch (e) { /* frame not ready */ }
+    requestAnimationFrame(tick)
+  }
+  requestAnimationFrame(tick)
+}
+
+async function startZxingScan() {
+  // ZXing reuses the stream we already opened (attaches it to the preview element),
+  // so there's only ever one camera session; its controls.stop() ends decoding.
+  const { BrowserMultiFormatReader } = await import('@zxing/browser')
+  zxingReader = new BrowserMultiFormatReader()
+  zxingControls = await zxingReader.decodeFromStream(
+    scanStream, scanVideo.value,
+    (result) => { if (result && scanning.value) onScanned(result.getText(), undefined) },
+  )
+}
+
 async function startScan() {
   if (!canScan) { ui.info('Camera scan unsupported here — type the number.'); return }
   scanning.value = true
   try {
     scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
     await new Promise((r) => setTimeout(r, 50))
-    if (scanVideo.value) { scanVideo.value.srcObject = scanStream; await scanVideo.value.play() }
-    let formats = SCAN_FORMATS
-    try {
-      const supported = await window.BarcodeDetector.getSupportedFormats()
-      formats = SCAN_FORMATS.filter((f) => supported.includes(f))
-    } catch (e) { /* fall back to detector defaults */ }
-    const detector = new window.BarcodeDetector(formats.length ? { formats } : undefined)
-    const tick = async () => {
-      if (!scanning.value) return
-      try {
-        const codes = await detector.detect(scanVideo.value)
-        if (codes && codes.length) {
-          const c = codes[0]
-          stopScan()
-          if (ONE_D.includes(c.format)) { form.value.barcode = c.rawValue; await lookupBarcode() }
-          else { ui.info('That looks like a QR/2D code, not a product barcode — type the item name.') }
-          return
-        }
-      } catch (e) { /* frame not ready */ }
-      requestAnimationFrame(tick)
-    }
-    requestAnimationFrame(tick)
-  } catch (e) { scanning.value = false; ui.error('Camera error: ' + e.message) }
+    if ('BarcodeDetector' in window) await startNativeScan()
+    else await startZxingScan()
+  } catch (e) { stopScan(); ui.error('Camera error: ' + (e.message || e.name)) }
 }
-function stopScan() { scanning.value = false; if (scanStream) { scanStream.getTracks().forEach((t) => t.stop()); scanStream = null } }
+
+function stopScan() {
+  scanning.value = false
+  try { zxingControls?.stop() } catch (e) { /* noop */ }
+  zxingControls = null
+  if (scanStream) { scanStream.getTracks().forEach((t) => t.stop()); scanStream = null }
+}
 
 // Open behaviour: (re)load data, reset the form, prefill + classify a supplied name.
 watch(() => props.modelValue, async (v) => {

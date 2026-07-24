@@ -4,8 +4,9 @@ auto-discovered when this add-on runs. Best-effort; safe to fail (the integratio
 can still be added manually). Uses only the standard library.
 
 The Supervisor forwards this to HA core, which starts the Edibl config flow's
-`async_step_hassio` with {host, port}. HA core reaches the add-on on its internal
-hostname:7746 (no host port mapping needed).
+`async_step_hassio` with {host, port, token}. HA core reaches the add-on on its
+internal hostname:7746 (no host port mapping needed), authenticating the direct
+REST path with the advertised long-lived API key.
 """
 import json
 import os
@@ -17,6 +18,21 @@ import urllib.request
 TOKEN = os.environ.get("SUPERVISOR_TOKEN")
 BASE = "http://supervisor"
 PORT = int(os.environ.get("EDIBL_PORT", "7746"))
+DATA_DIR = os.environ.get("EDIBL_DATA_DIR", "/data")
+
+
+def _integration_token():
+    """Read the long-lived integration API key the app minted at startup.
+
+    The app persists it to <data>/.integration_token (0600) before workers start;
+    handing it to HA in the discovery payload authenticates the integration on the
+    direct REST path. Best-effort: an empty string just means the integration
+    falls back to the open path (unchanged behaviour)."""
+    try:
+        with open(os.path.join(DATA_DIR, ".integration_token"), encoding="utf-8") as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
 
 
 def _api(method, path, body=None):
@@ -41,9 +57,12 @@ def main():
                 host = os.environ.get("HOSTNAME") or socket.gethostname()
             if not host:
                 raise RuntimeError("no hostname from Supervisor")
+            token = _integration_token()
             _api("POST", "/discovery", {"service": "edibl",
-                                        "config": {"host": host, "port": PORT}})
-            print(f"Edibl: registered discovery -> {host}:{PORT}", flush=True)
+                                        "config": {"host": host, "port": PORT,
+                                                   "token": token}})
+            print(f"Edibl: registered discovery -> {host}:{PORT} "
+                  f"(token {'set' if token else 'absent'})", flush=True)
             return
         except Exception as exc:  # noqa: BLE001 — best effort
             print(f"Edibl: discovery attempt {attempt + 1} failed: {exc}", flush=True)

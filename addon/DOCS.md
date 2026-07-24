@@ -22,7 +22,7 @@ Data is stored in the add-on's persistent `/data` (survives updates).
 
 | Option | Meaning |
 |---|---|
-| `disable_auth` | Keep **on** behind Ingress (HA authenticates you). |
+| `disable_auth` | Keep **on** behind Ingress (HA authenticates you). Turn **off** for *hardened mode* — see [Access & keys](#access--keys-hardened-mode). |
 | `llm_provider` | `ollama` / `openai` / `anthropic` / `homeassistant` — **required** for the chat assistant. |
 | `llm_base_url` | e.g. `http://homeassistant.local:11434` for the HA **Ollama** add-on. |
 | `llm_api_key` | Only for `openai` / `anthropic`. |
@@ -30,7 +30,61 @@ Data is stored in the add-on's persistent `/data` (survives updates).
 | `llm_agent_id` | Only for `homeassistant`: which HA conversation agent to use (e.g. `conversation.ollama`). Blank = HA's default. |
 | `barcode_lookup` | Enrich unknown barcodes from Open Food Facts (online). |
 | `mcp_enabled` | Run the MCP tool server (for HA's MCP Client / other agents). |
-| `mcp_server_token` | Bearer token to protect the MCP endpoint if you map port 7767. |
+| `mcp_server_token` | Optional legacy static bearer for the MCP endpoint. You can instead mint a scoped **MCP** key in the UI (Settings → Access & keys) — see below. |
+| `database_url` | **Optional.** External Postgres instead of the built-in SQLite — see [External database](#external-database-postgres). Blank = SQLite in `/data` (recommended). |
+
+## Access & keys (hardened mode)
+
+The Edibl companion **integration** authenticates automatically: the add-on mints
+a stable API key at startup and advertises it over Supervisor discovery, so the
+one-click setup just works — no token to copy, and it survives restarts.
+
+You control all other machine access from the UI at **Settings → Access & keys**
+(owner only). Each key has a **scope**:
+
+- **Full access** — REST API + MCP server.
+- **REST API only** — the HTTP API (sensors, integrations, exports).
+- **MCP only** — the MCP tool server (`/sse`) and nothing else.
+
+Revoking a key cuts that access immediately.
+
+**Hardened mode** (`disable_auth: false`): unauthenticated internal callers get
+`401`. Ingress (the sidebar) and the auto-paired integration keep working; any
+other client must present a key. The bundled MCP server is protected too — in
+hardened mode it **requires** a key (it authenticates its own REST calls with the
+minted integration key automatically).
+
+**MCP access:** point an MCP client (e.g. HA's **Model Context Protocol** Client)
+at `http://<addon-host>:7767/sse` and use a **Full** or **MCP** key as its bearer
+token. The MCP endpoint requires a key when **any** of these is true: Edibl runs
+in hardened mode (`disable_auth: false`), you set `mcp_server_token`, or you mint
+an **MCP**-scoped key. Otherwise (open mode, no server token, no MCP key) it stays
+open on the internal network — so if you map port `7767` for LAN access, turn on
+one of those first. Minting a *Full* key in open mode does **not** by itself lock
+the MCP port.
+
+## External database (Postgres)
+
+Edibl stores everything in an embedded **SQLite** database in `/data` by default —
+zero-config, backed up with the add-on, and the right choice for almost everyone.
+
+If you'd rather use an external **Postgres** (e.g. a shared HA Postgres add-on or a
+managed instance), set `database_url` to a psycopg URL:
+
+```
+database_url: postgresql+psycopg://edibl:secret@core-postgres:5432/edibl
+```
+
+- The schema is created and migrated automatically on start (via Alembic) — no
+  manual setup beyond an empty database and a user that can create tables.
+- `postgres://` and `postgresql://` URLs are accepted and normalized to the
+  bundled **psycopg 3** driver.
+- Switching backends does **not** migrate your existing data — point Edibl at a
+  fresh database, or move data yourself. SQLite remains fully supported and is the
+  default.
+- Run **one** Edibl instance against a given database. Schema init is serialized
+  within a container, but multiple hosts sharing one Postgres aren't coordinated
+  (the add-on/compose model is single-instance anyway).
 
 ## Using Ollama (recommended) or OpenAI
 

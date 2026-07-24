@@ -24,17 +24,16 @@ export EDIBL_LLM_AGENT_ID="$(gets llm_agent_id)"
 export EDIBL_BARCODE_LOOKUP="$(getb barcode_lookup)"
 export EDIBL_MCP_ENABLED="$(getb mcp_enabled)"
 export EDIBL_MCP_SERVER_TOKEN="$(gets mcp_server_token)"
+# Optional external Postgres; blank keeps the built-in SQLite in /data.
+export EDIBL_DATABASE_URL="$(gets database_url)"
 
 # Behind HA ingress the requests come from the trusted supervisor proxy.
 export EDIBL_PROXY_HOPS="1"
 
-# Auto-discover the Edibl integration in Home Assistant whenever we run under the
-# Supervisor (matches the HomeHoard add-on). The integration probes the discovered
-# add-on before offering setup, so an unreachable instance is aborted cleanly
-# rather than creating a broken entry.
-if [ -n "${SUPERVISOR_TOKEN:-}" ]; then
-  python3 /register-discovery.py &
-fi
+# HA Supervisor auto-discovery (and the integration API-key mint it depends on)
+# is handled by docker-entrypoint.sh AFTER DB init, so the token file exists when
+# the publisher reads it. Keeping it there also makes it race-free with the
+# one-shot schema init (no second create_all).
 
 echo "Starting Edibl (auth_disabled=${EDIBL_DISABLE_AUTH}, llm=${EDIBL_LLM_PROVIDER:-rules}, mcp=${EDIBL_MCP_ENABLED})"
 exec /app/docker-entrypoint.sh

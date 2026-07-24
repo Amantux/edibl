@@ -8,11 +8,19 @@ recipe / what's the shortfall?", and to push planned meals + record consumption.
 Edibl is the source of truth for what's ACTUALLY on hand; myMeal owns recipes.
 
 Run:  python edibl_mcp.py   (SSE on EDIBL_MCP_HOST:EDIBL_MCP_PORT/sse)
-Optional auth: set EDIBL_MCP_SERVER_TOKEN (clients then send Authorization:
-Bearer <token>). API auth: set EDIBL_MCP_API_TOKEN when app auth is enabled.
+
+Inbound auth (who may call this MCP server):
+  * A key minted in Settings → Access & keys with scope `mcp` or `full` (validated
+    against the same ApiToken store the REST API uses), OR
+  * the legacy static EDIBL_MCP_SERVER_TOKEN (if set).
+  Auth is REQUIRED once a server token is set OR any `mcp`-scoped key exists;
+  otherwise the endpoint stays open (zero-config), same as before.
+Outbound auth (this server → REST API): set EDIBL_MCP_API_TOKEN when app auth is on
+  (the add-on wires the minted integration key here in hardened mode).
 """
 import hmac
 import os
+import sys
 
 import httpx
 from mcp.server.fastmcp import FastMCP
@@ -405,13 +413,79 @@ def shopping_list() -> str:
 
 
 # --------------------------------------------------------------------------- #
-def _require_token(asgi_app, token: str):
-    expected = f"Bearer {token}"
+# Inbound authorization — validate presented keys against the app's ApiToken store
+# (the same keys managed in the UI), plus the legacy static server token.
+_app = None
 
+
+def _get_app():
+    """Build the Flask app once (reused across requests) for DB-backed key checks.
+    The entrypoint initializes the schema before launching this process, so this is
+    a cheap idempotent create_all against an existing DB."""
+    global _app
+    if _app is None:
+        from app import create_app
+        _app = create_app()
+    return _app
+
+
+def _key_ok(raw: str) -> bool:
+    """True if `raw` is a live ApiToken whose scope allows MCP (`mcp` or `full`)."""
+    if not raw:
+        return False
+    try:
+        app = _get_app()
+        from app.extensions import db
+        from app.models import ApiToken, hash_token
+        with app.app_context():
+            rec = db.session.query(ApiToken).filter_by(token_hash=hash_token(raw)).first()
+            ok = rec is not None and (rec.scope or "full") in ("mcp", "full")
+            db.session.remove()
+            return ok
+    except Exception as exc:  # noqa: BLE001 — fail closed on any lookup error
+        print(f"edibl-mcp: key check failed: {exc}", file=sys.stderr)
+        return False
+
+
+def _mcp_key_exists() -> bool:
+    """True if the owner has minted an explicit `mcp`-scoped key — one signal that
+    MCP access should be gated. A general `full` key (e.g. the auto integration key)
+    does NOT flip this on, to avoid silently locking a previously-open endpoint.
+    Raises on a DB error so the caller can fail closed."""
+    app = _get_app()
+    from app.extensions import db
+    from app.models import ApiToken
+    with app.app_context():
+        exists = db.session.query(ApiToken.id).filter_by(scope="mcp").first() is not None
+        db.session.remove()
+        return exists
+
+
+def _auth_required(server_token: str) -> bool:
+    """Whether the MCP endpoint requires authentication. Required when: a legacy
+    server token is set, the app runs in hardened mode (`DISABLE_AUTH` off — so a
+    hardened app means a hardened MCP), or an `mcp`-scoped key has been minted.
+    Fails CLOSED — any error resolves to *required* (unlike the key check, here
+    returning False would serve the request unauthenticated)."""
+    if server_token:
+        return True
+    try:
+        app = _get_app()
+        if not app.config.get("DISABLE_AUTH", False):
+            return True  # hardened app ⇒ hardened MCP
+        return _mcp_key_exists()
+    except Exception as exc:  # noqa: BLE001 — never fail open
+        print(f"edibl-mcp: auth-required check failed, requiring auth: {exc}", file=sys.stderr)
+        return True
+
+
+def _guard(asgi_app, server_token: str):
+    """ASGI gate. See _auth_required for when auth is enforced; otherwise the
+    endpoint is open (zero-config)."""
     async def wrapper(scope, receive, send):
         if scope["type"] == "http":
-            headers = dict(scope.get("headers") or [])
-            if not hmac.compare_digest(headers.get(b"authorization", b"").decode(), expected):
+            header = dict(scope.get("headers") or []).get(b"authorization", b"").decode()
+            if _auth_required(server_token) and not _authorized(header, server_token):
                 await send({"type": "http.response.start", "status": 401,
                             "headers": [(b"content-type", b"text/plain")]})
                 await send({"type": "http.response.body", "body": b"unauthorized"})
@@ -421,16 +495,23 @@ def _require_token(asgi_app, token: str):
     return wrapper
 
 
+def _authorized(header_value: str, server_token: str) -> bool:
+    if server_token and hmac.compare_digest(header_value, f"Bearer {server_token}"):
+        return True
+    if header_value.startswith("Bearer "):
+        return _key_ok(header_value[len("Bearer "):].strip())
+    return False
+
+
 if __name__ == "__main__":
     host = os.environ.get("EDIBL_MCP_HOST", "0.0.0.0")
     port = int(os.environ.get("EDIBL_MCP_PORT", "7767"))
     server_token = os.environ.get("EDIBL_MCP_SERVER_TOKEN", "")
-    app = mcp.sse_app()
-    if server_token:
-        app = _require_token(app, server_token)
-    else:
-        import sys
-        print("WARNING: EDIBL_MCP_SERVER_TOKEN unset — MCP endpoint is UNAUTHENTICATED.",
-              file=sys.stderr)
+    # Always wrap: the guard itself decides per-request whether auth is required, so
+    # minting an MCP key later gates the endpoint without a restart.
+    app = _guard(mcp.sse_app(), server_token)
+    if not server_token:
+        print("edibl-mcp: no EDIBL_MCP_SERVER_TOKEN — MCP is open until you mint an "
+              "'mcp'-scoped key in Settings → Access & keys.", file=sys.stderr)
     import uvicorn
     uvicorn.run(app, host=host, port=port)

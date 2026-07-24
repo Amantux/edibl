@@ -22,5 +22,16 @@
       "already_configured": "This Edibl instance is already configured.",
       "cannot_connect": "The discovered Edibl add-on didn't provide a reachable address."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Edibl options",
+        "description": "How often Home Assistant refreshes data from Edibl.",
+        "data": {
+          "update_interval": "Update interval (seconds)"
+        }
+      }
+    }
   }
 }

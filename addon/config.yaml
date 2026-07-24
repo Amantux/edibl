@@ -48,6 +48,7 @@ options:
   barcode_lookup: false
   mcp_enabled: true
   mcp_server_token: ""
+  database_url: ""
 schema:
   disable_auth: bool
   llm_provider: "list(|ollama|openai|anthropic|homeassistant)"
@@ -58,3 +59,6 @@ schema:
   barcode_lookup: bool
   mcp_enabled: bool
   mcp_server_token: password
+  # Optional external Postgres. Blank = the built-in SQLite in /data (recommended
+  # for most). Format: postgresql+psycopg://user:pass@host:5432/dbname
+  database_url: password?

@@ -11,7 +11,14 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 import homeassistant.helpers.config_validation as cv
 
-from .const import CONF_HOST, CONF_TOKEN, DOMAIN, SERVICE_ADD_TO_SHOPPING
+from .const import (
+    CONF_HOST,
+    CONF_TOKEN,
+    CONF_UPDATE_INTERVAL,
+    DEFAULT_SCAN_INTERVAL,
+    DOMAIN,
+    SERVICE_ADD_TO_SHOPPING,
+)
 from .coordinator import EdiblCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -28,13 +35,22 @@ _ADD_SHOPPING_SCHEMA = vol.Schema(
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Edibl from a config entry."""
-    coordinator = EdiblCoordinator(hass, entry.data[CONF_HOST], entry.data.get(CONF_TOKEN))
+    interval = entry.options.get(CONF_UPDATE_INTERVAL, DEFAULT_SCAN_INTERVAL)
+    coordinator = EdiblCoordinator(
+        hass, entry.data[CONF_HOST], entry.data.get(CONF_TOKEN), interval
+    )
     await coordinator.async_config_entry_first_refresh()
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    # Re-setup (picking up a new poll interval) when the user changes options.
+    entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
     _async_register_services(hass)
     return True
+
+
+async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

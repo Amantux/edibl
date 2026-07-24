@@ -16,6 +16,12 @@ def create_app(config_object=Config):
     app = Flask(__name__, static_folder=None)
     app.config.from_object(config_object)
     app.config["SQLALCHEMY_DATABASE_URI"] = config_object.sqlalchemy_uri()
+    # pool_pre_ping recycles connections a remote Postgres dropped (idle timeout,
+    # restart). Harmless for SQLite. Enables the optional Postgres backend.
+    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"pool_pre_ping": True}
+    _db_uri = app.config["SQLALCHEMY_DATABASE_URI"]
+    _LOGGER.info("Edibl storage backend: %s",
+                 "sqlite" if _db_uri.startswith("sqlite") else _db_uri.split("://", 1)[0])
 
     if not app.config["DISABLE_AUTH"]:
         secret = app.config["SECRET_KEY"] or ""
@@ -25,7 +31,17 @@ def create_app(config_object=Config):
                 "strong random secret before enabling authentication."
             )
     if app.config["DISABLE_AUTH"]:
-        _LOGGER.warning("EDIBL_DISABLE_AUTH is on: no per-request authentication.")
+        # Behind HA ingress (Supervisor) or a trusted reverse proxy this is expected
+        # — the front door already authenticates. Standalone with neither, it means
+        # the API is wide open on the network; warn loudly so it's not a surprise.
+        behind_frontdoor = bool(os.environ.get("SUPERVISOR_TOKEN")) or app.config["PROXY_HOPS"] > 0
+        if behind_frontdoor:
+            _LOGGER.warning("EDIBL_DISABLE_AUTH is on: relying on HA ingress / trusted "
+                            "proxy for authentication.")
+        else:
+            _LOGGER.warning("EDIBL_DISABLE_AUTH is on with no HA ingress or trusted proxy "
+                            "detected — the API is UNAUTHENTICATED on the network. Set "
+                            "EDIBL_DISABLE_AUTH=false (and mint API keys) to require auth.")
 
     hops = app.config["PROXY_HOPS"]
     if hops > 0:
@@ -38,13 +54,7 @@ def create_app(config_object=Config):
     limiter.init_app(app)
 
     from . import models  # noqa: F401
-    with app.app_context():
-        _enable_sqlite_pragmas()
-        db.create_all()
-        _ensure_columns()
-        _seed_reference_data()
-        from .services.bootstrap import seed_all_households
-        seed_all_households()
+    _init_schema(app)
 
     _register_blueprints(app)
     _register_spa(app)
@@ -70,18 +80,71 @@ def _enable_sqlite_pragmas():
         cur.close()
 
 
-def _ensure_columns():
-    """Additive SQLite migration for columns added after a DB was first created.
+def _init_schema(app):
+    """Bring the schema to head via Alembic and run idempotent data backfills +
+    seeding, all under an exclusive file lock so concurrent gunicorn workers don't
+    race on a fresh DB. Works on SQLite and Postgres alike."""
+    import fcntl
 
-    There's no Alembic here (create_all is the schema source of truth), so when we
-    add a column to an existing model, older databases lack it. Add any missing
-    columns idempotently. New databases already have them from create_all — this
-    is a no-op there.
+    lock_path = os.path.join(app.config["DATA_DIR"], ".schema-init.lock")
+    os.makedirs(app.config["DATA_DIR"], exist_ok=True)
+    with open(lock_path, "w") as lock:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        except OSError:
+            pass  # locking unsupported (rare FS) — Alembic is still safe to run.
+        with app.app_context():
+            _enable_sqlite_pragmas()
+            _run_migrations(app)
+            _run_data_backfills()
+            _seed_reference_data()
+            from .services.bootstrap import seed_all_households
+            seed_all_households()
+
+
+def _run_migrations(app):
+    """Run Alembic migrations to head. Three cases, all handled:
+      * Fresh DB → upgrade runs the baseline (create_all) + any deltas.
+      * Existing PRE-Alembic install (tables, no alembic_version) → fill gaps
+        (missing tables via create_all, missing legacy columns via the additive
+        SQLite migration), then stamp baseline so later deltas apply.
+      * Already on Alembic → apply pending revisions.
+    """
+    from alembic import command
+    from alembic.config import Config as AlembicConfig
+    from alembic.runtime.migration import MigrationContext
+    from sqlalchemy import inspect
+
+    backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cfg = AlembicConfig(os.path.join(backend_dir, "alembic.ini"))
+    cfg.set_main_option("script_location", os.path.join(backend_dir, "migrations"))
+    # Pass the URL via attributes, NOT set_main_option: Alembic's ConfigParser would
+    # try to %-interpolate a URL-encoded password (e.g. `%40` for '@') and crash.
+    cfg.attributes["url"] = app.config["SQLALCHEMY_DATABASE_URI"]
+
+    with db.engine.connect() as conn:
+        current = MigrationContext.configure(conn).get_current_revision()
+    if current is None and inspect(db.engine).has_table("users"):
+        db.create_all()             # any missing tables
+        _legacy_sqlite_columns()    # any missing legacy columns (SQLite only)
+        command.stamp(cfg, "0001_baseline")
+    command.upgrade(cfg, "head")
+
+
+def _legacy_sqlite_columns():
+    """Additive SQLite column migration for pre-Alembic databases only.
+
+    Used solely to bring an existing SQLite install fully up to the baseline
+    before stamping it (see _run_migrations). Fresh DBs get every column from the
+    metadata-driven baseline; Postgres is created fresh, so this no-ops there.
     """
     from sqlalchemy import inspect, text
 
+    if db.engine.dialect.name != "sqlite":
+        return
     wanted = {
         "users": {"ha_user_id": "VARCHAR(255)", "is_owner": "BOOLEAN DEFAULT 0"},
+        "api_tokens": {"scope": "VARCHAR(16) DEFAULT 'full'"},
         "products": {"family": "VARCHAR(255) DEFAULT ''",
                      "tracking_mode": "VARCHAR(16) DEFAULT ''",
                      "concept_id": "VARCHAR(36)",
@@ -117,18 +180,26 @@ def _ensure_columns():
                 db.session.execute(text(f'ALTER TABLE {table} ADD COLUMN {name} {ddl}'))
     db.session.commit()
 
-    # Backfill roles for installs that predate ownership: promote the earliest
-    # user of any household that has no owner, so an existing admin isn't locked
-    # out of the now-owner-gated config surfaces. Idempotent — a household that
-    # already has an owner is skipped, so this is a no-op on every later start.
+
+def _run_data_backfills():
+    """Idempotent, dialect-agnostic DATA migrations (not schema — Alembic owns
+    that). Self-quiescing: no-ops once applied and on fresh databases, so they run
+    safely on every boot, on SQLite and Postgres alike."""
+    from sqlalchemy import inspect, text
+
+    existing_tables = set(inspect(db.engine).get_table_names())
+
+    # Promote the earliest user of any household that has no owner, so an install
+    # that predates ownership isn't locked out of the owner-gated surfaces.
+    # `true`/`false` (not 0/1) so the boolean comparison is valid on Postgres too.
     if "users" in existing_tables:
         db.session.execute(text("""
-            UPDATE users SET is_owner = 1
+            UPDATE users SET is_owner = true
             WHERE id IN (
                 SELECT u.id FROM users u
                 WHERE NOT EXISTS (
                     SELECT 1 FROM users o
-                    WHERE o.group_id = u.group_id AND o.is_owner = 1
+                    WHERE o.group_id = u.group_id AND o.is_owner = true
                 )
                 AND u.created_at = (
                     SELECT MIN(u2.created_at) FROM users u2
@@ -138,9 +209,8 @@ def _ensure_columns():
         """))
         db.session.commit()
 
-    # Ledger backfill: derive the orthogonal package_state for legacy lots, and
-    # give every existing active lot an opening-balance `import` event so it has
-    # provenance in the new inventory-event ledger. Idempotent + no-op on fresh DBs.
+    # Ledger backfill: derive package_state for legacy lots + opening-balance
+    # `import` events so each has provenance. Idempotent + no-op on fresh DBs.
     if "stock_lots" in existing_tables and "inventory_events" in existing_tables:
         _backfill_inventory_events()
     if "stock_lots" in existing_tables and "acquisition_lots" in existing_tables:

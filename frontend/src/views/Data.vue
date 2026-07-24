@@ -79,16 +79,20 @@ async function useCandidate(cnd) {
 // ── Access & keys: mint/list/revoke tokens + connect-link sharing ────────────
 const tokens = ref([])
 const newTokenName = ref('')
+const newTokenScope = ref('full')   // full | rest | mcp — what the key unlocks
 const minted = ref(null)            // { token, name } — raw token, shown once
 const connectUrl = ref('')          // address other apps use to reach this Edibl
 const keysBusy = ref(false)
 const keysMsg = ref('')
+// What each scope unlocks (label + one-liner), shown in the picker and the list.
+const SCOPE_LABELS = { full: 'Full access', rest: 'REST API only', mcp: 'MCP only' }
+function scopeLabel(s) { return SCOPE_LABELS[s] || SCOPE_LABELS.full }
 async function loadTokens() { try { tokens.value = await api.get('/tokens') } catch (e) { /* auth off / optional */ } }
 async function mintToken() {
   keysBusy.value = true; keysMsg.value = ''
   try {
-    const r = await api.post('/tokens', { name: newTokenName.value || 'Connected app' })
-    minted.value = { token: r.token, name: r.name }
+    const r = await api.post('/tokens', { name: newTokenName.value || 'Connected app', scope: newTokenScope.value })
+    minted.value = { token: r.token, name: r.name, scope: r.scope }
     newTokenName.value = ''
     await loadTokens()
   } catch (e) { keysMsg.value = '⚠️ ' + (e.message || 'could not create token') } finally { keysBusy.value = false }
@@ -308,18 +312,25 @@ async function importFile(e) {
   <!-- Access & keys -->
   <div class="card">
     <h2>🔑 Access &amp; keys</h2>
-    <p class="muted" style="margin-top:0">Long-lived tokens for other apps or Home Assistant to reach Edibl's API — needed only when Edibl runs <strong>standalone</strong> or is reached across the network (behind HA Ingress, siblings connect without a key). Generate one, then hand it to the other app with a <strong>connect link</strong>.</p>
+    <p class="muted" style="margin-top:0">Long-lived keys for other apps, Home Assistant, or an AI/<strong>MCP</strong> client to reach Edibl — needed when Edibl runs <strong>standalone</strong>, is reached across the network, or auth is on (behind HA Ingress, siblings connect without a key). Choose what each key unlocks, generate it, then hand it over with a <strong>connect link</strong>. Revoking a key cuts that access instantly.</p>
 
     <label class="field"><span>Address other apps use to reach Edibl</span>
       <input v-model="connectUrl" placeholder="https://edibl.example.com" /></label>
     <div class="row" style="align-items:flex-end;gap:8px">
-      <label class="field" style="flex:1"><span>New token name (what's it for?)</span>
+      <label class="field" style="flex:1"><span>New key name (what's it for?)</span>
         <input v-model="newTokenName" placeholder="e.g. myMeal, HA MCP" @keyup.enter="mintToken" /></label>
+      <label class="field" style="width:180px"><span>Access</span>
+        <select v-model="newTokenScope">
+          <option value="full">Full access (API + MCP)</option>
+          <option value="rest">REST API only</option>
+          <option value="mcp">MCP only</option>
+        </select></label>
       <button :disabled="keysBusy" @click="mintToken" style="height:38px">Generate</button>
     </div>
+    <p class="muted" style="font-size:.78rem;margin:6px 0 0">Use an <strong>MCP</strong> (or Full) key as the bearer token for an MCP client — e.g. Home Assistant's MCP integration pointing at Edibl's <code>/sse</code> endpoint. The MCP endpoint requires a key when Edibl runs with auth on (<code>disable_auth: false</code>), when a server token is set, or once you mint an <strong>MCP</strong>-scoped key — otherwise it stays open on the internal network. Minting a Full key alone (in open mode) does <em>not</em> lock it.</p>
 
     <div v-if="minted" style="border:1px solid var(--primary,#2f9e57);border-radius:8px;padding:10px 12px;margin-top:10px;background:rgba(47,158,87,.10)">
-      <p style="margin:0 0 6px"><strong>New token “{{ minted.name }}” — copy it now, it won't be shown again.</strong></p>
+      <p style="margin:0 0 6px"><strong>New key “{{ minted.name }}”</strong> <span class="chip">{{ scopeLabel(minted.scope) }}</span> — copy it now, it won't be shown again.</p>
       <code style="display:block;word-break:break-all;background:var(--surface-raised,#f6f6f6);padding:6px 8px;border-radius:6px;font-size:.8rem">{{ minted.token }}</code>
       <div class="row wrap" style="gap:8px;margin-top:8px">
         <button class="secondary sm" @click="copyText(minted.token, 'Token')">Copy token</button>
@@ -330,10 +341,12 @@ async function importFile(e) {
     </div>
 
     <table v-if="tokens.length" style="width:100%;margin-top:12px;font-size:.9rem">
-      <thead><tr><th style="text-align:left">Name</th><th style="text-align:left">Hint</th><th></th></tr></thead>
+      <thead><tr><th style="text-align:left">Name</th><th style="text-align:left">Access</th><th style="text-align:left">Hint</th><th></th></tr></thead>
       <tbody>
         <tr v-for="t in tokens" :key="t.id">
-          <td>{{ t.name }}</td><td class="muted"><code>{{ t.hint }}…</code></td>
+          <td>{{ t.name }}</td>
+          <td><span class="chip">{{ scopeLabel(t.scope) }}</span></td>
+          <td class="muted"><code>{{ t.hint }}…</code></td>
           <td style="text-align:right"><button class="ghost sm" @click="revokeToken(t.id)">Revoke</button></td>
         </tr>
       </tbody>

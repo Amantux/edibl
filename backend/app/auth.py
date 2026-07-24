@@ -59,10 +59,17 @@ def _default_user() -> User:
     # local user. Let one win; the losers roll back and re-read the winner's row
     # (a UNIQUE violation on users.email would otherwise 500 the request).
     try:
-        group = Group(name=DEFAULT_GROUP)
-        db.session.add(group)
-        db.session.flush()
-        _seed_defaults(group.id)
+        # JOIN the shared household — the earliest-created group, the same one
+        # ingress users are provisioned into — rather than minting a fresh one.
+        # A machine client bound to this user (the HA integration token) would
+        # otherwise read a different, empty household than the real HA users
+        # populate. Only seed a brand-new household (an existing one is seeded).
+        group = db.session.query(Group).order_by(Group.created_at.asc()).first()
+        if group is None:
+            group = Group(name=DEFAULT_GROUP)
+            db.session.add(group)
+            db.session.flush()
+            _seed_defaults(group.id)
         user = User(name="Local", email=DEFAULT_EMAIL,
                     password_hash=hash_password("unused"), is_owner=True, group_id=group.id)
         db.session.add(user)
@@ -149,6 +156,10 @@ def _user_from_api_token(raw: str):
     rec = db.session.query(ApiToken).filter_by(token_hash=hash_token(raw)).first()
     if rec is None:
         return None
+    # Scope gate: an MCP-only key must not authenticate the REST API (it's issued
+    # for the MCP server alone). `full`/`rest` (and legacy NULL→"full") pass.
+    if (rec.scope or "full") == "mcp":
+        return None
     now = datetime.utcnow()
     if rec.last_used_at is None or (now - rec.last_used_at).total_seconds() > 60:
         rec.last_used_at = now
@@ -157,18 +168,39 @@ def _user_from_api_token(raw: str):
 
 
 def load_current_user():
-    if current_app.config["DISABLE_AUTH"]:
-        # Behind ingress each HA user gets their own identity; fall back to the
-        # shared local user only when there's no trusted ingress identity.
-        return _ingress_user() or _default_user()
+    """Resolve the current user from three independent sources, in order, so a
+    machine client (the HA integration, the MCP server) can authenticate by token
+    whether or not DISABLE_AUTH is set, while the browser keeps working behind
+    ingress. DISABLE_AUTH then only controls the open fallback (step 3).
+
+      1. An explicit ``Authorization: Bearer`` token — a long-lived API key or a
+         login JWT. A present-but-INVALID token is a 401, never a silent downgrade
+         to the shared user.
+      2. A trusted HA ingress identity (``X-Remote-User-*`` from the Supervisor
+         peer), provisioning the per-HA-user account. This now runs even with auth
+         ENABLED — that's what lets a hardened install work behind ingress.
+      3. In open mode (DISABLE_AUTH) only: the shared local user — covering both a
+         standalone open deployment and an ingress request that arrived without
+         identity headers.
+    """
     header = request.headers.get("Authorization", "")
-    if not header.startswith("Bearer "):
-        return None
-    token = header[len("Bearer "):].strip()
-    if token.startswith(TOKEN_PREFIX):
-        return _user_from_api_token(token)
-    user_id = decode_token(token)
-    return db.session.get(User, user_id) if user_id else None
+    if header.startswith("Bearer "):
+        token = header[len("Bearer "):].strip()
+        # Long-lived API keys are prefixed so we can route them without a JWT
+        # decode; either way an invalid token resolves to None (→ 401).
+        if token.startswith(TOKEN_PREFIX):
+            return _user_from_api_token(token)
+        user_id = decode_token(token)
+        return db.session.get(User, user_id) if user_id else None
+
+    ingress = _ingress_user()
+    if ingress is not None:
+        return ingress
+
+    if current_app.config["DISABLE_AUTH"]:
+        return _default_user()
+
+    return None
 
 
 def login_required(fn):

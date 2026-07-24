@@ -19,12 +19,15 @@ _TIMEOUT = aiohttp.ClientTimeout(total=15)
 class EdiblCoordinator(DataUpdateCoordinator):
     """Fetch the dashboard + lifecycle feed from an Edibl instance."""
 
-    def __init__(self, hass: HomeAssistant, host: str, token: str | None) -> None:
+    def __init__(
+        self, hass: HomeAssistant, host: str, token: str | None,
+        update_interval: int = DEFAULT_SCAN_INTERVAL,
+    ) -> None:
         super().__init__(
             hass,
             _LOGGER,
             name=DOMAIN,
-            update_interval=timedelta(seconds=DEFAULT_SCAN_INTERVAL),
+            update_interval=timedelta(seconds=update_interval),
         )
         self.host = host.rstrip("/")
         self._session = async_get_clientsession(hass)

@@ -3,6 +3,33 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## 1.5.33
+
+- **The companion integration just connects.** The add-on now hands Home Assistant
+  a stable, auto-generated key over discovery, so the one-click integration setup
+  works even with authentication turned on — no token to copy, and it survives
+  restarts. Rotate it any time by revoking and re-adding.
+- **You control access from the UI.** In **Settings → Access & keys** each key now
+  has a **scope** — *Full* (API + MCP), *REST only*, or *MCP only* — and revoking a
+  key cuts that access instantly. One place to grant or pull access for other apps,
+  Home Assistant, and AI/MCP clients.
+- **MCP access is key-controlled too.** Point an MCP client (e.g. Home Assistant's
+  MCP integration) at Edibl and authenticate it with a *Full* or *MCP* key you mint
+  in the UI — the same key store as the REST API. The bundled MCP server also keeps
+  working in **hardened mode** (`disable_auth: false`), where unauthenticated
+  callers now get a clean 401 while ingress and keyed clients keep working.
+- Poll interval for the Home Assistant integration is now adjustable (its options),
+  and Edibl warns at startup if it's left open on the network with no front door.
+- **"Find myMeal" is much faster.** Candidate add-on hosts are now probed in
+  parallel with a short timeout (instead of one-at-a-time), so discovery returns in
+  ~1–2s even when several candidate addresses don't answer.
+- **Optional PostgreSQL.** Set `database_url` (add-on option) to a
+  `postgresql+psycopg://…` URL to store data in an external Postgres instead of the
+  built-in SQLite (still the default and recommended). The schema is created and
+  migrated automatically — Edibl now manages its schema with **Alembic** on both
+  SQLite and Postgres, and existing SQLite databases are adopted seamlessly on
+  upgrade.
+
 ## 1.5.32
 
 - **The screen keeps up now.** When stock changes from the **chat assistant**, or from

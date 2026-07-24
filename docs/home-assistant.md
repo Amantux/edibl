@@ -42,9 +42,12 @@ restart HA → **Settings → Devices & Services → Add Integration → Edibl**
 **Auto-discovery (no URL needed):** if you run the **add-on**, the integration is
 discovered automatically — you'll get a "New devices discovered / Edibl" prompt;
 just click **Add** (no URL or token, and no port to map — HA reaches the add-on
-internally, and it works whether or not auth is enabled). The add-on registers
-with the Supervisor on every start and the integration probes it before offering
-setup, so a stopped add-on won't create a dead entry.
+internally, and it works whether or not auth is enabled). The add-on mints a
+stable API key and advertises it with the discovery, so the integration is
+authenticated even in **hardened mode** (`disable_auth: false`); the key survives
+restarts, and a re-fired discovery updates it if you ever revoke and re-mint. The
+add-on registers with the Supervisor on every start and the integration probes it
+before offering setup, so a stopped add-on won't create a dead entry.
 
 Install the integration in HACS **first** (below) so a handler exists when the
 prompt fires. If you installed the add-on before the integration, just **restart
@@ -52,8 +55,14 @@ the add-on** afterwards and the "Edibl" discovery card appears.
 
 **Manual connect** (standalone Edibl, or if you prefer): enter the Edibl URL. For
 the add-on, map its port `7746` and use `http://homeassistant.local:7746`. The API
-token is optional in single-tenant mode; if Edibl requires auth, create a
-long-lived token in Edibl (`POST /api/v1/tokens`, `edbl_…`) and paste it.
+token is optional in single-tenant mode; if Edibl requires auth, mint a
+**REST** or **Full** scoped key in **Settings → Access & keys** (or
+`POST /api/v1/tokens`, `edbl_…`) and paste it.
+
+**Access & keys / scopes:** everything a machine client uses to reach Edibl is
+managed at **Settings → Access & keys** (owner only). Each key is scoped **Full**
+(REST + MCP), **REST only**, or **MCP only**, and is revocable. The auto-paired
+integration key appears there too — revoke it and re-add the integration to rotate.
 
 **Connect to myMeal:** in Edibl's **Settings** page, the *myMeal* card has a
 **🔍 Find myMeal add-on** button — if myMeal runs as a Home Assistant add-on,
@@ -137,10 +146,12 @@ stock CSV) and imports it back — additive, so it never deletes.
 
 Let Home Assistant's own assistant reach Edibl's tools:
 
-1. In the add-on: `mcp_enabled: true`, set a `mcp_server_token`, and map port
-   `7767`.
+1. In the add-on: `mcp_enabled: true` and map port `7767`. For the bearer token,
+   either mint an **MCP** (or **Full**) key in **Settings → Access & keys**, or
+   set the legacy `mcp_server_token` option. Minting an MCP key turns on MCP
+   authentication; revoke it to cut access.
 2. Add HA's **Model Context Protocol** integration (MCP Client) pointing at
-   `http://<addon-host>:7767/sse` with that token.
+   `http://<addon-host>:7767/sse` with that key/token.
 3. Set your Assist pipeline's conversation agent to **Ollama** or **OpenAI
    Conversation**. Now "what's expiring?" and "add milk to the shopping list"
    work by voice.

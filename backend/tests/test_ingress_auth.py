@@ -88,7 +88,7 @@ def test_household_is_shared_across_ingress_users(ic):
 def test_migration_backfills_ownerless_admin(app):
     """A pre-roles install (existing user, is_owner=0) must not be locked out:
     the earliest user of an owner-less household is promoted on startup."""
-    from app import _ensure_columns
+    from app import _run_data_backfills
     from app.models import User, Group
     with app.app_context():
         g = Group(name="H")
@@ -98,7 +98,7 @@ def test_migration_backfills_ownerless_admin(app):
                  is_owner=False, group_id=g.id)
         db.session.add(u)
         db.session.commit()
-        _ensure_columns()
+        _run_data_backfills()   # role promotion moved here in the Alembic refactor
         db.session.refresh(u)
         assert u.is_owner is True
 

@@ -71,6 +71,10 @@ class User(IDMixin, TimestampMixin, db.Model):
 
 
 TOKEN_PREFIX = "edbl_"
+# Per-key access scope. `full` reaches everything (default for legacy keys); `rest`
+# is REST-API only; `mcp` is the MCP server only. Enforced in auth._user_from_api_token
+# (REST) and edibl_mcp._authorize (MCP).
+TOKEN_SCOPES = ("full", "rest", "mcp")
 
 
 def generate_raw_token() -> str:
@@ -87,6 +91,7 @@ class ApiToken(IDMixin, TimestampMixin, db.Model):
     name: Mapped[str] = mapped_column(String(255), default="")
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     hint: Mapped[str] = mapped_column(String(16), default="")
+    scope: Mapped[str] = mapped_column(String(16), default="full")  # full | rest | mcp
     last_used_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"))
     group_id: Mapped[str] = mapped_column(String(36), ForeignKey("groups.id"), index=True)
@@ -497,7 +502,8 @@ class InventoryEvent(IDMixin, db.Model):
 
 __all__ = [
     "db", "gen_uuid", "utcnow",
-    "Group", "User", "ApiToken", "TOKEN_PREFIX", "generate_raw_token", "hash_token",
+    "Group", "User", "ApiToken", "TOKEN_PREFIX", "TOKEN_SCOPES",
+    "generate_raw_token", "hash_token",
     "Location", "LOCATION_KINDS", "Product", "CATEGORIES", "UNITS", "TRACKING_MODES",
     "StockLot", "STORAGE_METHODS", "FRESHNESS_LEVELS", "FRESHNESS_SCALE",
     "FRESHNESS_SCALES", "freshness_scale_for", "LIFECYCLE_STATES", "OUTCOMES",

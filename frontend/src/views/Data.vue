@@ -135,8 +135,27 @@ async function diagnoseMyMeal() {
   } catch (e) { mmDiag.value = 'Error: ' + (e.message || 'failed') } finally { mmBusy.value = false }
 }
 
+// ── Migrate to PostgreSQL: copy the whole SQLite DB into an empty Postgres ────
+const dbBackend = ref('sqlite')
+const pgUrl = ref('')
+const pgBusy = ref(false)
+const pgResult = ref(null)   // { total, tables, next }
+const pgMsg = ref('')
+async function loadDbBackend() {
+  try { dbBackend.value = (await api.get('/meta')).dbBackend || 'sqlite' } catch (e) { /* leave default */ }
+}
+async function migratePg() {
+  if (!pgUrl.value.trim()) return
+  if (!confirm('Copy all data into this PostgreSQL database? It must be empty. Your current SQLite data is left untouched.')) return
+  pgBusy.value = true; pgMsg.value = ''; pgResult.value = null
+  try {
+    pgResult.value = await api.post('/migrate/postgres', { targetUrl: pgUrl.value.trim() })
+    pgMsg.value = ''
+  } catch (e) { pgMsg.value = '⚠️ ' + (e.message || 'Migration failed.') } finally { pgBusy.value = false }
+}
+
 onMounted(() => {
-  loadSettings(); loadMyMeal(); loadTokens()
+  loadSettings(); loadMyMeal(); loadTokens(); loadDbBackend()
   if (typeof window !== 'undefined') connectUrl.value = window.location.origin
 })
 async function loadSettings() {
@@ -352,6 +371,24 @@ async function importFile(e) {
       </tbody>
     </table>
     <p v-if="keysMsg" class="muted" style="font-size:.85rem;margin-top:8px">{{ keysMsg }}</p>
+  </div>
+
+  <!-- Migrate to PostgreSQL (only meaningful while running on SQLite) -->
+  <div class="card" v-if="dbBackend === 'sqlite'">
+    <h2>🐘 Migrate to PostgreSQL</h2>
+    <p class="muted" style="margin-top:0">Edibl runs on its built-in <strong>SQLite</strong> database (recommended for most).
+      To move to an external <strong>PostgreSQL</strong>, enter an <strong>empty</strong> Postgres database below and click Migrate —
+      Edibl copies everything across, leaving your SQLite data untouched. Then set the add-on's
+      <code>database_url</code> (or <code>EDIBL_DATABASE_URL</code>) to the same URL and restart to run on Postgres.</p>
+    <label class="field"><span>Target PostgreSQL URL</span>
+      <input v-model="pgUrl" placeholder="postgresql+psycopg://user:pass@host:5432/dbname" /></label>
+    <div class="row" style="justify-content:flex-end">
+      <button :disabled="pgBusy || !pgUrl.trim()" @click="migratePg">{{ pgBusy ? 'Migrating…' : 'Migrate data' }}</button></div>
+    <div v-if="pgResult" style="border:1px solid var(--primary,#2f9e57);border-radius:8px;padding:10px 12px;margin-top:10px;background:rgba(47,158,87,.10)">
+      <p style="margin:0 0 4px"><strong>✓ Copied {{ pgResult.total }} rows.</strong></p>
+      <p class="muted" style="margin:0;font-size:.85rem">{{ pgResult.next }}</p>
+    </div>
+    <p v-if="pgMsg" class="muted" style="font-size:.85rem;margin-top:8px">{{ pgMsg }}</p>
   </div>
 
   <div class="card">

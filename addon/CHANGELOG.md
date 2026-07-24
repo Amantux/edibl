@@ -29,6 +29,11 @@ CI** on every release push, so Home Assistant always sees an update.
   migrated automatically — Edibl now manages its schema with **Alembic** on both
   SQLite and Postgres, and existing SQLite databases are adopted seamlessly on
   upgrade.
+- **Move your data to PostgreSQL.** Two ways to copy an existing SQLite database
+  into an empty Postgres: **Settings → Migrate to PostgreSQL** in the UI, or set the
+  `migrate_from_sqlite` add-on option and restart once. A faithful, id-preserving,
+  all-tables copy into an **empty** target (it refuses a non-empty one); your SQLite
+  data is never modified.
 
 ## 1.5.32
 

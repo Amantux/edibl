@@ -182,3 +182,32 @@ def data_import():
 
     db.session.commit()
     return jsonify({"imported": counts})
+
+
+@bp.post("/migrate/postgres")
+@owner_required
+def migrate_postgres():
+    """Copy the whole SQLite database into an EMPTY PostgreSQL target, then the
+    operator sets database_url + restarts to run on it. Owner-only; never touches
+    the SQLite source."""
+    from flask import current_app
+    from ..services.db_copy import (DbCopyError, TargetNotEmpty,
+                                    migrate_sqlite_to_postgres)
+
+    source = current_app.config["SQLALCHEMY_DATABASE_URI"]
+    if not source.startswith("sqlite"):
+        return jsonify({"error": "Edibl is already running on an external database."}), 400
+    target = ((request.get_json(silent=True) or {}).get("targetUrl") or "").strip()
+    if not target:
+        return jsonify({"error": "targetUrl is required"}), 400
+    try:
+        report = migrate_sqlite_to_postgres(source, target)
+    except TargetNotEmpty as e:
+        return jsonify({"error": str(e)}), 409
+    except DbCopyError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:  # noqa: BLE001 — surface connection/other failures to the user
+        return jsonify({"error": f"Migration failed: {e}"}), 400
+    report["next"] = ("Data copied. Set the add-on's database_url (or "
+                      "EDIBL_DATABASE_URL) to this Postgres URL and restart Edibl.")
+    return jsonify(report)

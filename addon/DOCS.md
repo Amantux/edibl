@@ -79,12 +79,29 @@ database_url: postgresql+psycopg://edibl:secret@core-postgres:5432/edibl
   manual setup beyond an empty database and a user that can create tables.
 - `postgres://` and `postgresql://` URLs are accepted and normalized to the
   bundled **psycopg 3** driver.
-- Switching backends does **not** migrate your existing data — point Edibl at a
-  fresh database, or move data yourself. SQLite remains fully supported and is the
-  default.
+- SQLite remains fully supported and is the default.
 - Run **one** Edibl instance against a given database. Schema init is serialized
   within a container, but multiple hosts sharing one Postgres aren't coordinated
   (the add-on/compose model is single-instance anyway).
+
+### Moving your existing data to Postgres
+
+Two ways to copy your current SQLite data into a **new, empty** Postgres (your
+SQLite data is never modified):
+
+- **From the UI:** open Edibl → **Settings → Migrate to PostgreSQL**, paste the
+  target Postgres URL, click **Migrate data**. When it reports the rows copied,
+  set `database_url` to that URL and restart.
+- **On the add-on config:** set `database_url` to the empty Postgres, turn on
+  `migrate_from_sqlite`, and **restart** once. Edibl copies the SQLite data into
+  Postgres on boot, then runs on it. Leave the option on — it's a no-op once the
+  target already has data. If the copy fails, the add-on **stops with an error in
+  the log** (your SQLite data is untouched) rather than starting on an empty
+  database — fix the target and restart, or revert `database_url` to recover.
+
+Migrate into an **empty** database (Edibl refuses a non-empty target so it can't
+clobber data), and ideally when you're not actively editing, since changes made
+during the copy aren't captured.
 
 ## Using Ollama (recommended) or OpenAI
 

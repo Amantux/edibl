@@ -49,6 +49,7 @@ options:
   mcp_enabled: true
   mcp_server_token: ""
   database_url: ""
+  migrate_from_sqlite: false
 schema:
   disable_auth: bool
   llm_provider: "list(|ollama|openai|anthropic|homeassistant)"
@@ -62,3 +63,7 @@ schema:
   # Optional external Postgres. Blank = the built-in SQLite in /data (recommended
   # for most). Format: postgresql+psycopg://user:pass@host:5432/dbname
   database_url: password?
+  # One-shot: with database_url set to an EMPTY Postgres, turn this on and restart
+  # once to copy your existing SQLite data into it, then leave it on (it's a no-op
+  # once the target has data). See DOCS → External database.
+  migrate_from_sqlite: bool

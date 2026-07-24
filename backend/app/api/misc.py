@@ -50,7 +50,10 @@ def meta():
     from ..models import (CATEGORIES, UNITS, STORAGE_METHODS, LOCATION_KINDS,
                           FRESHNESS_LEVELS, FRESHNESS_SCALE, FRESHNESS_SCALES, OUTCOMES)
     fresh = [s for s in FRESHNESS_LEVELS if s]
+    uri = current_app.config["SQLALCHEMY_DATABASE_URI"]
     return jsonify({
+        # Storage backend in use — drives the "Migrate to PostgreSQL" action.
+        "dbBackend": "sqlite" if uri.startswith("sqlite") else "postgresql",
         # Categories / units / freshness are user-driven; these are seed
         # suggestions. See /products/suggestions for the values actually in use.
         "categories": list(CATEGORIES), "units": list(UNITS),

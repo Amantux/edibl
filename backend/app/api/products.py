@@ -102,6 +102,7 @@ def insights(product_id):
 
 
 @bp.get("/products/barcode/<code>")
+@limiter.limit("60/minute")  # generous for fast scanning; bounds external lookups
 @login_required
 def by_barcode(code):
     """Resolve a scanned barcode. Known products return locally; unknown codes

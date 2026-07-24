@@ -22,6 +22,7 @@ export EDIBL_LLM_API_KEY="$(gets llm_api_key)"
 export EDIBL_LLM_MODEL="$(gets llm_model)"
 export EDIBL_LLM_AGENT_ID="$(gets llm_agent_id)"
 export EDIBL_BARCODE_LOOKUP="$(getb barcode_lookup)"
+export EDIBL_BARCODE_DB_KEY="$(gets barcode_db_key)"
 export EDIBL_MCP_ENABLED="$(getb mcp_enabled)"
 export EDIBL_MCP_SERVER_TOKEN="$(gets mcp_server_token)"
 # Optional external Postgres; blank keeps the built-in SQLite in /data.

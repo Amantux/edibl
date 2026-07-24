@@ -35,22 +35,17 @@ def _guess_category(tags):
     return "other"
 
 
-def lookup_barcode(code: str):
-    """Return ``{name, brand, category, barcode}`` for a barcode, or ``None``.
-
-    Guarded by config so tests and offline installs never touch the network.
-    """
-    if not code or not current_app.config.get("BARCODE_LOOKUP"):
-        return None
-    import httpx  # local import: only needed when lookup is enabled
+def _from_off(code):
+    """Open Food Facts — food-focused, no key. {name,brand,category,...} or None."""
+    import httpx
 
     url = f"https://world.openfoodfacts.org/api/v2/product/{code}.json"
     try:
         r = httpx.get(url, timeout=6, headers={"User-Agent": "Edibl/1.0"})
         r.raise_for_status()
         data = r.json()
-    except Exception as exc:  # noqa: BLE001 — best-effort enrichment
-        _LOGGER.info("barcode lookup failed for %s: %s", code, exc)
+    except Exception as exc:  # noqa: BLE001 — best-effort
+        _LOGGER.info("OFF lookup failed for %s: %s", code, exc)
         return None
     if data.get("status") != 1:
         return None
@@ -58,9 +53,60 @@ def lookup_barcode(code: str):
     name = (p.get("product_name") or p.get("generic_name") or "").strip()
     if not name:
         return None
-    return {
-        "name": name,
-        "brand": (p.get("brands") or "").split(",")[0].strip(),
-        "category": _guess_category(p.get("categories_tags")),
-        "barcode": code,
-    }
+    return {"name": name, "brand": (p.get("brands") or "").split(",")[0].strip(),
+            "category": _guess_category(p.get("categories_tags")),
+            "barcode": code, "source": "openfoodfacts"}
+
+
+def _from_product_db(code):
+    """General product barcode DB (UPCitemdb-style). {name,brand,...} or None."""
+    import httpx
+
+    base = current_app.config.get("BARCODE_DB_URL")
+    if not base:
+        return None
+    key = current_app.config.get("BARCODE_DB_KEY")
+    headers = {"user_key": key, "key_type": "3scale"} if key else {}
+    try:
+        r = httpx.get(base, params={"upc": code}, headers=headers, timeout=6)
+        r.raise_for_status()
+        items = (r.json() or {}).get("items") or []
+    except Exception as exc:  # noqa: BLE001 — best-effort
+        _LOGGER.info("product-DB lookup failed for %s: %s", code, exc)
+        return None
+    if not items:
+        return None
+    it = items[0]
+    name = (it.get("title") or "").strip()
+    if not name:
+        return None
+    return {"name": name, "brand": (it.get("brand") or "").strip(),
+            "category": _guess_category([it.get("category", "")]),
+            "barcode": code, "source": "productdb"}
+
+
+def _from_web_search(code):
+    """Last resort: web-search the barcode number for a product name."""
+    from . import enrich
+
+    if not enrich.enabled():
+        return None
+    results = enrich.web_search(f"{code} UPC barcode product", key=enrich._search_key())
+    if not results:
+        return None
+    name = (results[0].get("title") or "").strip()[:80]
+    if not name:
+        return None
+    return {"name": name, "brand": "", "category": "other",
+            "barcode": code, "source": "websearch"}
+
+
+def lookup_barcode(code: str):
+    """Return ``{name, brand, category, barcode, source}`` for a barcode, or
+    ``None``. Chains Open Food Facts (food) → a general product DB → an Ollama
+    web-search fallback. Guarded by config so offline installs never touch the
+    network; each step is best-effort and degrades to the next / to None.
+    """
+    if not code or not current_app.config.get("BARCODE_LOOKUP"):
+        return None
+    return _from_off(code) or _from_product_db(code) or _from_web_search(code)

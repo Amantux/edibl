@@ -28,7 +28,8 @@ Data is stored in the add-on's persistent `/data` (survives updates).
 | `llm_api_key` | Only for `openai` / `anthropic`. |
 | `llm_model` | `llama3.1`, `gpt-4o-mini`, `claude-opus-4-8`, … |
 | `llm_agent_id` | Only for `homeassistant`: which HA conversation agent to use (e.g. `conversation.ollama`). Blank = HA's default. |
-| `barcode_lookup` | Enrich unknown barcodes from Open Food Facts (online). |
+| `barcode_lookup` | Identify an unknown scanned product barcode (1D UPC/EAN) online — Open Food Facts → product DB → Ollama web-search — to prefill a new item. 2D QR codes aren't treated as product barcodes. Blank/off = no online lookup. |
+| `barcode_db_key` | **Optional.** API key for the product-barcode DB. The default lookup endpoint is keyless — set this only if you've pointed the lookup at a keyed provider. |
 | `mcp_enabled` | Run the MCP tool server (for HA's MCP Client / other agents). |
 | `mcp_server_token` | Optional legacy static bearer for the MCP endpoint. You can instead mint a scoped **MCP** key in the UI (Settings → Access & keys) — see below. |
 | `database_url` | **Optional.** External Postgres instead of the built-in SQLite — see [External database](#external-database-postgres). Blank = SQLite in `/data` (recommended). |

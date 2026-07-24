@@ -72,6 +72,12 @@ class Config:
     # When a scanned barcode isn't known locally, optionally look it up in the
     # public Open Food Facts database (network; off by default).
     BARCODE_LOOKUP = _bool("EDIBL_BARCODE_LOOKUP", False)
+    # Product barcode database for non-food / OFF-miss codes (UPCitemdb trial by
+    # default — no key needed; a keyed endpoint can be supplied). Falls back to the
+    # Ollama web search when both miss.
+    BARCODE_DB_URL = os.environ.get(
+        "EDIBL_BARCODE_DB_URL", "https://api.upcitemdb.com/prod/trial/lookup")
+    BARCODE_DB_KEY = os.environ.get("EDIBL_BARCODE_DB_KEY", "")
 
     MAX_UPLOAD_BYTES = int(os.environ.get("EDIBL_MAX_UPLOAD_MB", "25")) * 1024 * 1024
     JSON_SORT_KEYS = False

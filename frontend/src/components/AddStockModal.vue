@@ -169,6 +169,10 @@ async function lookupBarcode() {
   } catch (e) { /* offline optional */ }
 }
 const canScan = typeof window !== 'undefined' && 'BarcodeDetector' in window
+// 1D product symbologies vs 2D. Only 1D codes are looked up as product barcodes; a
+// 2D QR is understood as "not a product code" rather than fed to the barcode lookup.
+const ONE_D = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'code_93', 'codabar', 'itf']
+const SCAN_FORMATS = [...ONE_D, 'qr_code', 'data_matrix', 'aztec', 'pdf417']
 async function startScan() {
   if (!canScan) { ui.info('Camera scan unsupported here — type the number.'); return }
   scanning.value = true
@@ -176,12 +180,23 @@ async function startScan() {
     scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
     await new Promise((r) => setTimeout(r, 50))
     if (scanVideo.value) { scanVideo.value.srcObject = scanStream; await scanVideo.value.play() }
-    const detector = new window.BarcodeDetector()
+    let formats = SCAN_FORMATS
+    try {
+      const supported = await window.BarcodeDetector.getSupportedFormats()
+      formats = SCAN_FORMATS.filter((f) => supported.includes(f))
+    } catch (e) { /* fall back to detector defaults */ }
+    const detector = new window.BarcodeDetector(formats.length ? { formats } : undefined)
     const tick = async () => {
       if (!scanning.value) return
       try {
         const codes = await detector.detect(scanVideo.value)
-        if (codes && codes.length) { form.value.barcode = codes[0].rawValue; stopScan(); await lookupBarcode(); return }
+        if (codes && codes.length) {
+          const c = codes[0]
+          stopScan()
+          if (ONE_D.includes(c.format)) { form.value.barcode = c.rawValue; await lookupBarcode() }
+          else { ui.info('That looks like a QR/2D code, not a product barcode — type the item name.') }
+          return
+        }
       } catch (e) { /* frame not ready */ }
       requestAnimationFrame(tick)
     }

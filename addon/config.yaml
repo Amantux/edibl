@@ -46,6 +46,7 @@ options:
   llm_model: ""
   llm_agent_id: ""
   barcode_lookup: false
+  barcode_db_key: ""
   mcp_enabled: true
   mcp_server_token: ""
   database_url: ""
@@ -58,7 +59,13 @@ schema:
   llm_api_key: password
   llm_model: str
   llm_agent_id: str
+  # Identify an unknown scanned food barcode (UPC/EAN) online — Open Food Facts →
+  # product DB → Ollama web-search — to prefill a new item. Off = scans still work
+  # against your own inventory, just no online product lookup.
   barcode_lookup: bool
+  # Optional API key for the product-barcode DB. The default lookup endpoint is
+  # keyless; set this only if you've pointed the lookup at a keyed provider.
+  barcode_db_key: password?
   mcp_enabled: bool
   mcp_server_token: password
   # Optional external Postgres. Blank = the built-in SQLite in /data (recommended

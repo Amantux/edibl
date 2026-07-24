@@ -3,6 +3,14 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
+## Unreleased
+
+- **Smarter barcode scanning (1D + 2D).** The scanner now tells 1D product codes
+  (UPC/EAN/Code128…) apart from 2D codes (QR/DataMatrix…), so a QR code is no
+  longer mistaken for a food barcode. With `barcode_lookup` on, an unknown 1D
+  product is identified online (Open Food Facts → product DB → Ollama web-search)
+  to prefill the item. New optional `barcode_db_key` for the product DB.
+
 ## 1.5.33
 
 - **The companion integration just connects.** The add-on now hands Home Assistant

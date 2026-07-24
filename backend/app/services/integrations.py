@@ -11,7 +11,8 @@ import os
 from flask import current_app
 
 _LOGGER = logging.getLogger("edibl.integrations")
-_TIMEOUT = 8.0
+_TIMEOUT = 8.0        # real data fetches (recipes / plans)
+_PROBE_TIMEOUT = 1.5  # bounded probes during add-on discovery (matches myMeal)
 
 
 def _client(base_url, token):
@@ -109,7 +110,8 @@ def _supervisor_get(path):
     import httpx
     try:
         with httpx.Client(base_url="http://supervisor",
-                          headers={"Authorization": f"Bearer {token}"}, timeout=_TIMEOUT) as c:
+                          headers={"Authorization": f"Bearer {token}"},
+                          timeout=_PROBE_TIMEOUT) as c:
             r = c.get(path)
             r.raise_for_status()
             return r.json()
@@ -133,7 +135,6 @@ def _internal_port(info):
 
 MYMEAL_DEFAULT_PORT = 7850
 MYMEAL_HEALTH_PATH = "/api/v1/status"  # public status endpoint on myMeal
-_PROBE_TIMEOUT = 2.0  # short: we may try several hosts, most refusing fast
 
 
 def _probe_mymeal(host, port):
@@ -149,6 +150,18 @@ def _probe_mymeal(host, port):
 
 def _mymeal_reachable(host, port):
     return _probe_mymeal(host, port)["reachable"]
+
+
+def _parallel_map(fn, items):
+    """Apply `fn` to every item CONCURRENTLY, preserving order. Parallel is the
+    whole point of discovery speed: N mostly-dead candidate hosts then cost ~one
+    probe timeout total instead of N sequential ones — the old sequential probe
+    made 'Find myMeal' take several seconds when some candidates don't answer."""
+    import concurrent.futures
+    if not items:
+        return []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(items), 8)) as ex:
+        return list(ex.map(fn, items))
 
 
 def _mymeal_candidate_hosts():
@@ -184,13 +197,16 @@ def _mymeal_candidate_hosts():
 def discover_mymeal():
     """Find a companion myMeal on the internal add-on network — returns only
     candidates whose status endpoint actually answers, so it works even when the
-    Supervisor denies cross-add-on info queries and never lists a dead host."""
-    candidates = []
-    for host, port, slug, name, running in _mymeal_candidate_hosts():
-        if _mymeal_reachable(host, port):
-            candidates.append({"slug": slug, "name": name, "hostname": host,
-                               "port": port, "url": f"http://{host}:{port}",
-                               "running": running})
+    Supervisor denies cross-add-on info queries and never lists a dead host. The
+    candidates are probed in parallel, so unreachable hosts don't add up."""
+    cands = _mymeal_candidate_hosts()
+    reachable = _parallel_map(lambda c: _mymeal_reachable(c[0], c[1]), cands)
+    candidates = [
+        {"slug": slug, "name": name, "hostname": host, "port": port,
+         "url": f"http://{host}:{port}", "running": running}
+        for (host, port, slug, name, running), ok in zip(cands, reachable)
+        if ok
+    ]
     return {"available": True, "candidates": candidates}
 
 
@@ -214,8 +230,10 @@ def discover_mymeal_debug():
     matched = [{"slug": a.get("slug"), "name": a.get("name"), "state": a.get("state")}
                for a in ((addons_env or {}).get("data") or {}).get("addons", [])
                if "meal" in f"{a.get('name', '')} {a.get('slug', '')}".lower()]
-    tried = [{"url": f"http://{host}:{port}", **_probe_mymeal(host, port)}
-             for host, port, _s, _n, _r in _mymeal_candidate_hosts()]
+    cands = _mymeal_candidate_hosts()
+    probes = _parallel_map(lambda c: _probe_mymeal(c[0], c[1]), cands)
+    tried = [{"url": f"http://{host}:{port}", **probe}
+             for (host, port, _s, _n, _r), probe in zip(cands, probes)]
     return {"supervisorToken": token, "supervisorAddonsQuery": addons_state,
             "selfHostname": self_info.get("hostname"),
             "matchedAddons": matched, "tried": tried,

@@ -223,7 +223,10 @@ def update_stock(name: str, quantity: float = None, unit: str = "",
     if notes:
         body["notes"] = notes
     if location:
-        body["locationId"] = _location_id(location)
+        loc_id = _location_id(location)
+        if not loc_id:
+            return f"No location named '{location}'. Add it first, or use an existing one."
+        body["locationId"] = loc_id
     _put(f"/stock/{lot['id']}", body)
     return f"Updated {lot['product']['name']}."
 
@@ -300,7 +303,10 @@ def move_stock(name: str, location: str) -> str:
     lot = _find_lot(name)
     if not lot:
         return f"No stock matching '{name}'."
-    _post(f"/stock/{lot['id']}/move", {"locationId": _location_id(location)})
+    loc_id = _location_id(location)
+    if not loc_id:
+        return f"No location named '{location}'. Add it first, or use an existing one."
+    _post(f"/stock/{lot['id']}/move", {"locationId": loc_id})
     return f"Moved {lot['product']['name']} to {location}."
 
 
@@ -313,7 +319,10 @@ def split_stock(name: str, quantity: float, location: str = "") -> str:
         return f"No stock matching '{name}'."
     body = {"quantity": quantity}
     if location:
-        body["locationId"] = _location_id(location)
+        loc_id = _location_id(location)
+        if not loc_id:
+            return f"No location named '{location}'. Add it first, or use an existing one."
+        body["locationId"] = loc_id
     _post(f"/stock/{lot['id']}/split", body)
     return f"Split off {quantity} {lot['unit']} of {lot['product']['name']}."
 
@@ -323,7 +332,12 @@ def use_stock(name: str, quantity: float, outcome: str = "eaten") -> str:
     """Use an amount of a product, drawing across its lots by policy (prefer-open,
     then first-expiring-first-out) and spilling to the next lot as needed — the safe
     way to 'use the milk' without picking a specific lot."""
-    res = _post("/stock/consume", {"name": name, "quantity": quantity, "outcome": outcome})
+    try:
+        res = _post("/stock/consume", {"name": name, "quantity": quantity, "outcome": outcome})
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            return f"No stock matching '{name}'."
+        raise
     if res.get("consumed", 0) == 0:
         return f"No stock matching '{name}'."
     msg = f"Used {res['consumed']} of {name} across {len(res.get('draws', []))} lot(s)."
@@ -410,6 +424,43 @@ def add_to_shopping_list(name: str, quantity: float = 1, unit: str = "count") ->
 def shopping_list() -> str:
     """The current shopping list as paste-ready text (for Uber Eats / Instacart)."""
     return _get("/shopping/export", {"format": "json"}).get("text", "")
+
+
+@mcp.tool()
+def search_products(query: str) -> list:
+    """Search the product catalog by name, brand, barcode, OR the AI-generated
+    description — so a vague query ("something for a stir-fry", a model number)
+    can still find a product even when the name alone wouldn't match. Returns
+    [{name, brand, category}]."""
+    products = _get("/products", {"q": query})
+    return [{"name": p.get("name"), "brand": p.get("brand"),
+             "category": p.get("category")} for p in products]
+
+
+@mcp.tool()
+def describe_product(name: str) -> str:
+    """Look a product up online (web search) and store a short searchable
+    description for it, so future searches find it by what it actually is.
+    Requires a matching product and a configured Ollama search key."""
+    products = _get("/products", {"q": name})
+    if not products:
+        return f"No product matching '{name}'."
+    try:
+        r = _post(f"/products/{products[0]['id']}/describe")
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 409:
+            return "Web search isn't configured (set an Ollama search key)."
+        if e.response.status_code == 422:
+            return f"Couldn't find a description for '{name}' online."
+        raise
+    return r.get("description") or f"Described {products[0]['name']}."
+
+
+@mcp.tool()
+def reorder_suggestions() -> list:
+    """What to buy now — items below their reorder level, accounting for reserved
+    stock (richer than the meal-plan shortfall). Returns the suggestion list."""
+    return _get("/shopping/reorder").get("suggestions", [])
 
 
 # --------------------------------------------------------------------------- #

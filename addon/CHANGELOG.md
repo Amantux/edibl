@@ -20,6 +20,11 @@ CI** on every release push, so Home Assistant always sees an update.
   callers now get a clean 401 while ingress and keyed clients keep working.
 - Poll interval for the Home Assistant integration is now adjustable (its options),
   and Edibl warns at startup if it's left open on the network with no front door.
+- **MCP tools sharpened (HA voice / agents).** New tools surface the AI search
+  (`search_products`), on-demand `describe_product`, and policy-aware
+  `reorder_suggestions`. Fixed tools that could **silently move/clear a lot's
+  location** when given an unknown location name (they now report it), and
+  `use_stock` returns a friendly "no stock" instead of a raw error.
 - **AI product descriptions (Ollama web search).** Look a product up online and
   store a short, factual **searchable description** so search finds it by what it
   actually is. Batch-enrich from **Settings → AI product descriptions**, or per

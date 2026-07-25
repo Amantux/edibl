@@ -233,6 +233,28 @@ def owner_required(fn):
     return wrapper
 
 
+def instance_admin_required(fn):
+    """Gate whole-INSTANCE operations that span every household (a full-database
+    backup or a cross-engine migration of the entire DB). `is_owner` is only a
+    per-group role, so it's not enough here — any self-registered user owns their
+    own group. Require the owner of the primary (first-created) group: the operator
+    who set the add-on up. Single-household installs (incl. disable_auth's default
+    user, who owns that first group) pass unchanged; a later-registered household
+    cannot exfiltrate everyone's data."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        user = load_current_user()
+        if user is None:
+            return jsonify({"error": "unauthorized"}), 401
+        primary = db.session.query(Group).order_by(Group.created_at.asc()).first()
+        if not user.is_owner or primary is None or user.group_id != primary.id:
+            return jsonify({"error": "instance administrator privileges required"}), 403
+        g.current_user = user
+        g.current_group = user.group
+        return fn(*args, **kwargs)
+    return wrapper
+
+
 def current_user() -> User:
     return g.current_user
 

@@ -10,10 +10,12 @@ import io
 from datetime import datetime
 
 from flask import Blueprint, request, jsonify, Response
+from sqlalchemy.orm import selectinload
 
 from ..extensions import db
 from ..models import Product, Location, StockLot, ShoppingItem, utcnow
-from ..auth import login_required, owner_required, current_group
+from ..auth import (login_required, owner_required, instance_admin_required,
+                    current_group)
 from ..schemas.serializers import (product_out, location_out, stock_out,
                                     shopping_out, iso)
 
@@ -41,13 +43,15 @@ def export():
         "group": current_group().name,
         "locations": [location_out(loc, with_counts=False) for loc in q(Location).all()],
         "products": [product_out(p) for p in q(Product).all()],
-        "stock": [stock_out(s) for s in q(StockLot).filter_by(finished=False).all()],
+        "stock": [stock_out(s) for s in q(StockLot).filter_by(finished=False)
+                  .options(selectinload(StockLot.product),
+                           selectinload(StockLot.location)).all()],
         "shopping": [shopping_out(i) for i in q(ShoppingItem).all()],
     })
 
 
 @bp.get("/export/backup.db")
-@owner_required
+@instance_admin_required
 def backup_db():
     """A consistent, whole-database SQLite backup file (all households) — a real
     point-in-time copy taken with SQLite's online backup API, safe even while the
@@ -84,7 +88,9 @@ def backup_db():
 def export_csv():
     """Active stock as CSV (spreadsheet-friendly)."""
     gid = current_group().id
-    lots = db.session.query(StockLot).filter_by(group_id=gid, finished=False).all()
+    lots = (db.session.query(StockLot).filter_by(group_id=gid, finished=False)
+            .options(selectinload(StockLot.product),
+                     selectinload(StockLot.location)).all())
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["product", "group", "category", "quantity", "unit", "storage",
@@ -185,10 +191,11 @@ def data_import():
 
 
 @bp.post("/migrate/postgres")
-@owner_required
+@instance_admin_required
 def migrate_postgres():
     """Copy the whole SQLite database into an EMPTY PostgreSQL target, then the
-    operator sets database_url + restarts to run on it. Owner-only; never touches
+    operator sets database_url + restarts to run on it. Instance-admin only (spans
+    every household); never touches
     the SQLite source."""
     from flask import current_app
     from ..services.db_copy import (DbCopyError, TargetNotEmpty,

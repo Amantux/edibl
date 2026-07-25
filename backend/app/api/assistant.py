@@ -1,5 +1,9 @@
 """Chat assistant endpoints — a conversational surface over the same inventory
 actions the MCP server exposes, available from a widget on every screen."""
+import ipaddress
+import socket
+from urllib.parse import urlparse
+
 from flask import Blueprint, request, jsonify
 
 from ..auth import login_required, owner_required, current_group
@@ -7,6 +11,37 @@ from ..extensions import limiter, db
 from ..services import assistant
 
 bp = Blueprint("assistant", __name__)
+
+
+def _llm_url_ok(url):
+    """Guard the user-supplied LLM base URL against SSRF to link-local services
+    (notably the cloud metadata endpoint 169.254.169.254 / fe80::) while still
+    allowing loopback and private LAN, where Ollama legitimately runs. Blank → ok
+    (falls back to the configured default). Returns (ok, error). Note: this checks
+    the resolved address now; it is not hardened against DNS-rebinding, which is an
+    acceptable residual for a semi-trusted owner configuring their own endpoint."""
+    if not url:
+        return True, None
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return False, "base URL must be http or https"
+    host = parsed.hostname
+    if not host:
+        return False, "base URL has no host"
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except (OSError, UnicodeError):
+        # Unresolvable / malformed host: let the real request fail rather than 500.
+        return True, None
+    for info in infos:
+        addr = ipaddress.ip_address(info[4][0])
+        # An IPv4-mapped IPv6 address (::ffff:169.254.169.254) connects to the real
+        # IPv4 on a dual-stack host, so test the mapped v4, not the v6 wrapper.
+        if addr.version == 6 and addr.ipv4_mapped is not None:
+            addr = addr.ipv4_mapped
+        if addr.is_link_local:
+            return False, "base URL host is not allowed"
+    return True, None
 
 
 @bp.get("/assistant/config")
@@ -37,6 +72,9 @@ def put_settings():
     if "provider" in data:
         kwargs["provider"] = str(data["provider"] or "")
     if "baseUrl" in data:
+        ok, err = _llm_url_ok(str(data["baseUrl"] or ""))
+        if not ok:
+            return jsonify({"error": err}), 422
         kwargs["base_url"] = str(data["baseUrl"] or "")
     if "model" in data:
         kwargs["model"] = str(data["model"] or "")
@@ -66,6 +104,9 @@ def list_models():
     provider = data.get("provider")
     if provider is not None and str(provider) not in assistant.PROVIDER_CHOICES:
         return jsonify({"error": "unknown provider"}), 422
+    ok, err = _llm_url_ok(data.get("baseUrl") or "")
+    if not ok:
+        return jsonify({"error": err}), 422
     return jsonify(assistant.list_models(
         provider=provider, base_url=data.get("baseUrl"), api_key=data.get("apiKey")))
 

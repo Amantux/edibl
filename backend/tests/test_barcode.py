@@ -74,3 +74,22 @@ def test_by_barcode_endpoint_returns_suggestion(app, auth_client, monkeypatch):
                                       "category": "other", "barcode": code, "source": "productdb"})
     r = auth_client.get("/api/v1/products/barcode/999").get_json()
     assert r["found"] is False and r["suggestion"]["name"] == "Drill"
+
+
+def test_clean_title_extracts_product_segment():
+    assert barcode._clean_title("UPC 0123 | Barcode Lookup", "0123") is None
+    assert (barcode._clean_title("Heinz Ketchup 32oz | Walmart", "0")
+            == "Heinz Ketchup 32oz")
+
+
+def test_web_search_prefers_clean_segment(app, monkeypatch):
+    with app.app_context():
+        from app.services import enrich
+        monkeypatch.setattr(enrich, "enabled", lambda: True)
+        monkeypatch.setattr(enrich, "_search_key", lambda: "k")
+        monkeypatch.setattr(enrich, "web_search", lambda q, key: [
+            {"title": "UPC 012345678905 | Barcode Lookup"},   # junk → skipped
+            {"title": "Organic Whole Milk 1qt | Amazon"},     # real product
+        ])
+        hit = barcode._from_web_search("012345678905")
+    assert hit["name"] == "Organic Whole Milk 1qt" and hit["source"] == "websearch"

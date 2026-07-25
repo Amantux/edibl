@@ -31,3 +31,20 @@ def test_product_rejects_cross_group_concept(app):
     own = b.post("/api/v1/products", json={"name": "Mine"}).get_json()["id"]
     assert b.put(f"/api/v1/products/{own}",
                  json={"conceptId": a_concept_id}).status_code == 404
+
+
+def test_reservation_rejects_cross_group_concept(app):
+    """add_reservation must not accept another household's FoodConcept id either."""
+    a, b = app.test_client(), app.test_client()
+    _register(app, a, "a2@a.com")
+    _register(app, b, "b2@b.com")
+    with app.app_context():
+        gid_a = db.session.query(User).filter_by(email="a2@a.com").first().group_id
+        concept = FoodConcept(canonical_name="Eggs", group_id=gid_a)
+        db.session.add(concept)
+        db.session.commit()
+        a_concept_id = concept.id
+
+    r = b.post("/api/v1/reservations",
+               json={"name": "x", "conceptId": a_concept_id})
+    assert r.status_code == 404

@@ -1,7 +1,8 @@
 from flask import Blueprint, request, jsonify, abort, Response
 
 from ..extensions import db
-from ..models import ShoppingItem, Product, StockLot, ConsumptionEvent, Reservation
+from ..models import (ShoppingItem, Product, StockLot, ConsumptionEvent, Reservation,
+                      FoodConcept)
 from ..auth import login_required, current_group
 from ..schemas.serializers import shopping_out, reservation_out
 from ..services.shopping import format_for_delivery
@@ -133,7 +134,14 @@ def add_reservation():
         if not p or p.group_id != current_group().id:
             return jsonify({"error": "unknown product"}), 404
         name = name or p.name
-    r = Reservation(product_id=pid, concept_id=data.get("conceptId"), name=name,
+    concept_id = data.get("conceptId") or None
+    if concept_id is not None:
+        # Group-scoped FK: reject another household's concept (IDOR), matching the
+        # guard on products; otherwise a reader joining Reservation.concept leaks it.
+        c = db.session.get(FoodConcept, concept_id)
+        if c is None or c.group_id != current_group().id:
+            return jsonify({"error": "unknown concept"}), 404
+    r = Reservation(product_id=pid, concept_id=concept_id, name=name,
                     quantity=float(data.get("quantity") or 1),
                     unit=data.get("unit") or "count", meal=data.get("meal", ""),
                     source_ref=data.get("sourceRef", ""), group_id=current_group().id)

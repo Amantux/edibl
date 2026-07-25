@@ -37,7 +37,15 @@ def _apply(p, data):
         it = (data.get("itemType") or "food").strip().lower()
         p.item_type = it if it in ITEM_TYPES else "food"
     if "conceptId" in data:
-        p.concept_id = data["conceptId"] or None
+        cid = data["conceptId"] or None
+        if cid is not None:
+            # A concept is group-scoped; without this check the FK would accept
+            # another household's concept id and product_out would then leak its
+            # canonicalName cross-tenant (IDOR via an unvalidated write).
+            c = db.session.get(FoodConcept, cid)
+            if c is None or c.group_id != current_group().id:
+                abort(404)
+        p.concept_id = cid
     for k, attr in {"minQuantity": "min_quantity", "targetQuantity": "target_quantity",
                     "reorderThreshold": "reorder_threshold"}.items():
         if k in data:

@@ -166,7 +166,10 @@ async function lookupBarcode() {
       if (hit.category) form.value.category = hit.category
       if (hit.family) form.value.family = hit.family
       applyProductDefaults()
-      ui.info(res.found ? `Known: ${hit.name}` : `Found “${hit.name}” — check details.`)
+      // Surface confidence: a web-search guess is weaker than a product-DB / OFF hit.
+      ui.info(res.found ? `Known: ${hit.name}`
+        : hit.source === 'websearch' ? `Web guess “${hit.name}” — please verify.`
+          : `Found “${hit.name}” — check details.`)
     } else ui.info('Barcode not recognized — fill it in and it’ll be remembered.')
   } catch (e) { /* offline optional */ }
 }

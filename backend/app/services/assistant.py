@@ -1279,6 +1279,44 @@ def _normalize_classification(name, raw):
             "shelfLifeDays": shelf}
 
 
+_UNIT_SYNC_SYSTEM = (
+    "You reconcile two lists of kitchen units of measure — from Edibl (inventory) and "
+    "myMeal (recipes) — so both apps share ONE vocabulary, deduplicated by MEANING "
+    "(count≈each≈piece, cup≈cups, tbsp≈tablespoon, g≈gram). Respond ONLY as JSON: "
+    '{"toEdibl":[{"name","pluralName","abbreviation","dimension"}],'
+    '"toMyMeal":[{"name","pluralName","abbreviation"}]}. '
+    "toEdibl = units myMeal has that Edibl lacks by meaning; toMyMeal = units Edibl has "
+    "that myMeal lacks. Use canonical lowercase names; dimension is count/weight/volume "
+    "or empty. Never include a unit a side already has (by meaning)."
+)
+
+
+def reconcile_units(edibl_units, mymeal_units):
+    """LLM-contextual reconciliation of two unit vocabularies into what each side is
+    missing. Returns {"toEdibl": [...], "toMyMeal": [...]} or None when no LLM is
+    configured / it fails (caller then falls back to a deterministic canonical union).
+    Never raises."""
+    cfg = _cfg()
+    if cfg["provider"] not in _PROVIDERS:
+        return None
+    try:
+        payload = json.dumps({"edibl": edibl_units, "mymeal": mymeal_units})
+        reply = _complete(cfg, _UNIT_SYNC_SYSTEM, payload)
+        if reply:
+            s, e = reply.find("{"), reply.rfind("}")
+            if s != -1 and e != -1 and e > s:
+                data = json.loads(reply[s:e + 1])
+                if isinstance(data, dict):
+                    # Keep only well-formed {name, …} objects — models sometimes emit
+                    # bare strings or a stray shape despite the prompt.
+                    dicts = lambda key: [u for u in (data.get(key) or [])  # noqa: E731
+                                         if isinstance(u, dict) and u.get("name")]
+                    return {"toEdibl": dicts("toEdibl"), "toMyMeal": dicts("toMyMeal")}
+    except Exception as exc:  # noqa: BLE001 — caller falls back to deterministic union
+        _LOGGER.info("unit reconcile via '%s' failed: %s", cfg["provider"], exc)
+    return None
+
+
 def classify_food(name):
     """Contextualize a food item. Returns a normalized classification dict plus a
     `source` of llm | heuristic. Never raises — degrades to the heuristic."""

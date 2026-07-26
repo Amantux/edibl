@@ -48,6 +48,7 @@ class Group(IDMixin, TimestampMixin, db.Model):
     consumption = relationship("ConsumptionEvent", back_populates="group", cascade="all, delete-orphan")
     planned = relationship("PlannedItem", back_populates="group", cascade="all, delete-orphan")
     tokens = relationship("ApiToken", back_populates="group", cascade="all, delete-orphan")
+    units = relationship("Unit", back_populates="group", cascade="all, delete-orphan")
     settings = relationship("Setting", back_populates="group", cascade="all, delete-orphan")
     events = relationship("InventoryEvent", back_populates="group", cascade="all, delete-orphan")
     acquisition_lots = relationship("AcquisitionLot", cascade="all, delete-orphan")
@@ -131,7 +132,27 @@ CATEGORIES = (
     "produce", "dairy", "meat", "seafood", "bakery", "frozen", "beverage",
     "wine", "spirits", "beer", "dry_goods", "condiment", "snack", "other",
 )
-UNITS = ("count", "g", "kg", "oz", "lb", "ml", "l", "pack", "bottle")
+# Canonical units, grouped count → weight → volume; the measure units align with
+# myMeal so a shared shopping list / plan uses the same vocabulary. Free-form still
+# accepted (see services.units.canonical_unit); these are only autocomplete hints.
+UNITS = ("count", "pack", "bottle", "can", "jar", "box", "bag",
+         "g", "kg", "oz", "lb",
+         "ml", "l", "tsp", "tbsp", "fl oz", "cup", "pint", "quart", "gallon")
+
+
+class Unit(IDMixin, TimestampMixin, db.Model):
+    """A named unit of measure, group-scoped and user-manageable — mirrors myMeal's
+    Unit so the two apps can share a unit vocabulary. Free-text units on stock lots
+    still work; these are the curated set (canonicalized name via services.units)."""
+    __tablename__ = "units"
+    __table_args__ = (UniqueConstraint("group_id", "name", name="uq_units_group_name"),)
+    name: Mapped[str] = mapped_column(String(120), index=True)
+    plural_name: Mapped[str] = mapped_column(String(120), default="")
+    abbreviation: Mapped[str] = mapped_column(String(32), default="")
+    # count | weight | volume | "" — filled from services.units.dimension on write.
+    dimension: Mapped[str] = mapped_column(String(16), default="")
+    group_id: Mapped[str] = mapped_column(String(36), ForeignKey("groups.id"))
+    group = relationship("Group", back_populates="units")
 # How much detail a product is tracked with. Chosen per item (defaulted by
 # category) so casual users can stay coarse and precise users can go fine-grained.
 TRACKING_MODES = ("presence", "level", "count", "measure", "package", "portions")
@@ -506,7 +527,7 @@ __all__ = [
     "db", "gen_uuid", "utcnow",
     "Group", "User", "ApiToken", "TOKEN_PREFIX", "TOKEN_SCOPES",
     "generate_raw_token", "hash_token",
-    "Location", "LOCATION_KINDS", "Product", "CATEGORIES", "UNITS", "TRACKING_MODES",
+    "Location", "LOCATION_KINDS", "Product", "CATEGORIES", "UNITS", "Unit", "TRACKING_MODES",
     "StockLot", "STORAGE_METHODS", "FRESHNESS_LEVELS", "FRESHNESS_SCALE",
     "FRESHNESS_SCALES", "freshness_scale_for", "LIFECYCLE_STATES", "OUTCOMES",
     "GOOD_OUTCOMES", "LOSS_OUTCOMES", "PACKAGE_STATES", "QUANTITY_KINDS", "EVENT_TYPES",

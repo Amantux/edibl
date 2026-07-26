@@ -59,7 +59,9 @@ def set_mymeal_settings():
         kwargs["url"] = str(data["url"] or "")
     if data.get("token"):
         kwargs["token"] = str(data["token"])
-    set_mymeal(current_group().id, **kwargs)
+    gid = current_group().id
+    set_mymeal(gid, **kwargs)
+    _auto_sync_units(gid)  # best-effort: share the unit vocabulary on connect
     return jsonify(integ.mymeal_public())
 
 
@@ -272,3 +274,88 @@ def pull_from_mymeal():
         added += 1
     db.session.commit()
     return jsonify({"pulled": added})
+
+
+class _SyncUnavailable(Exception):
+    def __init__(self, status, msg):
+        super().__init__(msg)
+        self.status, self.msg = status, msg
+
+
+def _sync_units_core(gid, *, use_llm):
+    """Two-way units sync with a connected myMeal — each side's missing units are
+    added to the other. LLM-contextual reconciliation (maps equivalents by meaning,
+    e.g. count≈each) when use_llm and a provider is set; else a deterministic
+    canonical-name union. Raises _SyncUnavailable if myMeal isn't connected."""
+    from ..models import Unit
+    from ..services import assistant
+    from ..services.integrations import mymeal_post
+    from ..services.units import canonical_unit
+    from .units import _upsert_unit, unit_out
+
+    res = mymeal_get("/units")
+    if not res.get("configured"):
+        raise _SyncUnavailable(409, "myMeal isn't connected — set it up first.")
+    if not res.get("reachable"):
+        raise _SyncUnavailable(502, "myMeal is configured but unreachable.")
+    # Defend against a malformed /units response (strings / non-list / version skew).
+    raw = res.get("data")
+    mymeal_units = [u for u in raw if isinstance(u, dict) and u.get("name")] \
+        if isinstance(raw, list) else []
+    edibl_units = [unit_out(u) for u in
+                   db.session.query(Unit).filter_by(group_id=gid).all()]
+
+    plan = assistant.reconcile_units(edibl_units, mymeal_units) if use_llm else None
+    reconciler = "llm" if plan is not None else "union"
+    if plan is None:
+        e_names = {canonical_unit(u["name"]) for u in edibl_units}
+        m_names = {canonical_unit(u.get("name")) for u in mymeal_units}
+        plan = {
+            "toEdibl": [u for u in mymeal_units
+                        if canonical_unit(u.get("name")) not in e_names],
+            "toMyMeal": [u for u in edibl_units
+                         if canonical_unit(u["name"]) not in m_names],
+        }
+
+    # Normalize whatever the reconciler produced to well-formed {name, …} dicts.
+    def _clean(items):
+        return [u for u in (items or []) if isinstance(u, dict) and (u.get("name") or "").strip()]
+    plan = {"toEdibl": _clean(plan.get("toEdibl")), "toMyMeal": _clean(plan.get("toMyMeal"))}
+
+    before = db.session.query(Unit).filter_by(group_id=gid).count()
+    for u in plan["toEdibl"]:
+        _upsert_unit(gid, u.get("name"), plural=u.get("pluralName") or "",
+                     abbreviation=u.get("abbreviation") or "")
+    db.session.commit()
+    added_to_edibl = db.session.query(Unit).filter_by(group_id=gid).count() - before
+
+    pushed_to_mymeal = 0
+    for u in plan["toMyMeal"]:
+        if not (u.get("name") or "").strip():
+            continue
+        r = mymeal_post("/units", {"name": u["name"],
+                                   "pluralName": u.get("pluralName") or "",
+                                   "abbreviation": u.get("abbreviation") or ""})
+        if r.get("reachable"):
+            pushed_to_mymeal += 1
+    return {"reconciler": reconciler, "addedToEdibl": added_to_edibl,
+            "pushedToMyMeal": pushed_to_mymeal}
+
+
+@bp.post("/integrations/mymeal/sync-units")
+@owner_required
+def sync_units():
+    """Manual two-way unit sync (LLM-reconciled when a provider is configured)."""
+    try:
+        return jsonify(_sync_units_core(current_group().id, use_llm=True))
+    except _SyncUnavailable as e:
+        return jsonify({"error": e.msg}), e.status
+
+
+def _auto_sync_units(gid):
+    """Best-effort deterministic unit sync fired when the connection is (re)set, so
+    units share automatically on connect. Swallows everything — never blocks setup."""
+    try:
+        _sync_units_core(gid, use_llm=False)
+    except Exception:  # noqa: BLE001 - best-effort; myMeal may be unreachable/absent
+        db.session.rollback()

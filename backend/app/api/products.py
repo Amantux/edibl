@@ -297,3 +297,31 @@ def describe_missing():
             db.session.commit()  # per item — partial progress survives a timeout
             done += 1
     return jsonify({"described": done, "scanned": len(products), "remaining": missing.count()})
+
+
+@bp.post("/products/backfill-families")
+@limiter.limit("6/hour")
+@owner_required
+def backfill_families():
+    """Batch-derive a generic group (family) for products that don't have one, using
+    the LLM classifier (heuristic fallback when no LLM). Owner-only; per-item commit
+    so a worker-kill keeps progress; time-bounded; returns how many remain to resume."""
+    import time
+
+    from ..services import assistant
+
+    missing = (db.session.query(Product)
+               .filter(Product.group_id == current_group().id,
+                       db.or_(Product.family.is_(None), Product.family == "")))
+    products = missing.limit(_BATCH_FETCH).all()
+    deadline = time.monotonic() + _BATCH_BUDGET_S
+    done = 0
+    for p in products:
+        if time.monotonic() > deadline:
+            break
+        fam = (assistant.classify_food(p.name) or {}).get("family", "").strip()
+        if fam and fam.lower() != (p.name or "").lower():
+            p.family = fam
+            db.session.commit()  # per item — partial progress survives a timeout
+            done += 1
+    return jsonify({"grouped": done, "scanned": len(products), "remaining": missing.count()})

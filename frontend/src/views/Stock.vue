@@ -67,15 +67,48 @@ async function loadDetections() {
 }
 async function confirmDetection(d) {
   try {
-    await api.post(`/stock/detections/${d.id}/confirm`, { quantity: d.quantity })
+    await api.post(`/stock/detections/${d.id}/confirm`, { quantity: d.quantity, unit: d.unit })
     ui.success(`Added ${d.name}.`)
+    deselectDet(d.id)
     await Promise.all([loadDetections(), refresh()])
     if (!detections.value.length) focus.value = 'all'
   } catch (e) { ui.error(e.message || 'Could not add.') }
 }
 async function dismissDetection(d) {
-  try { await api.post(`/stock/detections/${d.id}/dismiss`); await loadDetections()
+  try { await api.post(`/stock/detections/${d.id}/dismiss`); deselectDet(d.id); await loadDetections()
     if (!detections.value.length) focus.value = 'all' } catch (e) { ui.error(e.message) }
+}
+// Review-queue multi-select → sign off + bulk-ingest in one action.
+const selectedDet = ref(new Set())
+function deselectDet(id) {           // keep the selection in sync when a row leaves
+  if (!selectedDet.value.has(id)) return
+  const s = new Set(selectedDet.value); s.delete(id); selectedDet.value = s
+}
+function toggleDet(id) {
+  const s = new Set(selectedDet.value)      // reassign so Vue tracks the change
+  s.has(id) ? s.delete(id) : s.add(id)
+  selectedDet.value = s
+}
+const allDetSelected = computed(() =>
+  detections.value.length > 0 && detections.value.every((d) => selectedDet.value.has(d.id)))
+function toggleAllDet() {
+  selectedDet.value = allDetSelected.value
+    ? new Set() : new Set(detections.value.map((d) => d.id))
+}
+async function confirmSelected() {
+  const chosen = detections.value.filter((d) => selectedDet.value.has(d.id))
+  if (!chosen.length) return
+  // Send the reviewed measure (quantity + unit) as per-detection overrides.
+  const overrides = {}
+  for (const d of chosen) overrides[d.id] = { quantity: d.quantity, unit: d.unit }
+  try {
+    const r = await api.post('/stock/detections/confirm',
+      { ids: chosen.map((d) => d.id), overrides })
+    ui.success(`Signed off ${r.added} item(s)${r.skipped ? `, ${r.skipped} skipped` : ''}.`)
+    selectedDet.value = new Set()
+    await Promise.all([loadDetections(), refresh()])
+    if (!detections.value.length) focus.value = 'all'
+  } catch (e) { ui.error(e.message || 'Could not add the selected items.') }
 }
 function setFocus(f) { focus.value = focus.value === f ? 'all' : f }
 // Omnibox: a plain query filters; an "add …" phrase opens Add; anything else asks Edibl.
@@ -96,7 +129,7 @@ async function addToShopping(sug) {
 
 function blankBulk() {
   return { shared: { storageMethod: 'refrigerated', category: '', family: '', locationId: '', source: '' },
-    rows: [{ name: '', quantity: 1, unit: 'count', storageMethod: '' }] }
+    rows: [{ name: '', quantity: 1, unit: 'count', storageMethod: '', confidence: null }] }
 }
 
 async function loadSuggest() {
@@ -163,7 +196,8 @@ function applyExtracted(res, note) {
   if (!res.items?.length) { flash('No items found — check the input or add rows manually.'); return }
   bulk.value.rows = res.items.map((i) => ({
     name: i.name, quantity: i.quantity ?? 1, unit: i.unit || 'count',
-    category: i.category || '', storageMethod: '' }))
+    category: i.category || '', family: i.family || '', storageMethod: '',
+    confidence: i.confidence ?? null }))
   flash(`Extracted ${res.items.length} items ${note} — review and Add all.`)
 }
 async function extractReceipt() {
@@ -212,7 +246,7 @@ async function refresh() { await loadSuggest(); await load() }
 // barcode lookup / scan
 
 // bulk
-function addBulkRow() { bulk.value.rows.push({ name: '', quantity: 1, unit: 'count', storageMethod: '' }) }
+function addBulkRow() { bulk.value.rows.push({ name: '', quantity: 1, unit: 'count', storageMethod: '', confidence: null }) }
 // Classify a manually-entered bulk row — fill its category/unit/storage if blank.
 async function classifyBulkRow(row) {
   const name = (row.name || '').trim()
@@ -222,6 +256,7 @@ async function classifyBulkRow(row) {
     if (!row.category) row.category = c.category
     if (!row.storageMethod) row.storageMethod = c.storageMethod
     if (!row.unit || row.unit === 'count') row.unit = c.unit
+    if (!row.family && c.family) row.family = c.family  // generic group for this item
   } catch (e) { /* best-effort */ }
 }
 function pasteBulk(text) {
@@ -419,17 +454,26 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
 
   <!-- Review queue: AI/vision detections awaiting confirm/dismiss -->
   <div v-else-if="focus==='review'" class="card tablewrap" style="padding:0">
+    <div v-if="detections.length" class="row" style="justify-content:space-between;align-items:center;padding:10px 12px;gap:8px">
+      <label class="muted sm" style="display:flex;align-items:center;gap:6px;margin:0">
+        <input type="checkbox" :checked="allDetSelected" @change="toggleAllDet" /> Select all</label>
+      <button class="sm" :disabled="!selectedDet.size" @click="confirmSelected">
+        ✓ Sign off &amp; add{{ selectedDet.size ? ' ' + selectedDet.size : '' }}</button>
+    </div>
     <table v-if="detections.length">
-      <thead><tr><th>Detected item</th><th>Amount</th><th>Confidence</th><th></th></tr></thead>
+      <thead><tr><th></th><th>Detected item</th><th>Measure</th><th></th></tr></thead>
       <tbody>
         <tr v-for="d in detections" :key="d.id">
+          <td><input type="checkbox" :checked="selectedDet.has(d.id)" @change="toggleDet(d.id)" :aria-label="'Select ' + d.name" /></td>
           <td><strong>{{ d.name }}</strong>
+            <span v-if="d.confidence!=null" class="badge" :class="d.confidence<0.6 ? 'expiring' : ''"
+              :title="d.confidence<0.6 ? 'low confidence — check this one' : 'detection confidence'">{{ Math.round(d.confidence*100) }}%</span>
             <span v-if="d.category" class="chip">{{ d.category }}</span>
             <span v-if="d.matchedProductName" class="muted" style="font-size:.75rem"> · already have “{{ d.matchedProductName }}”</span>
             <span class="muted" style="font-size:.72rem"> · via {{ d.source }}</span></td>
-          <td><input type="number" step="any" min="0" v-model.number="d.quantity" style="width:80px" /> {{ d.unit }}</td>
-          <td><span class="badge" :class="(d.confidence!=null && d.confidence<0.6) ? 'expiring' : ''">
-            {{ d.confidence!=null ? Math.round(d.confidence*100)+'%' : '—' }}</span></td>
+          <td style="white-space:nowrap">
+            <input type="number" step="any" min="0" v-model.number="d.quantity" style="width:60px" aria-label="Quantity" />
+            <input v-model="d.unit" list="dl-units" style="width:72px" aria-label="Unit" /></td>
           <td style="text-align:right;white-space:nowrap">
             <button class="sm" @click="confirmDetection(d)">Add</button>
             <button class="ghost sm" @click="dismissDetection(d)">Dismiss</button></td>
@@ -654,11 +698,19 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
             <option v-for="l in locations" :key="l.id" :value="l.id">{{ l.name }}</option></select></label>
       </div>
       <div class="divider"></div>
-      <div v-for="(r,i) in bulk.rows" :key="i" class="row" style="margin-bottom:8px">
-        <input v-model="r.name" list="dl-names" placeholder="Item name" style="flex:2" @change="classifyBulkRow(r)" />
-        <input type="number" v-model.number="r.quantity" placeholder="qty" style="width:80px" />
-        <input v-model="r.unit" list="dl-units" placeholder="unit" style="width:90px" />
-        <input v-model="r.storageMethod" list="dl-storage" placeholder="(default)" style="width:130px" />
+      <div v-for="(r,i) in bulk.rows" :key="i" class="qrow">
+        <div class="qrow-main">
+          <input v-model="r.name" list="dl-names" placeholder="Item name" class="qrow-name" @change="classifyBulkRow(r)" />
+          <span v-if="r.confidence != null" class="badge" :class="r.confidence < 0.6 ? 'expiring' : ''"
+            :title="r.confidence < 0.6 ? 'low extraction confidence — check this one' : 'extraction confidence'">
+            {{ Math.round(r.confidence * 100) }}%</span>
+          <button type="button" class="ghost sm qrow-del" @click="bulk.rows.splice(i,1)" aria-label="Remove row">✕</button>
+        </div>
+        <div class="qrow-meas">
+          <input type="number" v-model.number="r.quantity" placeholder="qty" class="qrow-qty" aria-label="Quantity" />
+          <input v-model="r.unit" list="dl-units" placeholder="unit" class="qrow-unit" aria-label="Unit" />
+          <input v-model="r.storageMethod" list="dl-storage" placeholder="(default storage)" class="qrow-store" aria-label="Storage" />
+        </div>
       </div>
       <button class="secondary sm" @click="addBulkRow">＋ Another row</button>
       <details style="margin-top:8px"><summary class="muted sm">Or paste “name, qty, unit” lines</summary>
@@ -711,4 +763,15 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
 .secondary.disabled { opacity: .5; pointer-events: none; }
 .morebtn { padding: 4px 0; margin: 2px 0 6px; color: var(--muted, #999); }
 .morebtn:hover { color: var(--text, #eee); }
+/* Copy-paste queue row: item name gets its own full-width line so it's never
+   crushed on mobile; the measure (qty/unit/storage) sits on a compact second line. */
+.qrow { border: 1px solid var(--border, rgba(255,255,255,.12)); border-radius: 8px;
+  padding: 8px; margin-bottom: 8px; display: flex; flex-direction: column; gap: 8px; }
+.qrow-main { display: flex; align-items: center; gap: 8px; }
+.qrow-name { flex: 1; min-width: 0; }
+.qrow-del { flex: none; color: var(--muted, #999); }
+.qrow-meas { display: flex; gap: 8px; }
+.qrow-qty { width: 70px; flex: none; }
+.qrow-unit { width: 90px; flex: none; }
+.qrow-store { flex: 1; min-width: 0; }
 </style>

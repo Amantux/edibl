@@ -8,10 +8,12 @@ def _add(client, name, **kw):
 
 # --- free-form category / unit / freshness ---------------------------------
 def test_freeform_category_and_unit_accepted(auth_client):
-    lot = _add(auth_client, "Dragonfruit", category="exotic-fruit", unit="each",
+    lot = _add(auth_client, "Dragonfruit", category="exotic-fruit", unit="sprig",
                quantity=3, storageMethod="refrigerated")
     assert lot["product"]["category"] == "exotic-fruit"
-    assert lot["unit"] == "each"
+    assert lot["unit"] == "sprig"  # a novel unit passes through unchanged
+    # ...but a known synonym is canonicalized (the standardization feature)
+    assert _add(auth_client, "Kiwi", unit="pieces")["unit"] == "count"
     # custom category still auto-estimates via the storage-only fallback
     assert lot["expiryEstimated"] is True and lot["daysToExpiry"] is not None
 
@@ -61,10 +63,10 @@ def test_family_assigned_when_product_first_seen(auth_client):
 
 # --- suggestions feed -------------------------------------------------------
 def test_suggestions_merges_seeds_and_in_use(auth_client):
-    _add(auth_client, "Dragonfruit", category="exotic-fruit", unit="each", family="Fruit")
+    _add(auth_client, "Dragonfruit", category="exotic-fruit", unit="sprig", family="Fruit")
     s = auth_client.get("/api/v1/products/suggestions").get_json()
     assert "dairy" in s["categories"] and "exotic-fruit" in s["categories"]   # seed + custom
-    assert "each" in s["units"]
+    assert "sprig" in s["units"]
     assert "Fruit" in s["families"]
     assert "Dragonfruit" in s["names"]
     assert "fresh" in s["freshness"]

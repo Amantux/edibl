@@ -45,3 +45,49 @@ def test_detections_are_household_scoped(auth_client, client):
                       json={"email": "b@b.com", "password": "password"}).get_json()["token"]
     assert client.post(f"/api/v1/stock/detections/{did}/confirm",
                        headers={"Authorization": tok}).status_code == 404
+
+
+def test_bulk_confirm_signs_off_many_at_once(auth_client):
+    r = auth_client.post("/api/v1/stock/detect", json={"items": [
+        {"name": "Eggs", "quantity": 12}, {"name": "Butter", "quantity": 2},
+        {"name": "Bread", "quantity": 1},
+    ]}).get_json()
+    ids = [d["id"] for d in r["detections"]]
+
+    # Sign off two of the three, with a quantity override on one.
+    res = auth_client.post("/api/v1/stock/detections/confirm", json={
+        "ids": ids[:2], "overrides": {ids[0]: {"quantity": 18}},
+    }).get_json()
+
+    assert res["added"] == 2 and set(res["addedIds"]) == set(ids[:2])
+    # The two are ingested and resolved; the third stays pending.
+    assert auth_client.get("/api/v1/stock/detections").get_json()["total"] == 1
+    eggs = next(s for s in auth_client.get("/api/v1/stock").get_json()["items"]
+                if s["product"]["name"] == "Eggs")
+    assert eggs["quantity"] == 18.0   # override applied
+
+
+def test_bulk_confirm_skips_bad_ids(auth_client, client):
+    r = auth_client.post("/api/v1/stock/detect",
+                         json={"items": [{"name": "Eggs"}]}).get_json()
+    ok_id = r["detections"][0]["id"]
+    res = auth_client.post("/api/v1/stock/detections/confirm",
+                           json={"ids": [ok_id, "does-not-exist"]}).get_json()
+    assert res["added"] == 1 and res["skipped"] == 1
+
+
+def test_bulk_confirm_bad_override_leaves_no_phantom_product(auth_client):
+    """A skipped bulk item (bad locationId override) must not persist a phantom
+    Product — _resolve_product flushes one before the location check fails, so the
+    per-item savepoint has to roll it back."""
+    r = auth_client.post("/api/v1/stock/detect",
+                         json={"items": [{"name": "PhantomThing"}]}).get_json()
+    did = r["detections"][0]["id"]
+
+    res = auth_client.post("/api/v1/stock/detections/confirm", json={
+        "ids": [did], "overrides": {did: {"locationId": "does-not-exist"}},
+    }).get_json()
+
+    assert res["added"] == 0 and res["skipped"] == 1
+    names = [p["name"] for p in auth_client.get("/api/v1/products").get_json()]
+    assert "PhantomThing" not in names  # savepoint rolled the flushed product back

@@ -9,6 +9,7 @@ from ..auth import login_required, current_group, current_user
 from ..schemas.serializers import stock_out, expiry_status
 from ..services.estimation import estimate_expiry, product_insights
 from ..services import inventory
+from ..services.units import canonical_unit
 
 bp = Blueprint("stock", __name__)
 
@@ -73,6 +74,11 @@ def _resolve_product(data):
     if not name:
         return None
     family = (data.get("family") or data.get("group") or "").strip()
+    if not family:
+        # No explicit/LLM group → derive a generic one by stripping a known brand
+        # ("Wegmans Teriyaki Marinade" → "Teriyaki Marinade"), so variants group.
+        from ..services.families import generic_family
+        family = generic_family(name)
     p = db.session.query(Product).filter_by(group_id=gid, name=name).first()
     if not p:
         from ..models import ITEM_TYPES, TRACKING_MODES
@@ -80,7 +86,7 @@ def _resolve_product(data):
         tm = (data.get("trackingMode") or "").strip().lower()
         p = Product(name=name, category=(data.get("category") or "other").strip(),
                     family=family, barcode=data.get("barcode") or "",
-                    default_unit=data.get("unit") or "count",
+                    default_unit=canonical_unit(data.get("unit")),
                     item_type=it if it in ITEM_TYPES else "food",
                     tracking_mode=tm if tm in TRACKING_MODES else "", group_id=gid)
         db.session.add(p)
@@ -160,7 +166,7 @@ def _build_lot(data, product, gid):
     qty = float(data.get("quantity") or 1) if kind in ("exact", "estimated", "approximate") else 0.0
     return StockLot(
         product_id=product.id, location_id=data.get("locationId") or None,
-        quantity=qty, unit=data.get("unit") or product.default_unit,
+        quantity=qty, unit=canonical_unit(data.get("unit") or product.default_unit),
         storage_method=storage, package_state=_package_state(data),
         quantity_kind=kind,
         state=state, purchase_date=purchase, opened_date=_parse_dt(data.get("openedDate")),
@@ -284,7 +290,7 @@ def update(lot_id):
     if "quantity" in data:
         s.quantity = float(data["quantity"])
     if "unit" in data:
-        s.unit = data["unit"]
+        s.unit = canonical_unit(data["unit"])
     if "locationId" in data:
         if not _valid_location(s.group_id, data["locationId"]):
             return jsonify({"error": "unknown location"}), 422
@@ -789,7 +795,7 @@ def detect():
         cands = matching.match_products(gid, name)
         matched = cands[0].product.id if (cands and cands[0].score >= 0.8) else None
         d = Detection(
-            name=name, quantity=it.get("quantity"), unit=it.get("unit") or "count",
+            name=name, quantity=it.get("quantity"), unit=canonical_unit(it.get("unit")),
             category=(it.get("category") or "").strip(),
             storage_method=(it.get("storageMethod") or "").strip(),
             confidence=it.get("confidence"), source=source,
@@ -818,15 +824,9 @@ def _get_detection(det_id):
     return d
 
 
-@bp.post("/stock/detections/<det_id>/confirm")
-@login_required
-def confirm_detection(det_id):
-    """Accept a staged detection → create the stock lot, mark it confirmed. Body may
-    override any field (quantity, unit, category, storageMethod, locationId, …)."""
-    d = _get_detection(det_id)
-    if d.status != "pending":
-        return jsonify({"error": "already resolved"}), 409
-    over = request.get_json(silent=True) or {}
+def _ingest_detection(d, over, gid):
+    """Build + add the stock lot for a pending detection, marking it confirmed.
+    Returns the created lot; raises ValueError(message) on a resolvable failure."""
     payload = {"productName": d.name, "quantity": d.quantity, "unit": d.unit,
                "category": d.category or None, "storageMethod": d.storage_method or None,
                "provenance": d.source, "confidence": d.confidence, **over}
@@ -836,15 +836,60 @@ def confirm_detection(det_id):
         payload.pop("storageMethod")
     product = _resolve_product(payload)
     if not product:
-        return jsonify({"error": "could not resolve product"}), 422
-    if not _valid_location(current_group().id, payload.get("locationId")):
-        return jsonify({"error": "unknown location"}), 422
-    lot = _build_lot(payload, product, current_group().id)
+        raise ValueError("could not resolve product")
+    if not _valid_location(gid, payload.get("locationId")):
+        raise ValueError("unknown location")
+    lot = _build_lot(payload, product, gid)
     res = inventory.add_lot(lot, actor_user_id=current_user().id, source_app="review",
                             provenance=d.source, confidence=d.confidence)
     d.status = "confirmed"
+    return res.lot
+
+
+@bp.post("/stock/detections/<det_id>/confirm")
+@login_required
+def confirm_detection(det_id):
+    """Accept a staged detection → create the stock lot, mark it confirmed. Body may
+    override any field (quantity, unit, category, storageMethod, locationId, …)."""
+    d = _get_detection(det_id)
+    if d.status != "pending":
+        return jsonify({"error": "already resolved"}), 409
+    try:
+        lot = _ingest_detection(d, request.get_json(silent=True) or {}, current_group().id)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 422
     db.session.commit()
-    return jsonify({**stock_out(res.lot), "detectionId": d.id})
+    return jsonify({**stock_out(lot), "detectionId": d.id})
+
+
+@bp.post("/stock/detections/confirm")
+@login_required
+def confirm_detections():
+    """Sign off many staged detections at once and ingest them → stock lots. Body:
+    { ids: [detId, …], overrides?: {detId: {quantity, …}} }. Non-pending / not-found /
+    unresolvable ids are skipped, not fatal. Returns counts + the added ids."""
+    data = request.get_json(force=True) or {}
+    ids = data.get("ids") or []
+    overrides = data.get("overrides") or {}
+    gid = current_group().id
+    added, skipped = [], []
+    for det_id in ids:
+        d = db.session.get(Detection, det_id)
+        if d is None or d.group_id != gid or d.status != "pending":
+            skipped.append(det_id)
+            continue
+        try:
+            # add_lot commits the lot+product; commit again to persist d.status.
+            # Per-item so a failure only affects that item (partial progress survives).
+            _ingest_detection(d, overrides.get(det_id) or {}, gid)
+            db.session.commit()
+            added.append(det_id)
+        except ValueError:
+            # _resolve_product may have flushed a new Product before the failing
+            # check — roll it back so a skipped item leaves no phantom behind.
+            db.session.rollback()
+            skipped.append(det_id)
+    return jsonify({"added": len(added), "skipped": len(skipped), "addedIds": added})
 
 
 @bp.post("/stock/detections/<det_id>/dismiss")

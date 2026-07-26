@@ -36,6 +36,7 @@ h1 { font-size:1.5rem; margin:0; letter-spacing:-.01em; } h2 { font-size:1.05rem
 .nav-link .ico { width:20px; text-align:center; opacity:.8; }
 .nav-link:hover { background:var(--surface-2); }
 .nav-link.router-link-active { background:var(--accent-soft); color:var(--accent); font-weight:600; }
+.sidebar .section-label { font-size:.7rem; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); padding:14px 12px 6px; font-weight:600; }
 .main { flex:1; min-width:0; }
 .content { padding:24px 28px; max-width:1160px; }
 /* Wrap actions below the title when they don't fit, rather than overflowing the

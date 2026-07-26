@@ -13,11 +13,14 @@ const NAV = [
   { to: '/plan', icon: '🍽️', label: 'Meal plan' },
   { to: '/shopping', icon: '🛒', label: 'Shopping' },
   { to: '/locations', icon: '📍', label: 'Locations' },
-  { to: '/settings', icon: '⚙️', label: 'Settings', ownerOnly: true },
+  { to: '/settings', icon: '⚙️', label: 'Settings', ownerOnly: true, util: true },
 ]
 // Owner-only items appear only once we've confirmed the user is the owner (the
 // server enforces regardless — this just hides what members can't use).
 const nav = computed(() => NAV.filter(n => !n.ownerOnly || me.value?.isOwner === true))
+// Split into the primary workflow + a "Utilities" group (config/admin), like myMeal.
+const mainNav = computed(() => nav.value.filter(n => !n.util))
+const utilNav = computed(() => nav.value.filter(n => n.util))
 watch(() => route.path, () => { menuOpen.value = false })
 </script>
 
@@ -38,7 +41,11 @@ watch(() => route.path, () => { menuOpen.value = false })
     <aside class="sidebar" :class="{ open: menuOpen }">
       <div class="brand"><span class="logo" aria-hidden="true">🥑</span> Edibl</div>
       <nav aria-label="Primary">
-        <router-link v-for="n in nav" :key="n.to" :to="n.to" class="nav-link">
+        <router-link v-for="n in mainNav" :key="n.to" :to="n.to" class="nav-link">
+          <span class="ico" aria-hidden="true">{{ n.icon }}</span> {{ n.label }}
+        </router-link>
+        <div v-if="utilNav.length" class="section-label">Utilities</div>
+        <router-link v-for="n in utilNav" :key="n.to" :to="n.to" class="nav-link">
           <span class="ico" aria-hidden="true">{{ n.icon }}</span> {{ n.label }}
         </router-link>
       </nav>

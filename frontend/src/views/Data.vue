@@ -1,10 +1,8 @@
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
-import { api, apiUrl, getToken } from '../api'
+import { api } from '../api'
 import { ui } from '../ui'
 
-const importing = ref(false)
-const result = ref('')
 const s = ref(null)                       // /assistant/settings view
 const form = ref({ provider: '', baseUrl: '', model: '', apiKey: '', agentId: '' })
 const saving = ref(false)
@@ -41,7 +39,6 @@ async function saveMyMeal() {
     if (mmForm.value.token) body.token = mmForm.value.token
     mm.value = await api.put('/integrations/mymeal', body)
     mmForm.value = { url: mm.value.url || '', token: '' }
-    // Verify in the same step so the user knows immediately whether it works.
     mmMsg.value = 'Saved — testing…'
     mmMsg.value = _testMsg(await api.post('/integrations/mymeal/test'))
   } catch (e) { mmMsg.value = '⚠️ ' + (e.message || 'save failed') } finally { mmBusy.value = false }
@@ -70,40 +67,10 @@ async function discoverMyMeal() {
     else mmMsg.value = `Found ${mmCandidates.value.length} add-on(s) — pick one below.`
   } catch (e) { mmMsg.value = '⚠️ ' + (e.message || 'error') } finally { mmBusy.value = false }
 }
-// Picking a discovered add-on connects in one click (fill → save → verify).
 async function useCandidate(cnd) {
   mmForm.value.url = cnd.url
   mmMsg.value = `Connecting “${cnd.name}”…`
   await saveMyMeal()
-}
-
-// ── Access & keys: mint/list/revoke tokens + connect-link sharing ────────────
-const tokens = ref([])
-const newTokenName = ref('')
-const newTokenScope = ref('full')   // full | rest | mcp — what the key unlocks
-const minted = ref(null)            // { token, name } — raw token, shown once
-const connectUrl = ref('')          // address other apps use to reach this Edibl
-const keysBusy = ref(false)
-const keysMsg = ref('')
-// What each scope unlocks (label + one-liner), shown in the picker and the list.
-const SCOPE_LABELS = { full: 'Full access', rest: 'REST API only', mcp: 'MCP only' }
-function scopeLabel(s) { return SCOPE_LABELS[s] || SCOPE_LABELS.full }
-async function loadTokens() { try { tokens.value = await api.get('/tokens') } catch (e) { /* auth off / optional */ } }
-async function mintToken() {
-  keysBusy.value = true; keysMsg.value = ''
-  try {
-    const r = await api.post('/tokens', { name: newTokenName.value || 'Connected app', scope: newTokenScope.value })
-    minted.value = { token: r.token, name: r.name, scope: r.scope }
-    newTokenName.value = ''
-    await loadTokens()
-  } catch (e) { keysMsg.value = '⚠️ ' + (e.message || 'could not create token') } finally { keysBusy.value = false }
-}
-async function revokeToken(id) {
-  if (!confirm('Revoke this token? Anything using it loses access.')) return
-  try { await api.del('/tokens/' + id); await loadTokens() } catch (e) { keysMsg.value = '⚠️ ' + (e.message || 'revoke failed') }
-}
-function encodeConnect(app, url, token) {
-  return app + '-connect:' + btoa(unescape(encodeURIComponent(JSON.stringify({ app, url, token, v: 1 }))))
 }
 function decodeConnect(str, expectApp) {
   const m = /^([a-z]+)-connect:(.+)$/.exec((str || '').trim())
@@ -113,13 +80,6 @@ function decodeConnect(str, expectApp) {
     return (!expectApp || obj.app === expectApp) ? obj : null
   } catch (e) { return null }
 }
-const ediblConnectLink = computed(() =>
-  minted.value ? encodeConnect('edibl', connectUrl.value || (typeof window !== 'undefined' ? window.location.origin : ''), minted.value.token) : '')
-async function copyText(text, label) {
-  try { await navigator.clipboard.writeText(text); keysMsg.value = `✓ ${label} copied.` }
-  catch (e) { keysMsg.value = 'Copy failed — select the text and copy manually.' }
-}
-// Paste a myMeal connect link — fills URL + token AND connects in one step.
 async function pasteMymealConnect(str) {
   const obj = decodeConnect(str, 'mymeal')
   if (!obj) { mmMsg.value = '⚠️ That doesn’t look like a myMeal connect link.'; return }
@@ -136,25 +96,6 @@ async function diagnoseMyMeal() {
   } catch (e) { mmDiag.value = 'Error: ' + (e.message || 'failed') } finally { mmBusy.value = false }
 }
 
-// ── Migrate to PostgreSQL: copy the whole SQLite DB into an empty Postgres ────
-const dbBackend = ref('sqlite')
-const pgUrl = ref('')
-const pgBusy = ref(false)
-const pgResult = ref(null)   // { total, tables, next }
-const pgMsg = ref('')
-async function loadDbBackend() {
-  try { dbBackend.value = (await api.get('/meta')).dbBackend || 'sqlite' } catch (e) { /* leave default */ }
-}
-async function migratePg() {
-  if (!pgUrl.value.trim()) return
-  if (!confirm('Copy all data into this PostgreSQL database? It must be empty. Your current SQLite data is left untouched.')) return
-  pgBusy.value = true; pgMsg.value = ''; pgResult.value = null
-  try {
-    pgResult.value = await api.post('/migrate/postgres', { targetUrl: pgUrl.value.trim() })
-    pgMsg.value = ''
-  } catch (e) { pgMsg.value = '⚠️ ' + (e.message || 'Migration failed.') } finally { pgBusy.value = false }
-}
-
 // AI descriptions: look products up online (Ollama web search) for searchable text.
 const aiBusy = ref(false)
 async function describeProducts() {
@@ -165,10 +106,7 @@ async function describeProducts() {
   } catch (e) { ui.error(e.message || 'Enrichment failed.') } finally { aiBusy.value = false }
 }
 
-onMounted(() => {
-  loadSettings(); loadMyMeal(); loadTokens(); loadDbBackend()
-  if (typeof window !== 'undefined') connectUrl.value = window.location.origin
-})
+onMounted(() => { loadSettings(); loadMyMeal() })
 async function loadSettings() {
   try {
     s.value = await api.get('/assistant/settings')
@@ -220,40 +158,11 @@ async function resetSettings() {
     saved.value = '↩ Reset — now using the add-on / env config.'
   } catch (e) { saved.value = '⚠️ ' + (e.message || 'reset failed') } finally { saving.value = false }
 }
-
-function triggerBlob(blob, filename) {
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a'); a.href = url; a.download = filename; a.click()
-  URL.revokeObjectURL(url)
-}
-async function exportJson() {
-  triggerBlob(new Blob([JSON.stringify(await api.get('/export'), null, 2)], { type: 'application/json' }), 'edibl-export.json')
-}
-async function exportCsv() {
-  const res = await fetch(apiUrl('/export/stock.csv'), { headers: getToken() ? { Authorization: getToken() } : {} })
-  triggerBlob(await res.blob(), 'edibl-stock.csv')
-}
-async function backupDb() {
-  const res = await fetch(apiUrl('/export/backup.db'), { headers: getToken() ? { Authorization: getToken() } : {} })
-  if (!res.ok) return
-  const stamp = new Date().toISOString().slice(0, 10)
-  triggerBlob(await res.blob(), `edibl-backup-${stamp}.db`)
-}
-async function importFile(e) {
-  const file = e.target.files?.[0]; e.target.value = ''
-  if (!file) return
-  importing.value = true; result.value = ''
-  try {
-    const c = (await api.post('/import', JSON.parse(await file.text()))).imported
-    result.value = `✓ Imported ${c.products} products, ${c.locations} locations, ${c.stock} stock lots, ${c.shopping} shopping items.`
-  } catch (err) { result.value = '⚠️ Import failed: ' + (err.message || 'invalid file') } finally { importing.value = false }
-}
 </script>
 
 <template>
   <div class="page-head"><h1>⚙️ Settings</h1></div>
 
-  <div class="settings-sec">Connections</div>
   <div class="card">
     <h2>Chat assistant</h2>
     <div v-if="s">
@@ -338,70 +247,6 @@ async function importFile(e) {
     <div v-else class="muted">Loading…</div>
   </div>
 
-  <div class="settings-sec">Your data</div>
-  <!-- Access & keys -->
-  <div class="card">
-    <h2>🔑 Access &amp; keys</h2>
-    <p class="muted" style="margin-top:0">Long-lived keys for other apps, Home Assistant, or an AI/<strong>MCP</strong> client to reach Edibl — needed when Edibl runs <strong>standalone</strong>, is reached across the network, or auth is on (behind HA Ingress, siblings connect without a key). Choose what each key unlocks, generate it, then hand it over with a <strong>connect link</strong>. Revoking a key cuts that access instantly.</p>
-
-    <label class="field"><span>Address other apps use to reach Edibl</span>
-      <input v-model="connectUrl" placeholder="https://edibl.example.com" /></label>
-    <div class="row" style="align-items:flex-end;gap:8px">
-      <label class="field" style="flex:1"><span>New key name (what's it for?)</span>
-        <input v-model="newTokenName" placeholder="e.g. myMeal, HA MCP" @keyup.enter="mintToken" /></label>
-      <label class="field" style="width:180px"><span>Access</span>
-        <select v-model="newTokenScope">
-          <option value="full">Full access (API + MCP)</option>
-          <option value="rest">REST API only</option>
-          <option value="mcp">MCP only</option>
-        </select></label>
-      <button :disabled="keysBusy" @click="mintToken" style="height:38px">Generate</button>
-    </div>
-    <p class="muted" style="font-size:.78rem;margin:6px 0 0">Use an <strong>MCP</strong> (or Full) key as the bearer token for an MCP client — e.g. Home Assistant's MCP integration pointing at Edibl's <code>/sse</code> endpoint. The MCP endpoint requires a key when Edibl runs with auth on (<code>disable_auth: false</code>), when a server token is set, or once you mint an <strong>MCP</strong>-scoped key — otherwise it stays open on the internal network. Minting a Full key alone (in open mode) does <em>not</em> lock it.</p>
-
-    <div v-if="minted" style="border:1px solid var(--primary,#2f9e57);border-radius:8px;padding:10px 12px;margin-top:10px;background:rgba(47,158,87,.10)">
-      <p style="margin:0 0 6px"><strong>New key “{{ minted.name }}”</strong> <span class="chip">{{ scopeLabel(minted.scope) }}</span> — copy it now, it won't be shown again.</p>
-      <code style="display:block;word-break:break-all;background:var(--surface-raised,#f6f6f6);padding:6px 8px;border-radius:6px;font-size:.8rem">{{ minted.token }}</code>
-      <div class="row wrap" style="gap:8px;margin-top:8px">
-        <button class="secondary sm" @click="copyText(minted.token, 'Token')">Copy token</button>
-        <button class="sm" @click="copyText(ediblConnectLink, 'Connect link')">🔗 Copy connect link</button>
-        <button class="ghost sm" @click="minted=null">Done</button>
-      </div>
-      <p class="muted" style="font-size:.78rem;margin:8px 0 0">Paste the connect link into the other app's Edibl connection (fills its URL + token in one step).</p>
-    </div>
-
-    <table v-if="tokens.length" style="width:100%;margin-top:12px;font-size:.9rem">
-      <thead><tr><th style="text-align:left">Name</th><th style="text-align:left">Access</th><th style="text-align:left">Hint</th><th></th></tr></thead>
-      <tbody>
-        <tr v-for="t in tokens" :key="t.id">
-          <td>{{ t.name }}</td>
-          <td><span class="chip">{{ scopeLabel(t.scope) }}</span></td>
-          <td class="muted"><code>{{ t.hint }}…</code></td>
-          <td style="text-align:right"><button class="ghost sm" @click="revokeToken(t.id)">Revoke</button></td>
-        </tr>
-      </tbody>
-    </table>
-    <p v-if="keysMsg" class="muted" style="font-size:.85rem;margin-top:8px">{{ keysMsg }}</p>
-  </div>
-
-  <!-- Migrate to PostgreSQL (only meaningful while running on SQLite) -->
-  <div class="card" v-if="dbBackend === 'sqlite'">
-    <h2>🐘 Migrate to PostgreSQL</h2>
-    <p class="muted" style="margin-top:0">Edibl runs on its built-in <strong>SQLite</strong> database (recommended for most).
-      To move to an external <strong>PostgreSQL</strong>, enter an <strong>empty</strong> Postgres database below and click Migrate —
-      Edibl copies everything across, leaving your SQLite data untouched. Then set the add-on's
-      <code>database_url</code> (or <code>EDIBL_DATABASE_URL</code>) to the same URL and restart to run on Postgres.</p>
-    <label class="field"><span>Target PostgreSQL URL</span>
-      <input v-model="pgUrl" placeholder="postgresql+psycopg://user:pass@host:5432/dbname" /></label>
-    <div class="row" style="justify-content:flex-end">
-      <button :disabled="pgBusy || !pgUrl.trim()" @click="migratePg">{{ pgBusy ? 'Migrating…' : 'Migrate data' }}</button></div>
-    <div v-if="pgResult" style="border:1px solid var(--primary,#2f9e57);border-radius:8px;padding:10px 12px;margin-top:10px;background:rgba(47,158,87,.10)">
-      <p style="margin:0 0 4px"><strong>✓ Copied {{ pgResult.total }} rows.</strong></p>
-      <p class="muted" style="margin:0;font-size:.85rem">{{ pgResult.next }}</p>
-    </div>
-    <p v-if="pgMsg" class="muted" style="font-size:.85rem;margin-top:8px">{{ pgMsg }}</p>
-  </div>
-
   <div class="card">
     <h2>✨ AI product descriptions</h2>
     <p class="muted" style="margin-top:0">Look products up online (Ollama web search) and store a short searchable
@@ -409,26 +254,6 @@ async function importFile(e) {
       (add-on option <code>ollama_search_key</code> / <code>EDIBL_OLLAMA_SEARCH_KEY</code>).</p>
     <button class="secondary" :disabled="aiBusy" @click="describeProducts">
       {{ aiBusy ? 'Describing…' : 'Describe products missing a description' }}</button>
-  </div>
-
-  <div class="card">
-    <h2>Export</h2>
-    <p class="muted" style="margin-top:0">Download a portable snapshot of your inventory — to keep, or to move to another Edibl instance. (Home Assistant already backs up the add-on's storage automatically.)</p>
-    <div class="row wrap">
-      <button @click="exportJson">⬇️ Export JSON (full)</button>
-      <button class="secondary" @click="exportCsv">⬇️ Stock as CSV</button>
-      <button class="secondary" @click="backupDb" title="A consistent copy of the whole database file">💾 Backup database</button>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>Import</h2>
-    <p class="muted" style="margin-top:0">Restore from an exported JSON file. Import is <strong>additive</strong> — it creates products, locations, stock, and shopping items that don't already exist, and never deletes anything.</p>
-    <label class="secondary" style="cursor:pointer;display:inline-block;padding:9px 15px;border-radius:9px">
-      {{ importing ? 'Importing…' : '⬆️ Choose export file' }}
-      <input type="file" hidden accept=".json,application/json" :disabled="importing" @change="importFile" />
-    </label>
-    <p v-if="result" style="margin-top:10px">{{ result }}</p>
   </div>
 </template>
 

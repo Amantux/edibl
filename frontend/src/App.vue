@@ -14,6 +14,8 @@ const NAV = [
   { to: '/shopping', icon: '🛒', label: 'Shopping' },
   { to: '/locations', icon: '📍', label: 'Locations' },
   { to: '/settings', icon: '⚙️', label: 'Settings', ownerOnly: true, util: true },
+  { to: '/home-assistant', icon: '🏠', label: 'Home Assistant', ownerOnly: true, util: true },
+  { to: '/database', icon: '🗄️', label: 'Database', ownerOnly: true, util: true },
 ]
 // Owner-only items appear only once we've confirmed the user is the owner (the
 // server enforces regardless — this just hides what members can't use).

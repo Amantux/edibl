@@ -5,6 +5,8 @@ import Shopping from './views/Shopping.vue'
 import Plan from './views/Plan.vue'
 import Locations from './views/Locations.vue'
 import Settings from './views/Data.vue'
+import HomeAssistant from './views/HomeAssistant.vue'
+import Database from './views/Database.vue'
 import Login from './views/Login.vue'
 import { getToken } from './api'
 import { ensureMe } from './me'
@@ -16,6 +18,8 @@ const routes = [
   { path: '/plan', component: Plan },
   { path: '/locations', component: Locations },
   { path: '/settings', component: Settings, meta: { ownerOnly: true } },
+  { path: '/home-assistant', component: HomeAssistant, meta: { ownerOnly: true } },
+  { path: '/database', component: Database, meta: { ownerOnly: true } },
   { path: '/data', redirect: '/settings' },
   { path: '/login', component: Login, meta: { public: true } },
 ]

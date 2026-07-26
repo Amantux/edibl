@@ -431,3 +431,14 @@ async function importFile(e) {
     <p v-if="result" style="margin-top:10px">{{ result }}</p>
   </div>
 </template>
+
+<style scoped>
+/* Mimic myMeal's Settings: calm single-column forms — field controls sit at a
+   readable width instead of stretching the whole card — and non-muted labels. */
+.card .field input:not([type="checkbox"]):not([type="file"]),
+.card .field select,
+.card .field textarea {
+  max-width: 520px;
+}
+.card label.field > span { color: var(--text); font-size: .84rem; }
+</style>

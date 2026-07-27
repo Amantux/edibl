@@ -129,7 +129,19 @@ llm_model:    llama3.1
 The assistant uses the same inventory tools as the MCP server, so it can look
 things up **and** act (add / update / remove stock, record what you ate/tossed,
 edit the shopping list). An unreachable provider shows an error rather than
-crashing the chat.
+crashing the chat. For a **local model server** (LM Studio, vLLM, llama.cpp),
+use `llm_provider: openai` and set `llm_base_url` to its OpenAI-compatible endpoint.
+
+Once a provider is set it also powers the background AI tooling (Settings page):
+
+- **AI product descriptions** — look products up online and store a short searchable
+  description. Runs in the background with progress (needs an ollama.com search key).
+- **AI organize** —
+  - **Auto-categorize** proposes a grocery category per product; a confident, known
+    category is applied automatically, the rest wait for review.
+  - **Propose families** suggests display groupings ("Milk" for whole + skimmed).
+  - Review pending suggestions on the **Review** page (accept/reject); your choices
+    train later runs. Add a *note* or override the *model* per run if you like.
 
 ## Talking to your pantry through HA Assist (voice)
 

@@ -47,28 +47,38 @@ def _query(fields) -> str:
     return " ".join(str(p).strip() for p in parts if p).strip()
 
 
+def _complete_json(system, user) -> dict | None:
+    """One completion through the configured provider (ollama/openai/anthropic/HA)
+    → parsed JSON object, or None. Provider-agnostic — uses assistant._complete so
+    enrichment honors whatever LLM is wired up, not just an Ollama-shaped one."""
+    from .assistant import _cfg, _PROVIDERS, _complete
+    cfg = _cfg()
+    if cfg.get("provider") not in _PROVIDERS:
+        return None
+    reply = _complete(cfg, system, user)
+    s, e = reply.find("{"), reply.rfind("}")
+    if s != -1 and e > s:
+        data = json.loads(reply[s:e + 1])
+        return data if isinstance(data, dict) else None
+    return None
+
+
+_SYNTH_SYSTEM = "You write concise, factual product descriptions. Respond ONLY with JSON."
+
+
 def _synthesize(fields, results):
     snippets = "\n\n".join(f"{r.get('title', '')}\n{r.get('content', '')}"[:600]
                            for r in results[:3])
     name = fields.get("name") or "this product"
     try:
-        from .assistant import _cfg, _ollama_headers
-        cfg = _cfg()
-        base, model = cfg.get("base_url"), cfg.get("model")
-        if base and model and cfg.get("provider") in ("ollama", "openai"):
-            prompt = (f"From the web results below, write a concise factual description "
-                      f"of the food/product '{name}' (1-2 sentences) and 6-10 search "
-                      f'keywords. Respond ONLY as JSON: {{"description":"...","keywords":'
-                      f'["..."]}}.\n\n{snippets}')
-            r = httpx.post(f"{base.rstrip('/')}/api/generate", headers=_ollama_headers(cfg),
-                           json={"model": model, "prompt": prompt, "stream": False,
-                                 "format": "json"}, timeout=_TIMEOUT)
-            r.raise_for_status()
-            data = json.loads((r.json() or {}).get("response") or "{}")
-            desc = (data.get("description") or "").strip()
-            if desc:
-                return {"description": desc,
-                        "keywords": [str(k).strip() for k in (data.get("keywords") or []) if k]}
+        user = (f"From the web results below, write a concise factual description of the "
+                f"food/product '{name}' (1-2 sentences) and 6-10 search keywords. Respond "
+                f'ONLY as JSON: {{"description":"...","keywords":["..."]}}.\n\n{snippets}')
+        data = _complete_json(_SYNTH_SYSTEM, user)
+        desc = (data.get("description") or "").strip() if data else ""
+        if desc:
+            return {"description": desc,
+                    "keywords": [str(k).strip() for k in (data.get("keywords") or []) if k]}
     except Exception as exc:  # noqa: BLE001 - fall back to raw snippet
         _LOGGER.info("model synthesis failed, using snippet: %s", exc)
     top = results[0] if results else {}
@@ -95,21 +105,12 @@ def extract_product(results):
     if not snippets.strip():
         return None
     try:
-        from .assistant import _cfg, _ollama_headers
-        cfg = _cfg()
-        base, model = cfg.get("base_url"), cfg.get("model")
-        if not (base and model and cfg.get("provider") in ("ollama", "openai")):
-            return None
-        prompt = ('From the web results below, identify the single retail food/product. '
-                  'Respond ONLY as JSON: {"name":"<product name>","brand":"<brand or '
-                  'empty>"}. If the results are only barcode-lookup pages with no real '
-                  f'product, return an empty name.\n\n{snippets}')
-        r = httpx.post(f"{base.rstrip('/')}/api/generate", headers=_ollama_headers(cfg),
-                       json={"model": model, "prompt": prompt, "stream": False,
-                             "format": "json"}, timeout=_TIMEOUT)
-        r.raise_for_status()
-        data = json.loads((r.json() or {}).get("response") or "{}")
-        name = (data.get("name") or "").strip()[:80]
+        user = ('From the web results below, identify the single retail food/product. '
+                'Respond ONLY as JSON: {"name":"<product name>","brand":"<brand or '
+                'empty>"}. If the results are only barcode-lookup pages with no real '
+                f'product, return an empty name.\n\n{snippets}')
+        data = _complete_json("You identify retail products. Respond ONLY with JSON.", user)
+        name = (data.get("name") or "").strip()[:80] if data else ""
         if name:
             return {"name": name, "brand": (data.get("brand") or "").strip()[:80]}
     except Exception as exc:  # noqa: BLE001 - best-effort; caller falls back

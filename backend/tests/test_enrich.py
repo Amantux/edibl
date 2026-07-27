@@ -63,3 +63,17 @@ def test_describe_422_when_nothing_found(app, auth_client, monkeypatch):
 
 # Bulk enrichment moved to an async job (POST /jobs/enrich); see test_jobs.py for
 # its owner-only guard and per-product processing.
+
+
+def test_synthesis_is_provider_agnostic(app, monkeypatch):
+    """Phase 5 parity: synthesis routes through assistant._complete, so it works with
+    ANY provider (here anthropic), not just an Ollama-shaped /api/generate call."""
+    from app.services import enrich
+    with app.app_context():
+        monkeypatch.setattr("app.services.assistant._cfg", lambda: {
+            "provider": "anthropic", "base_url": "", "api_key": "k", "model": "claude",
+            "timeout": 5, "max_steps": 6, "agent_id": ""})
+        monkeypatch.setattr("app.services.assistant._complete",
+                            lambda cfg, system, user: '{"description": "a tasty snack", "keywords": ["snack"]}')
+        out = enrich._synthesize({"name": "Pretzels"}, [{"title": "t", "content": "c"}])
+        assert out["description"] == "a tasty snack" and "snack" in out["keywords"]

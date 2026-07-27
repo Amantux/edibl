@@ -5,9 +5,8 @@ synthesis falls back to the top result's snippet, so tests are deterministic.
 """
 from sqlalchemy import inspect
 
-from app.auth import create_token
 from app.extensions import db
-from app.models import Group, Product, User
+from app.models import Product, User
 
 
 def _gid(app):
@@ -62,28 +61,5 @@ def test_describe_422_when_nothing_found(app, auth_client, monkeypatch):
     assert auth_client.post(f"/api/v1/products/{pid}/describe").status_code == 422
 
 
-def test_describe_missing_only_blank(app, auth_client, monkeypatch):
-    gid = _gid(app)
-    _enable(app, monkeypatch, [{"content": "a dairy product"}])
-    _mk(app, gid, name="Blank", search_text="")
-    _mk(app, gid, name="Already", search_text="already described")
-
-    r = auth_client.post("/api/v1/products/describe-missing").get_json()
-
-    assert r["described"] == 1 and r["scanned"] == 1
-
-
-def test_describe_missing_forbidden_for_non_owner(app):
-    # The bulk (paid) batch is owner-only.
-    with app.app_context():
-        g = Group(name="H")
-        db.session.add(g)
-        db.session.flush()
-        member = User(name="M", email="m@x.com", password_hash="x",
-                      is_owner=False, group_id=g.id)
-        db.session.add(member)
-        db.session.commit()
-        token = create_token(member)
-    r = app.test_client().post("/api/v1/products/describe-missing",
-                               headers={"Authorization": f"Bearer {token}"})
-    assert r.status_code == 403
+# Bulk enrichment moved to an async job (POST /jobs/enrich); see test_jobs.py for
+# its owner-only guard and per-product processing.

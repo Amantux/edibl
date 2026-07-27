@@ -269,34 +269,7 @@ def describe_product(product_id):
                     "sources": result.get("sources", [])})
 
 
-@bp.post("/products/describe-missing")
-@limiter.limit("6/hour")
-@owner_required
-def describe_missing():
-    """Batch-enrich products with no search_text yet. Owner-only (bulk external,
-    paid calls). Commits per item so a worker-kill keeps completed work, and stops
-    before the worker timeout; returns how many remain so the UI can resume."""
-    import time
-
-    from ..services import enrich
-
-    if not enrich.enabled():
-        return jsonify({"error": "Web search isn't configured."}), 409
-    missing = (db.session.query(Product)
-               .filter(Product.group_id == current_group().id,
-                       db.or_(Product.search_text.is_(None), Product.search_text == "")))
-    products = missing.limit(_BATCH_FETCH).all()
-    deadline = time.monotonic() + _BATCH_BUDGET_S
-    done = 0
-    for p in products:
-        if time.monotonic() > deadline:
-            break
-        result = enrich.describe(_describe_fields(p))
-        if result:
-            _apply_description(p, result)
-            db.session.commit()  # per item — partial progress survives a timeout
-            done += 1
-    return jsonify({"described": done, "scanned": len(products), "remaining": missing.count()})
+# Bulk enrichment moved to an async job (POST /jobs/enrich); see services/jobs.py.
 
 
 @bp.post("/products/backfill-families")

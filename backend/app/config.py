@@ -29,6 +29,9 @@ class Config:
     # Single-tenant behind a trusted proxy / HA ingress (no per-request auth).
     DISABLE_AUTH = _bool("EDIBL_DISABLE_AUTH", False)
     ALLOW_REGISTRATION = _bool("EDIBL_ALLOW_REGISTRATION", True)
+    # Background job worker (async AI tooling). On by default; off in tests, which
+    # drive the job functions directly.
+    WORKER_ENABLED = _bool("EDIBL_WORKER_ENABLED", True)
     MIN_PASSWORD_LENGTH = int(os.environ.get("EDIBL_MIN_PASSWORD_LENGTH", "8"))
     # New households start with a default Kitchen/Fridge/Freezer so intake works
     # immediately. Off in tests for a clean baseline.

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { api } from '../api'
 import { ui } from '../ui'
 
@@ -96,17 +96,55 @@ async function diagnoseMyMeal() {
   } catch (e) { mmDiag.value = 'Error: ' + (e.message || 'failed') } finally { mmBusy.value = false }
 }
 
-// AI descriptions: look products up online (Ollama web search) for searchable text.
-const aiBusy = ref(false)
-async function describeProducts() {
-  aiBusy.value = true
-  try {
-    const r = await api.post('/products/describe-missing', {})
-    ui.success(r.described ? `Described ${r.described} product(s).` : 'Nothing to describe.')
-  } catch (e) { ui.error(e.message || 'Enrichment failed.') } finally { aiBusy.value = false }
-}
+// AI descriptions: an async background job (survives navigation) that looks
+// products up online (Ollama web search) and stores searchable text.
+const enrichJob = ref(null)
+const enrichStarting = ref(false)
+let enrichTimer = null
+let enrichPollFails = 0
+const enrichActive = computed(() =>
+  enrichJob.value && ['pending', 'running'].includes(enrichJob.value.status))
 
-onMounted(() => { loadSettings(); loadMyMeal() })
+async function describeProducts() {
+  if (enrichStarting.value) return
+  enrichStarting.value = true
+  try {
+    enrichJob.value = await api.post('/jobs/enrich')
+    pollEnrich()
+  } catch (e) { ui.error(e.message || 'Could not start enrichment.') }
+  finally { enrichStarting.value = false }
+}
+async function pollEnrich() {
+  if (!enrichJob.value) return
+  const id = enrichJob.value.id
+  try {
+    enrichJob.value = await api.get(`/jobs/${id}`)
+    enrichPollFails = 0
+    if (enrichJob.value.status === 'done') {
+      const r = enrichJob.value.result || {}
+      ui.success(`Described ${r.described ?? 0} product(s).` +
+        (r.remaining ? ` ${r.remaining} still missing — run again to continue.` : ''))
+      return
+    }
+    if (enrichJob.value.status === 'error') {
+      ui.error(enrichJob.value.error || 'Enrichment failed.')
+      return
+    }
+  } catch (e) {
+    if (++enrichPollFails >= 5) { enrichJob.value = null; ui.error('Lost track of the job.'); return }
+  }
+  enrichTimer = setTimeout(pollEnrich, 1500)
+}
+async function resumeEnrich() {
+  try {
+    const r = await api.get('/jobs?kind=enrich')
+    const active = (r.items || []).find(j => ['pending', 'running'].includes(j.status))
+    if (active) { enrichJob.value = active; pollEnrich() }
+  } catch (e) { /* optional */ }
+}
+onUnmounted(() => clearTimeout(enrichTimer))
+
+onMounted(() => { loadSettings(); loadMyMeal(); resumeEnrich() })
 async function loadSettings() {
   try {
     s.value = await api.get('/assistant/settings')
@@ -251,9 +289,15 @@ async function resetSettings() {
     <h2>✨ AI product descriptions</h2>
     <p class="muted" style="margin-top:0">Look products up online (Ollama web search) and store a short searchable
       description, so search finds them by what they actually are. Needs an Ollama search key
-      (add-on option <code>ollama_search_key</code> / <code>EDIBL_OLLAMA_SEARCH_KEY</code>).</p>
-    <button class="secondary" :disabled="aiBusy" @click="describeProducts">
-      {{ aiBusy ? 'Describing…' : 'Describe products missing a description' }}</button>
+      (add-on option <code>ollama_search_key</code> / <code>EDIBL_OLLAMA_SEARCH_KEY</code>).
+      Runs in the background — you can leave this page.</p>
+    <button v-if="!enrichActive" class="secondary" :disabled="enrichStarting" @click="describeProducts">
+      {{ enrichStarting ? 'Starting…' : 'Describe products missing a description' }}</button>
+    <div v-else style="max-width:420px">
+      <div class="muted" style="font-size:0.85rem;margin-bottom:6px">
+        Describing… {{ enrichJob.done }}<span v-if="enrichJob.total">/{{ enrichJob.total }}</span> products</div>
+      <progress :value="enrichJob.done" :max="enrichJob.total || 1" style="width:100%"></progress>
+    </div>
   </div>
 </template>
 

@@ -15,6 +15,7 @@ def app(tmp_path):
         RATELIMIT_ENABLED = False
         PROXY_HOPS = 0
         SEED_DEFAULTS = False   # clean baseline; the seeding test opts in explicitly
+        WORKER_ENABLED = False  # tests drive job functions directly, no poller thread
 
     app = create_app(TestConfig)
     yield app

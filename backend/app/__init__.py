@@ -60,6 +60,9 @@ def create_app(config_object=Config):
     _register_spa(app)
     _register_errors(app)
     _register_security_headers(app)
+
+    from .worker import start_worker
+    start_worker(app)  # background job poller (no-op when WORKER_ENABLED is False)
     return app
 
 
@@ -368,10 +371,11 @@ def _register_blueprints(app):
     from .api.misc import bp as misc_bp
     from .api.ha import bp as ha_bp
     from .api.units import bp as units_bp
+    from .api.jobs import bp as jobs_bp
 
     for bp in (users_bp, tokens_bp, locations_bp, products_bp, stock_bp,
                shopping_bp, dashboard_bp, integrations_bp, assistant_bp,
-               data_bp, misc_bp, ha_bp, units_bp):
+               data_bp, misc_bp, ha_bp, units_bp, jobs_bp):
         app.register_blueprint(bp, url_prefix="/api/v1")
 
 

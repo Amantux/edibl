@@ -329,7 +329,7 @@ async function resetSettings() {
   </div>
 
   <div class="card">
-    <h2>🗂️ AI organize</h2>
+    <h2>AI organize</h2>
     <p class="muted" style="margin-top:0">Auto-categorize products and propose display
       families with your AI provider. Confident categories are applied automatically;
       the rest wait for your review, and your accept/reject choices teach later runs.</p>

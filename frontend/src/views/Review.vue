@@ -36,6 +36,7 @@ async function reject(s, list) {
   catch (e) { ui.error(e.message || 'Could not reject.') }
   finally { acting.value = acting.value.filter(x => x !== s.id) }
 }
+const pct = (c) => Math.round((c || 0) * 100)
 onMounted(load)
 </script>
 
@@ -47,39 +48,40 @@ onMounted(load)
     <div v-else-if="failed" class="card">
       <p class="muted">Couldn’t load suggestions. <a href="#" @click.prevent="load">Try again</a>.</p>
     </div>
+    <div v-else-if="!categorize.length && !clusters.length" class="card empty">
+      <div class="empty-ico">🗂️</div>
+      <p>Nothing to review right now. Run <router-link to="/settings">Auto-categorize products</router-link> or
+        <router-link to="/settings">Propose families</router-link> in Settings — confident categories
+        apply automatically, and anything less certain shows up here.</p>
+    </div>
     <template v-else>
-      <div class="card">
+      <div v-if="categorize.length" class="card">
         <h2 style="margin-top:0">Product categories ({{ categorize.length }})</h2>
-        <p v-if="!categorize.length" class="muted">Nothing to review. Run
-          <router-link to="/settings">Auto-categorize products</router-link> in Settings;
-          confident categories are applied automatically, less-sure ones show up here.</p>
         <div v-for="s in categorize" :key="s.id" class="review-row">
-          <div>
+          <div class="rr-main">
             <strong>{{ s.product?.name || '—' }}</strong>
             <span class="muted" v-if="s.product"> ({{ s.product.category }})</span>
             <span style="opacity:.6"> → </span><span class="pill">{{ s.label }}</span>
-            <span class="muted" style="font-size:.8rem"> · {{ Math.round((s.confidence || 0) * 100) }}%<span v-if="s.rationale"> · {{ s.rationale }}</span></span>
+            <span class="muted rr-meta"> · {{ pct(s.confidence) }}%<span v-if="s.rationale"> · {{ s.rationale }}</span></span>
           </div>
-          <div class="btns">
+          <div class="rr-btns">
             <button class="secondary" :disabled="isActing(s.id)" @click="accept(s, categorize)">Accept</button>
-            <button class="secondary" :disabled="isActing(s.id)" @click="reject(s, categorize)">Reject</button>
+            <button class="ghost" :disabled="isActing(s.id)" @click="reject(s, categorize)">Reject</button>
           </div>
         </div>
       </div>
 
-      <div class="card">
+      <div v-if="clusters.length" class="card">
         <h2 style="margin-top:0">Families ({{ clusters.length }})</h2>
-        <p v-if="!clusters.length" class="muted">Nothing to review. Run
-          <router-link to="/settings">Propose families</router-link> in Settings.</p>
-        <div v-for="s in clusters" :key="s.id" class="review-row" style="flex-direction:column;align-items:stretch;gap:4px">
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <strong>{{ s.label }} <span class="muted" style="font-weight:400;font-size:.85rem">· {{ (s.members || []).length }} products</span></strong>
-            <div class="btns">
+        <div v-for="s in clusters" :key="s.id" class="review-row cluster">
+          <div class="rr-head">
+            <strong class="rr-main">{{ s.label }} <span class="muted" style="font-weight:400;font-size:.85rem">· {{ (s.members || []).length }} products</span></strong>
+            <div class="rr-btns">
               <button class="secondary" :disabled="isActing(s.id)" @click="accept(s, clusters)">Accept &amp; group</button>
-              <button class="secondary" :disabled="isActing(s.id)" @click="reject(s, clusters)">Reject</button>
+              <button class="ghost" :disabled="isActing(s.id)" @click="reject(s, clusters)">Reject</button>
             </div>
           </div>
-          <div class="muted" style="font-size:.85rem">{{ (s.members || []).map(m => m.name).join(', ') }}</div>
+          <div class="muted rr-members">{{ (s.members || []).map(m => m.name).join(', ') }}</div>
         </div>
       </div>
     </template>
@@ -89,12 +91,26 @@ onMounted(load)
 <style scoped>
 .review-row {
   display:flex; justify-content:space-between; align-items:center; gap:12px;
-  padding:8px 0; border-bottom:1px solid var(--border, #e5e7eb);
+  padding:10px 0; border-bottom:1px solid var(--border, #e5e7eb);
 }
 .review-row:last-child { border-bottom:0; }
-.btns { display:flex; gap:6px; flex-shrink:0; }
+.review-row.cluster { flex-direction:column; align-items:stretch; gap:4px; }
+.rr-head { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+.rr-main { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.rr-members { font-size:.85rem; overflow:hidden; text-overflow:ellipsis;
+  display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+.rr-btns { display:flex; gap:6px; flex-shrink:0; }
 .pill {
   font-size:.8rem; padding:2px 8px; border-radius:999px;
   background:var(--surface-2, #f1f3f5); border:1px solid var(--border, #e5e7eb);
+}
+.ghost { background:none; border:1px solid transparent; color:var(--muted, #6b7280); }
+.ghost:hover:not(:disabled) { color:var(--text, #111); border-color:var(--border, #e5e7eb); }
+.empty { text-align:center; }
+.empty-ico { font-size:2rem; }
+@media (max-width:560px) {
+  .review-row { flex-direction:column; align-items:stretch; }
+  .rr-head { flex-direction:column; align-items:stretch; gap:6px; }
+  .rr-btns { justify-content:flex-end; }
 }
 </style>

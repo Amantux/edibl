@@ -113,8 +113,12 @@ def run_categorize(job) -> dict:
                   'Respond ONLY as JSON: {"category": "<one of the list>", '
                   '"confidence": 0.0-1.0, "rationale": "<short>"}.')
         out = _complete_obj(cfg, _CATEGORIZE_SYSTEM, prompt)
-        name = (out.get("category") or "").strip().lower()[:64]
-        if name:
+        # Normalize "dry goods" → "dry_goods" so canonical multi-word categories match.
+        name = (out.get("category") or "").strip().lower().replace(" ", "_")[:64]
+        # "other" is the uncategorized sentinel, NOT a real categorization — skip it,
+        # otherwise a confident "other" reply auto-applies a no-op and accumulates an
+        # accepted row (and re-bills) on every run.
+        if name and name != "other":
             conf = _confidence(out.get("confidence"))
             known = name in CATEGORIES
             common = dict(kind="categorize", label=name, confidence=conf,
@@ -154,7 +158,7 @@ def run_cluster(job) -> dict:
               + (f"User guidance: {note}\n" if note else "")
               + f"Products (index: name):\n{listing}\n"
               'Respond ONLY as JSON: {"clusters": [{"name": "...", "indices": [0,3], '
-              '"confidence": 0.0-1.0}]}.')
+              '"confidence": 0.0-1.0, "rationale": "<short>"}]}.')
     data = _complete_obj(cfg, _CLUSTER_SYSTEM, prompt)
     valid = {p.id for p in products}
     proposed = 0

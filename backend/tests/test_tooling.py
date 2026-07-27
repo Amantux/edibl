@@ -149,6 +149,20 @@ def test_delete_product_with_suggestion_succeeds(auth_client, app):
         assert db.session.query(AiSuggestion).filter_by(product_id=pid).count() == 0
 
 
+def test_categorize_other_reply_skipped_no_accumulation(auth_client, app, monkeypatch):
+    # "other" is the uncategorized sentinel, not a real category — a confident "other"
+    # reply must not auto-apply a no-op or accumulate accepted rows across runs.
+    gid = _gid(app)
+    with app.app_context():
+        db.session.add(Product(name="Weird thing", group_id=gid, category="other"))
+        db.session.commit()
+        _use_llm(monkeypatch, '{"category": "other", "confidence": 0.99}')
+        _run("categorize", gid)
+        _run("categorize", gid)
+        assert db.session.query(AiSuggestion).count() == 0
+        assert db.session.query(Product).filter_by(name="Weird thing").first().category == "other"
+
+
 def test_categorize_applies_model_override(auth_client, app, monkeypatch):
     gid = _gid(app)
     captured = {}

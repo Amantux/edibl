@@ -35,11 +35,13 @@ def _confidence(value) -> float:
     return max(0.0, min(1.0, c))
 
 
-def _cfg_or_raise():
+def _cfg_or_raise(model=None):
     from .jobs import JobError
     cfg = assistant._cfg()
     if cfg["provider"] not in assistant._PROVIDERS:
         raise JobError("No LLM provider configured (set one in Settings).")
+    if model:  # per-run model override
+        cfg = {**cfg, "model": str(model)[:100]}
     return cfg
 
 
@@ -86,7 +88,7 @@ def run_categorize(job) -> dict:
     gid = job.group_id
     opts = job.params or {}
     note = str(opts.get("note") or "")
-    cfg = _cfg_or_raise()
+    cfg = _cfg_or_raise(opts.get("model"))
     examples = icl_examples(gid, "categorize")
     threshold = _threshold()
     cats = ", ".join(CATEGORIES)
@@ -138,7 +140,7 @@ def run_cluster(job) -> dict:
     gid = job.group_id
     opts = job.params or {}
     note = str(opts.get("note") or "")
-    cfg = _cfg_or_raise()
+    cfg = _cfg_or_raise(opts.get("model"))
     products = (db.session.query(Product)
                 .filter(Product.group_id == gid)
                 .order_by(Product.created_at.asc()).limit(_CLUSTER_ITEMS_MAX).all())

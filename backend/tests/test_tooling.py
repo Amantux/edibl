@@ -149,6 +149,25 @@ def test_delete_product_with_suggestion_succeeds(auth_client, app):
         assert db.session.query(AiSuggestion).filter_by(product_id=pid).count() == 0
 
 
+def test_categorize_applies_model_override(auth_client, app, monkeypatch):
+    gid = _gid(app)
+    captured = {}
+    with app.app_context():
+        db.session.add(Product(name="X", group_id=gid, category="other"))
+        db.session.commit()
+        monkeypatch.setattr("app.services.assistant._cfg", lambda: {
+            "provider": "ollama", "base_url": "", "api_key": "", "model": "default",
+            "timeout": 5, "max_steps": 6, "agent_id": ""})
+
+        def fake_complete(cfg, system, user):
+            captured["model"] = cfg["model"]
+            return '{"category": "dairy", "confidence": 0.1}'
+        monkeypatch.setattr("app.services.assistant._complete", fake_complete)
+        jobs.enqueue("categorize", gid, {"model": "qwen2.5"})
+        jobs.run_job(jobs.claim_one())
+        assert captured["model"] == "qwen2.5"
+
+
 def test_suggestion_cross_group_404(auth_client, app):
     with app.app_context():
         other = Group(name="Other")

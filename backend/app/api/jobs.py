@@ -3,7 +3,7 @@
 Jobs are group-scoped. Enqueuing bulk AI tooling is owner-only (external, paid
 calls); reading progress is any group member. The worker (worker.py) runs them.
 """
-from flask import Blueprint, jsonify, abort
+from flask import Blueprint, jsonify, request, abort
 
 from ..extensions import db
 from ..models import Job
@@ -34,11 +34,20 @@ def _get_job(job_id) -> Job:
 @bp.post("/jobs/<kind>")
 @owner_required
 def create_job(kind):
-    """Enqueue (or resume) a background job of this kind for the group."""
+    """Enqueue (or resume) a background job of this kind for the group. Optional JSON
+    body: ``note`` (extra AI guidance) and ``model`` (override the provider's model)."""
     if kind not in known_kinds():
         return jsonify({"error": f"unknown job kind '{kind}'"}), 404
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        data = {}
+    params = {}
+    if data.get("note"):
+        params["note"] = str(data["note"])[:1000]
+    if data.get("model"):
+        params["model"] = str(data["model"])[:100]
     try:
-        job = enqueue(kind, current_group().id)
+        job = enqueue(kind, current_group().id, params or None)
     except JobError as exc:
         return jsonify({"error": str(exc)}), 400
     return jsonify(_job_out(job)), 202
@@ -53,7 +62,6 @@ def get_job(job_id):
 @bp.get("/jobs")
 @login_required
 def list_jobs():
-    from flask import request
     q = db.session.query(Job).filter(Job.group_id == current_group().id)
     kind = request.args.get("kind")
     if kind:

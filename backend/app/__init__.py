@@ -372,10 +372,11 @@ def _register_blueprints(app):
     from .api.ha import bp as ha_bp
     from .api.units import bp as units_bp
     from .api.jobs import bp as jobs_bp
+    from .api.suggestions import bp as suggestions_bp
 
     for bp in (users_bp, tokens_bp, locations_bp, products_bp, stock_bp,
                shopping_bp, dashboard_bp, integrations_bp, assistant_bp,
-               data_bp, misc_bp, ha_bp, units_bp, jobs_bp):
+               data_bp, misc_bp, ha_bp, units_bp, jobs_bp, suggestions_bp):
         app.register_blueprint(bp, url_prefix="/api/v1")
 
 

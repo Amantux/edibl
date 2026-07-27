@@ -157,3 +157,15 @@ def _enrich_job(job: Job) -> dict:
             described += 1
         bump(job, done=i)
     return {"described": described, "scanned": len(products), "remaining": missing_q().count()}
+
+
+@register("categorize")
+def _categorize_job(job: Job) -> dict:
+    from .tooling import run_categorize
+    return run_categorize(job)
+
+
+@register("cluster")
+def _cluster_job(job: Job) -> dict:
+    from .tooling import run_cluster
+    return run_cluster(job)

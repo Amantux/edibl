@@ -56,6 +56,8 @@ class Group(IDMixin, TimestampMixin, db.Model):
     reservations = relationship("Reservation", cascade="all, delete-orphan")
     detections = relationship("Detection", cascade="all, delete-orphan")
     jobs = relationship("Job", back_populates="group", cascade="all, delete-orphan")
+    ai_suggestions = relationship(
+        "AiSuggestion", back_populates="group", cascade="all, delete-orphan")
 
 
 class User(IDMixin, TimestampMixin, db.Model):
@@ -553,6 +555,34 @@ class Job(IDMixin, TimestampMixin, db.Model):
     group = relationship("Group", back_populates="jobs")
 
 
+class AiSuggestion(IDMixin, TimestampMixin, db.Model):
+    """A proposal from an AI tooling job (categorize/cluster) awaiting review, and —
+    once resolved — a training example fed back as few-shot context to later runs.
+
+    - ``categorize``: propose a ``label`` (product category) for one ``product``.
+    - ``cluster``: propose a named ``family`` grouping (label) over products listed
+      in ``payload['itemIds']`` (product_id null).
+    """
+
+    __tablename__ = "ai_suggestions"
+
+    kind: Mapped[str] = mapped_column(String(16), index=True)   # categorize | cluster
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    label: Mapped[str] = mapped_column(String(255))
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    rationale: Mapped[str] = mapped_column(Text, default="")
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    product_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("products.id", ondelete="CASCADE"), nullable=True, index=True)
+    product = relationship("Product")
+
+    group_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("groups.id"), index=True)
+    group = relationship("Group", back_populates="ai_suggestions")
+
+
 __all__ = [
     "db", "gen_uuid", "utcnow",
     "Group", "User", "ApiToken", "TOKEN_PREFIX", "TOKEN_SCOPES",
@@ -563,5 +593,5 @@ __all__ = [
     "GOOD_OUTCOMES", "LOSS_OUTCOMES", "PACKAGE_STATES", "QUANTITY_KINDS", "EVENT_TYPES",
     "ShelfLifeProfile", "ShoppingItem", "ConsumptionEvent", "PlannedItem", "Setting",
     "InventoryEvent", "AcquisitionLot", "FoodConcept", "ITEM_TYPES", "Reservation",
-    "Detection", "Job",
+    "Detection", "Job", "AiSuggestion",
 ]

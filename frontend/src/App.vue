@@ -14,6 +14,7 @@ const NAV = [
   { to: '/shopping', icon: '🛒', label: 'Shopping' },
   { to: '/locations', icon: '📍', label: 'Locations' },
   { to: '/settings', icon: '⚙️', label: 'Settings', ownerOnly: true, util: true },
+  { to: '/review', icon: '🗂️', label: 'Review', util: true },
   { to: '/home-assistant', icon: '🏠', label: 'Home Assistant', ownerOnly: true, util: true },
   { to: '/database', icon: '🗄️', label: 'Database', ownerOnly: true, util: true },
 ]

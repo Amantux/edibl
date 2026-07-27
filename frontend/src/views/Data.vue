@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { api } from '../api'
+import { useJobRunner } from '../composables/useJobRunner'
 import { ui } from '../ui'
 
 const s = ref(null)                       // /assistant/settings view
@@ -143,6 +144,26 @@ async function resumeEnrich() {
   } catch (e) { /* optional */ }
 }
 onUnmounted(() => clearTimeout(enrichTimer))
+
+// AI organize: auto-categorize products + propose family groupings (jobs).
+const {
+  job: catJob, starting: catStarting, active: catActive,
+  start: startCategorize, resume: resumeCategorize, stop: stopCategorize,
+} = useJobRunner('categorize', {
+  onDone: (j) => j.status === 'error'
+    ? ui.error(j.error || 'Categorize failed.')
+    : ui.success(`Categorize: ${j.result?.applied ?? 0} applied, ${j.result?.queued ?? 0} to review.`),
+})
+const {
+  starting: cluStarting, active: cluActive,
+  start: startCluster, resume: resumeCluster, stop: stopCluster,
+} = useJobRunner('cluster', {
+  onDone: (j) => j.status === 'error'
+    ? ui.error(j.error || 'Grouping failed.')
+    : ui.success(`Found ${j.result?.proposed ?? 0} grouping(s) to review.`),
+})
+onMounted(() => { resumeCategorize(); resumeCluster() })
+onUnmounted(() => { stopCategorize(); stopCluster() })
 
 onMounted(() => { loadSettings(); loadMyMeal(); resumeEnrich() })
 async function loadSettings() {
@@ -297,6 +318,22 @@ async function resetSettings() {
       <div class="muted" style="font-size:0.85rem;margin-bottom:6px">
         Describing… {{ enrichJob.done }}<span v-if="enrichJob.total">/{{ enrichJob.total }}</span> products</div>
       <progress :value="enrichJob.done" :max="enrichJob.total || 1" style="width:100%"></progress>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>🗂️ AI organize</h2>
+    <p class="muted" style="margin-top:0">Auto-categorize products and propose display
+      families with your AI provider. Confident categories are applied automatically;
+      the rest wait for your review, and your accept/reject choices teach later runs.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <button class="secondary" :disabled="catStarting || catActive" @click="startCategorize()">
+        {{ catActive ? `Categorizing… ${catJob.done}/${catJob.total || '…'}` : 'Auto-categorize products' }}
+      </button>
+      <button class="secondary" :disabled="cluStarting || cluActive" @click="startCluster()">
+        {{ cluActive ? 'Finding families…' : 'Propose families' }}
+      </button>
+      <router-link to="/review" class="muted" style="font-size:.9rem">Review suggestions →</router-link>
     </div>
   </div>
 </template>

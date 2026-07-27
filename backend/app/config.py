@@ -32,6 +32,10 @@ class Config:
     # Background job worker (async AI tooling). On by default; off in tests, which
     # drive the job functions directly.
     WORKER_ENABLED = _bool("EDIBL_WORKER_ENABLED", True)
+    # Auto-categorization: a proposed category at/above this model-reported confidence
+    # (and within the known CATEGORIES) is applied automatically; below it, or an
+    # unknown category, goes to the review queue. 0..1.
+    AI_CONFIDENCE_THRESHOLD = float(os.environ.get("EDIBL_AI_CONFIDENCE_THRESHOLD", "0.8"))
     MIN_PASSWORD_LENGTH = int(os.environ.get("EDIBL_MIN_PASSWORD_LENGTH", "8"))
     # New households start with a default Kitchen/Fridge/Freezer so intake works
     # immediately. Off in tests for a clean baseline.

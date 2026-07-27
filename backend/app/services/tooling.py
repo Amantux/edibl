@@ -91,10 +91,15 @@ def run_categorize(job) -> dict:
     threshold = _threshold()
     cats = ", ".join(CATEGORIES)
 
+    # Skip products already awaiting review, so a re-run doesn't queue duplicates.
+    pending = (db.session.query(AiSuggestion.product_id)
+               .filter(AiSuggestion.group_id == gid, AiSuggestion.kind == "categorize",
+                       AiSuggestion.status == "pending", AiSuggestion.product_id.isnot(None)))
     products = (db.session.query(Product)
                 .filter(Product.group_id == gid,
                         db.or_(Product.category.is_(None), Product.category == "",
                                Product.category == "other"))
+                .filter(~Product.id.in_(pending))
                 .order_by(Product.created_at.asc()).limit(_CATEGORIZE_MAX).all())
     bump(job, done=0, total=len(products))
     applied = queued = 0

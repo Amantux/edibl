@@ -51,6 +51,17 @@ def test_categorize_queues_unknown_category(auth_client, app, monkeypatch):
         assert db.session.query(AiSuggestion).filter_by(status="pending").count() == 1
 
 
+def test_categorize_rerun_does_not_duplicate_pending(auth_client, app, monkeypatch):
+    gid = _gid(app)
+    with app.app_context():
+        db.session.add(Product(name="Mystery", group_id=gid, category="other"))
+        db.session.commit()
+        _use_llm(monkeypatch, '{"category": "exotica", "confidence": 0.4}')
+        _run("categorize", gid)
+        _run("categorize", gid)
+        assert db.session.query(AiSuggestion).filter_by(status="pending").count() == 1
+
+
 def test_categorize_malformed_confidence_completes(auth_client, app, monkeypatch):
     gid = _gid(app)
     with app.app_context():

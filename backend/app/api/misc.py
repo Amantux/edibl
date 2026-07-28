@@ -6,6 +6,7 @@ from flask import Blueprint, jsonify, current_app
 from sqlalchemy import text
 
 from ..extensions import db
+from ..auth import login_required
 
 bp = Blueprint("misc", __name__)
 
@@ -14,6 +15,30 @@ bp = Blueprint("misc", __name__)
 def status():
     """Liveness."""
     return jsonify({"health": True, "title": "Edibl", "versions": ["v1"]})
+
+
+@bp.get("/diagnostics")
+@login_required
+def diagnostics():
+    """Coarse, non-sensitive runtime facts for a user-initiated bug report.
+
+    Login-gated so it doesn't reveal AI-configured state to anonymous callers, and
+    deliberately returns only publishable facts — never secrets (API keys, provider
+    base URLs, the DB URL) or any inventory content — because the report they seed
+    becomes a PUBLIC GitHub issue."""
+    uri = current_app.config["SQLALCHEMY_DATABASE_URI"]
+    try:
+        from ..services import assistant
+        provider = assistant._cfg().get("provider") or "none"
+    except Exception:  # noqa: BLE001 - diagnostics must never 500
+        provider = current_app.config.get("LLM_PROVIDER") or "none"
+    return jsonify({
+        "app": "Edibl",
+        "dbBackend": "sqlite" if uri.startswith("sqlite") else "postgresql",
+        "aiProvider": provider,
+        "mcpEnabled": os.environ.get("EDIBL_MCP_ENABLED", "").lower() == "true",
+        "authDisabled": bool(current_app.config.get("DISABLE_AUTH")),
+    })
 
 
 @bp.get("/ready")

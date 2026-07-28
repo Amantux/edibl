@@ -4,8 +4,10 @@ import { useRoute } from 'vue-router'
 import { me, ensureMe } from './me'
 import ChatAssistant from './components/ChatAssistant.vue'
 import Toaster from './components/Toaster.vue'
+import ReportBug from './components/ReportBug.vue'
 const route = useRoute()
 const menuOpen = ref(false)
+const showReport = ref(false)
 onMounted(ensureMe)
 const NAV = [
   { to: '/', icon: '📊', label: 'Dashboard' },
@@ -38,6 +40,8 @@ watch(() => route.path, () => { menuOpen.value = false })
       <button class="menu-btn" :aria-expanded="menuOpen" aria-label="Menu"
         @click="menuOpen = !menuOpen">☰</button>
       <div class="brand"><span class="logo" aria-hidden="true">🥑</span> Edibl</div>
+      <button class="menu-btn" style="margin-left:auto" title="Report a bug"
+        aria-label="Report a bug" @click="showReport = true">🐛</button>
     </header>
 
     <div v-if="menuOpen" class="nav-backdrop" @click="menuOpen = false"></div>
@@ -51,12 +55,16 @@ watch(() => route.path, () => { menuOpen.value = false })
         <router-link v-for="n in utilNav" :key="n.to" :to="n.to" class="nav-link">
           <span class="ico" aria-hidden="true">{{ n.icon }}</span> {{ n.label }}
         </router-link>
+        <a class="nav-link" href="#" @click.prevent="showReport = true">
+          <span class="ico" aria-hidden="true">🐛</span> Report a bug
+        </a>
       </nav>
       <div class="grow"></div>
       <div class="muted" style="padding:8px 11px;font-size:.78rem">Your kitchen's real inventory</div>
     </aside>
     <main id="main" class="main"><div class="content"><router-view /></div></main>
     <ChatAssistant />
+    <ReportBug v-if="showReport" @close="showReport = false" />
     <Toaster />
   </div>
 </template>

@@ -10,7 +10,8 @@ export default [
     languageOptions: {
       ecmaVersion: 2023, sourceType: 'module',
       globals: { window: 'readonly', document: 'readonly', localStorage: 'readonly',
-        navigator: 'readonly', fetch: 'readonly', setTimeout: 'readonly', console: 'readonly' },
+        navigator: 'readonly', fetch: 'readonly', setTimeout: 'readonly', console: 'readonly',
+        __APP_VERSION__: 'readonly' },
     },
     rules: { 'vue/multi-word-component-names': 'off', 'no-unused-vars': ['error', { argsIgnorePattern: '^_', caughtErrors: 'none' }] },
   },

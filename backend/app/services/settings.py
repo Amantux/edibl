@@ -7,7 +7,13 @@ and is remembered either way.
 from ..extensions import db
 from ..models import Setting
 
-LLM_KEYS = ("llm_provider", "llm_base_url", "llm_api_key", "llm_model", "llm_agent_id")
+# Per-provider API keys — one slot per vendor so switching providers (for chat OR a
+# background job) keeps each key separate and never sends one vendor's key to
+# another's endpoint. Home Assistant uses its Supervisor token (no stored key).
+# `llm_api_key` is the legacy single slot, kept as a read fallback for back-compat.
+PROVIDER_KEY_KEYS = ("openai_api_key", "anthropic_api_key", "ollama_api_key")
+LLM_KEYS = ("llm_provider", "llm_base_url", "llm_api_key", "llm_model",
+            "llm_agent_id") + PROVIDER_KEY_KEYS
 MYMEAL_KEYS = ("mymeal_url", "mymeal_token")
 
 
@@ -42,7 +48,10 @@ def set_llm(gid, provider=None, base_url=None, api_key=None, model=None, agent_i
     if agent_id is not None:
         _set(gid, "llm_agent_id", agent_id.strip())
     if api_key is not None:
-        _set(gid, "llm_api_key", api_key)
+        # Store the key under the provider it belongs to, so each vendor's key stays
+        # separate. Fall back to the legacy single slot only when no provider is known.
+        target = (provider.strip() if provider is not None else "") or _all(gid).get("llm_provider", "")
+        _set(gid, f"{target}_api_key" if target else "llm_api_key", api_key)
     db.session.commit()
 
 

@@ -834,6 +834,30 @@ def _llm_overrides(gid=None):
     return get_llm_overrides(gid)
 
 
+def _active_key(ov, c, provider):
+    """API key for the ACTIVE chat provider: its per-provider UI key, else the legacy
+    single UI key (back-compat with the pre-per-provider storage), else the env key."""
+    if not provider:
+        return ""
+    return (ov.get(f"{provider}_api_key")
+            or ov.get("llm_api_key")
+            or c.get("LLM_API_KEY") or "")
+
+
+def _job_key(ov, c, provider):
+    """API key for a provider a background job switched TO (not the chat provider):
+    only that provider's own stored key, or the env key when it is the env-configured
+    provider, or the Supervisor token for Home Assistant. Never the legacy single key
+    or the chat provider's key — no cross-vendor leak."""
+    if provider == "homeassistant":
+        return os.environ.get("SUPERVISOR_TOKEN", "")
+    if ov.get(f"{provider}_api_key"):
+        return ov[f"{provider}_api_key"]
+    if provider and provider == (c.get("LLM_PROVIDER") or ""):
+        return c.get("LLM_API_KEY") or ""
+    return ""
+
+
 def _cfg(gid=None):
     """Effective config: UI overrides > add-on/env > provider default. Pass ``gid``
     from a background job so it honours that group's UI-configured provider (the
@@ -842,7 +866,7 @@ def _cfg(gid=None):
     ov = _llm_overrides(gid)
     provider = ov.get("llm_provider") or c.get("LLM_PROVIDER") or ""
     base, model = _DEFAULTS.get(provider, ("", ""))
-    api_key = ov.get("llm_api_key") or c.get("LLM_API_KEY") or ""
+    api_key = _active_key(ov, c, provider)
     if provider == "homeassistant" and not api_key:
         # Add-ons receive a Supervisor token in the environment.
         api_key = os.environ.get("SUPERVISOR_TOKEN", "")
@@ -862,11 +886,10 @@ def job_cfg(gid, kind, opts=None):
     cluster). Precedence: per-run ``opts`` (provider/model) > the stored async
     preference for the kind > the chat provider.
 
-    Edibl keeps a single API key (the chat provider's), so switching a job to a
-    DIFFERENT vendor uses that vendor's default base URL and NO key — it never
-    sends the chat key to another vendor's endpoint. Local Ollama needs none;
-    Home Assistant uses its Supervisor token. A model-only change (or the same
-    provider) keeps the chat credentials."""
+    Keys are stored per-provider, so switching a job to a DIFFERENT vendor uses that
+    vendor's OWN key + default base URL (never the chat provider's key). Local Ollama
+    needs none; Home Assistant uses its Supervisor token. A model-only change (or the
+    same provider) keeps the chat provider's credentials."""
     opts = opts or {}
     base = _cfg(gid)   # honour this group's UI-configured provider in the worker
     try:
@@ -884,7 +907,9 @@ def job_cfg(gid, kind, opts=None):
         d_base, d_model = _DEFAULTS.get(provider, ("", ""))
         cfg["provider"] = provider
         cfg["base_url"] = d_base
-        cfg["api_key"] = os.environ.get("SUPERVISOR_TOKEN", "") if provider == "homeassistant" else ""
+        # That provider's OWN stored key (per-provider storage) — never the chat
+        # provider's key. Home Assistant uses the Supervisor token.
+        cfg["api_key"] = _job_key(_llm_overrides(gid), current_app.config, provider)
         cfg["model"] = d_model
     if model:
         cfg["model"] = model
@@ -924,10 +949,6 @@ def config_public():
 
 
 PROVIDER_CHOICES = ("", "ollama", "openai", "anthropic", "homeassistant")
-# Background jobs may only switch to a provider that needs no separately-stored
-# key, because Edibl keeps a single API key (the chat provider's). "" = same as
-# chat; a hosted vendor (openai/anthropic) would run keyless and always fail.
-JOB_PROVIDER_CHOICES = ("", "ollama", "homeassistant")
 
 
 def settings_public():
@@ -937,6 +958,12 @@ def settings_public():
     ov = _llm_overrides()
     env_provider = current_app.config.get("LLM_PROVIDER") or ""
     source = "ui" if ov.get("llm_provider") else ("addon" if env_provider else "none")
+
+    def _key_saved(p):
+        # Per-provider key status, so the UI shows the right saved-key state as you
+        # switch the provider dropdown (mirrors how the key resolves at run time).
+        c = current_app.config
+        return bool(_active_key(ov, c, p) if p == cfg["provider"] else _job_key(ov, c, p))
     return {
         "provider": cfg["provider"] or "",
         "baseUrl": ov.get("llm_base_url", ""),
@@ -945,6 +972,7 @@ def settings_public():
         # (not only a UI override) — the two config surfaces then agree.
         "agentId": ov.get("llm_agent_id") or current_app.config.get("LLM_AGENT_ID", ""),
         "hasApiKey": bool(cfg["api_key"]),
+        "hasKeys": {p: _key_saved(p) for p in ("openai", "anthropic", "ollama")},
         "enabled": cfg["provider"] in _PROVIDERS,
         "tools": cfg["provider"] in _TOOL_PROVIDERS,
         "source": source,

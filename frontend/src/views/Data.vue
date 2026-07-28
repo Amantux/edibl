@@ -297,8 +297,8 @@ async function resetSettings() {
           <input v-model="form.baseUrl" :placeholder="def.baseUrl || ''" @change="canList && loadModels()" /></label>
 
         <label v-if="showKey" class="field">
-          <span>API key {{ needsKey ? '' : '(optional)' }} {{ s.hasApiKey ? '— saved, leave blank to keep' : '' }}</span>
-          <input v-model="form.apiKey" type="password" :placeholder="s.hasApiKey ? '•••••••••• saved' : (needsKey ? 'sk-…' : 'only if your Ollama needs one')" /></label>
+          <span>API key {{ needsKey ? '' : '(optional)' }} {{ s.hasKeys?.[form.provider] ? '— saved, leave blank to keep' : '' }}</span>
+          <input v-model="form.apiKey" type="password" :placeholder="s.hasKeys?.[form.provider] ? '•••••••••• saved' : (needsKey ? 'sk-…' : 'only if your Ollama needs one')" /></label>
 
         <label class="field"><span>Model
             <button v-if="canList" class="ghost sm" type="button" style="float:right;padding:0 6px"
@@ -331,15 +331,14 @@ async function resetSettings() {
     <p class="muted" style="margin-top:0">Optionally run background jobs on a different model
       than chat — e.g. a cheap or local model for bulk work. <strong>Same as chat</strong> uses
       the provider above (add a model to just change the model). A per-run choice (on the job
-      buttons) still wins. Switching provider is limited to <strong>Ollama</strong> or
-      <strong>Home Assistant</strong> — Edibl stores a single API key, so a hosted vendor
-      (OpenAI/Anthropic) can't be keyed separately for jobs.</p>
+      buttons) still wins. Switching to a hosted provider uses that provider's own saved key —
+      set the key by selecting that provider in the chat settings above.</p>
     <div v-for="area in JOB_AREAS" :key="area.k" style="margin-bottom:14px">
       <div class="muted" style="font-size:.85rem;font-weight:600;margin-bottom:4px">{{ area.l }}</div>
       <div class="row" style="gap:8px">
         <select v-model="jobAi[area.k].provider" style="flex:1">
           <option value="">Same as chat</option>
-          <option v-for="p in ['ollama','homeassistant']" :key="p" :value="p">
+          <option v-for="p in ['ollama','openai','anthropic','homeassistant']" :key="p" :value="p">
             {{ providerLabels[p] || p }}
           </option>
         </select>

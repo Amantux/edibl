@@ -81,11 +81,39 @@ def test_ui_configured_provider_applies_to_jobs_without_request(app, auth_client
         assert cfg["model"] == "ui-model"
 
 
-def test_job_settings_rejects_hosted_vendor(auth_client):
-    # Edibl stores one key; a different hosted vendor for jobs would run keyless.
-    r = auth_client.put("/api/v1/assistant/job-settings",
-                        json={"enrich": {"provider": "openai"}})
-    assert r.status_code == 422
+def test_job_settings_accepts_any_valid_provider(auth_client):
+    # Per-provider keys removed the Ollama/HA-only restriction — any real provider is fine.
+    assert auth_client.put("/api/v1/assistant/job-settings",
+                           json={"enrich": {"provider": "openai"}}).status_code == 200
+    assert auth_client.put("/api/v1/assistant/job-settings",
+                           json={"enrich": {"provider": "bogus"}}).status_code == 422
+
+
+def test_keys_are_isolated_per_provider(app, auth_client):
+    """Two providers keyed → each resolves its OWN key; one vendor's key never
+    appears in another's config."""
+    from app.services.settings import set_llm
+    with app.app_context():
+        gid = db.session.query(User).filter_by(email="t@t.com").first().group_id
+        set_llm(gid, provider="openai", api_key="sk-openai")
+        set_llm(gid, provider="ollama", api_key="sk-ollama-secured")  # active now ollama
+        cfg = assistant._cfg(gid)
+        assert cfg["provider"] == "ollama" and cfg["api_key"] == "sk-ollama-secured"
+        assert "sk-openai" not in str(cfg)
+
+
+def test_job_switch_uses_the_switched_providers_own_key(app, auth_client):
+    """A job switched to a different (hosted) vendor uses THAT vendor's stored key —
+    not the chat provider's key. This is what per-provider storage buys us."""
+    from app.services.settings import set_llm
+    with app.app_context():
+        gid = db.session.query(User).filter_by(email="t@t.com").first().group_id
+        set_llm(gid, provider="anthropic", api_key="sk-ant-chat")
+        set_llm(gid, provider="openai", api_key="sk-openai-jobs")
+        set_llm(gid, provider="anthropic")   # chat stays anthropic; openai key persists
+        cfg = assistant.job_cfg(gid, "enrich", {"provider": "openai"})
+        assert cfg["provider"] == "openai" and cfg["api_key"] == "sk-openai-jobs"
+        assert "sk-ant-chat" not in str(cfg)
 
 
 def test_job_settings_endpoint_roundtrip_and_validation(auth_client):

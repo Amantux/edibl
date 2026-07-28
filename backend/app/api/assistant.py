@@ -85,10 +85,8 @@ def put_job_settings_endpoint():
     for area in ("enrich", "organize"):
         blk = data.get(area)
         if isinstance(blk, dict) and blk.get("provider"):
-            if str(blk["provider"]) not in assistant.JOB_PROVIDER_CHOICES:
-                return jsonify({"error": "Background jobs can only use Ollama or Home "
-                    "Assistant (Edibl stores a single API key). For a hosted vendor, "
-                    "use 'Same as chat' with a model override."}), 422
+            if str(blk["provider"]) not in assistant.PROVIDER_CHOICES:
+                return jsonify({"error": f"unknown provider {blk['provider']!r}"}), 422
     set_job_settings(current_group().id, enrich=data.get("enrich"), organize=data.get("organize"))
     return jsonify(get_job_settings(current_group().id))
 

@@ -46,6 +46,22 @@ def set_llm(gid, provider=None, base_url=None, api_key=None, model=None, agent_i
     db.session.commit()
 
 
+CHAT_STREAM_KEY = "chat_streaming"
+
+
+def get_chat_stream(gid):
+    """This household's default for streaming chat replies (default False)."""
+    try:
+        return (_all(gid).get(CHAT_STREAM_KEY) or "").strip().lower() == "true"
+    except Exception:  # noqa: BLE001 — best-effort read, never break the widget
+        return False
+
+
+def set_chat_stream(gid, on):
+    _set(gid, CHAT_STREAM_KEY, "true" if on else "false")
+    db.session.commit()
+
+
 def clear_llm(gid):
     """Drop all LLM overrides so the effective config falls back to the add-on /
     env defaults (the 'reset to add-on default' action)."""

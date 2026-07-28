@@ -1003,6 +1003,143 @@ def run_chat(gid, messages):
             "model": cfg["model"], "enabled": True}
 
 
+def run_chat_stream(gid, messages):
+    """Streaming variant of :func:`run_chat`.
+
+    Yields ``{"type":"delta","text"}`` / ``{"type":"tool","name"}`` events and a
+    terminal ``{"type":"done", reply, actions, provider, model, enabled}`` (mirroring
+    run_chat's return). Real token streaming for ollama + openai; anthropic and the
+    completion-only homeassistant relay fall back to emitting the whole blocking
+    reply as a single delta. Tool handlers commit themselves, same as run_chat."""
+    cfg = _cfg()
+    provider = cfg["provider"]
+    if provider not in _PROVIDERS:
+        yield {"type": "done", "reply": SETUP_MESSAGE, "actions": [],
+               "provider": "none", "model": None, "enabled": False}
+        return
+    actions = []
+    try:
+        if provider in ("ollama", "openai"):
+            reply = yield from _stream_openai_style(gid, messages, cfg, actions)
+        elif provider == "homeassistant":
+            reply = _relay_homeassistant(messages, cfg)
+            if reply:
+                yield {"type": "delta", "text": reply}
+        else:  # anthropic — real SSE parsing over raw httpx is heavier; stream the
+               # blocking reply as one delta (still honest, just not per-token).
+            reply = _loop_anthropic(gid, messages, cfg, actions)
+            if reply:
+                yield {"type": "delta", "text": reply}
+    except Exception as exc:  # noqa: BLE001 — never 500 the chat box
+        _LOGGER.warning("assistant stream provider '%s' failed: %s", provider, exc)
+        yield {"type": "done",
+               "reply": f"The '{provider}' assistant is unreachable ({exc}). "
+                        "Check the base URL and model in the add-on options.",
+               "actions": actions, "provider": f"{provider}:error",
+               "model": cfg["model"], "enabled": True}
+        return
+    yield {"type": "done", "reply": reply, "actions": actions, "provider": provider,
+           "model": cfg["model"], "enabled": True}
+
+
+def _stream_turn(client, url, headers, body, is_ollama):
+    """Consume ONE streamed model turn. Yields ``{"type":"delta","text"}`` as text
+    arrives; RETURNS ``(content, tool_calls, assistant_msg)`` where assistant_msg is
+    the message to append to the running conversation for the next round."""
+    content = ""
+    with client.stream("POST", url, headers=headers, json=body) as r:
+        r.raise_for_status()
+        if is_ollama:
+            tool_calls = []
+            for line in r.iter_lines():
+                if not line:
+                    continue
+                obj = json.loads(line)
+                msg = obj.get("message") or {}
+                piece = msg.get("content") or ""
+                if piece:
+                    content += piece
+                    yield {"type": "delta", "text": piece}
+                for tc in msg.get("tool_calls") or []:
+                    tool_calls.append(tc)
+                if obj.get("done"):
+                    break
+            assistant_msg = {"role": "assistant", "content": content}
+            if tool_calls:
+                assistant_msg["tool_calls"] = tool_calls
+            return content, tool_calls, assistant_msg
+        # OpenAI-compatible SSE: `data: {json}` lines, `data: [DONE]` terminates.
+        frags = {}
+        for line in r.iter_lines():
+            if not line or not line.startswith("data:"):
+                continue
+            payload = line[len("data:"):].strip()
+            if payload == "[DONE]":
+                break
+            chunk = json.loads(payload)
+            choices = chunk.get("choices") or []
+            if not choices:
+                continue
+            delta = choices[0].get("delta") or {}
+            if delta.get("content"):
+                content += delta["content"]
+                yield {"type": "delta", "text": delta["content"]}
+            for tc in delta.get("tool_calls") or []:
+                slot = frags.setdefault(tc.get("index", 0), {"id": "", "name": "", "args": ""})
+                if tc.get("id"):
+                    slot["id"] = tc["id"]
+                fn = tc.get("function") or {}
+                if fn.get("name"):
+                    slot["name"] = fn["name"]
+                if fn.get("arguments"):
+                    slot["args"] += fn["arguments"]
+        tool_calls = [
+            {"id": frags[i]["id"] or f"call_{i}", "type": "function",
+             "function": {"name": frags[i]["name"], "arguments": frags[i]["args"]}}
+            for i in sorted(frags)
+        ]
+        assistant_msg = {"role": "assistant", "content": content or None}
+        if tool_calls:
+            assistant_msg["tool_calls"] = tool_calls
+        return content, tool_calls, assistant_msg
+
+
+def _stream_openai_style(gid, user_messages, cfg, actions):
+    """Streaming twin of :func:`_loop_openai_style` (OpenAI + Ollama). Yields text
+    delta + tool events; RETURNS the final reply string."""
+    import httpx
+
+    is_ollama = cfg["provider"] == "ollama"
+    convo = [{"role": "system", "content": _system_prompt()}]
+    convo += [{"role": m["role"], "content": m.get("content", "")}
+              for m in user_messages if m.get("role") in ("user", "assistant")]
+    headers = {"Content-Type": "application/json"}
+    if cfg["api_key"]:
+        headers["Authorization"] = f"Bearer {cfg['api_key']}"
+    url = cfg["base_url"] + ("/api/chat" if is_ollama else "/chat/completions")
+
+    with httpx.Client(timeout=cfg["timeout"]) as client:
+        for _ in range(cfg["max_steps"]):
+            body = {"model": cfg["model"], "messages": convo,
+                    "tools": _openai_tools(), "stream": True}
+            content, tool_calls, assistant_msg = yield from _stream_turn(
+                client, url, headers, body, is_ollama)
+            if not tool_calls:
+                return content.strip() or "(no reply)"
+            convo.append(assistant_msg)
+            for tc in tool_calls:
+                fn = tc["function"]
+                raw_args = fn.get("arguments")
+                args = raw_args if isinstance(raw_args, dict) else json.loads(raw_args or "{}")
+                yield {"type": "tool", "name": fn.get("name", "")}
+                result = _run_tool(gid, fn["name"], args, actions)
+                tool_msg = {"role": "tool", "content": result}
+                if not is_ollama:
+                    tool_msg["tool_call_id"] = tc.get("id", "")
+                convo.append(tool_msg)
+    return "I've done what I can — ask me to continue if there's more."
+
+
 # --------------------------------------------------------------------------- #
 # Single-shot completion (no tools) — powers receipt extraction and the Home
 # Assistant conversation relay. Works across every provider.

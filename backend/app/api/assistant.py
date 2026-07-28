@@ -1,14 +1,16 @@
 """Chat assistant endpoints — a conversational surface over the same inventory
 actions the MCP server exposes, available from a widget on every screen."""
 import ipaddress
+import json
 import socket
 from urllib.parse import urlparse
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, Response, stream_with_context
 
 from ..auth import login_required, owner_required, current_group
 from ..extensions import limiter, db
 from ..services import assistant
+from ..services.settings import get_chat_stream, set_chat_stream
 
 bp = Blueprint("assistant", __name__)
 
@@ -47,8 +49,20 @@ def _llm_url_ok(url):
 @bp.get("/assistant/config")
 @login_required
 def config():
-    """What the chat widget needs: whether an LLM is wired up, and which."""
-    return jsonify(assistant.config_public())
+    """What the chat widget needs: whether an LLM is wired up, and which, plus the
+    household's streaming default (a per-browser toggle can override it)."""
+    cfg = assistant.config_public()
+    cfg["stream"] = get_chat_stream(current_group().id)
+    return jsonify(cfg)
+
+
+@bp.put("/assistant/chat-settings")
+@owner_required
+def put_chat_settings():
+    """Set the household default for streaming chat replies (owner only)."""
+    stream = bool((request.get_json(force=True) or {}).get("stream"))
+    set_chat_stream(current_group().id, stream)
+    return jsonify({"stream": stream})
 
 
 @bp.get("/assistant/settings")
@@ -127,6 +141,41 @@ def chat():
                 for m in messages if m.get("content")][-20:]
     result = assistant.run_chat(current_group().id, messages)
     return jsonify(result)
+
+
+@bp.post("/assistant/chat/stream")
+@login_required
+@limiter.limit("30/minute")
+def chat_stream():
+    """Streaming twin of :func:`chat`: an NDJSON stream of
+    ``{"type":"delta","text"}`` / ``{"type":"tool","name"}`` events ending with a
+    terminal ``{"type":"done", reply, actions, provider, model, enabled}`` (or
+    ``{"type":"error","error"}``). Edibl chat is stateless (it takes the full
+    messages array); tool handlers commit themselves, so there is no session to
+    persist here."""
+    data = request.get_json(force=True) or {}
+    messages = data.get("messages")
+    if not messages and data.get("message"):
+        messages = [{"role": "user", "content": str(data["message"])}]
+    if not messages:
+        return jsonify({"error": "messages[] or message required"}), 422
+    messages = [{"role": m.get("role", "user"), "content": str(m.get("content", ""))[:4000]}
+                for m in messages if m.get("content")][-20:]
+    gid = current_group().id
+
+    def generate():
+        try:
+            for ev in assistant.run_chat_stream(gid, messages):
+                yield json.dumps(ev) + "\n"
+        except Exception:  # noqa: BLE001 - never leak a stack into the stream
+            db.session.rollback()
+            yield json.dumps({"type": "error", "error": "The assistant failed."}) + "\n"
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @bp.post("/assistant/undo")

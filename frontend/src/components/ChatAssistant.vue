@@ -1,16 +1,33 @@
 <script setup>
-import { ref, nextTick, onMounted, watch } from 'vue'
-import { api } from '../api'
+import { ref, computed, nextTick, onMounted, watch } from 'vue'
+import { api, streamPost } from '../api'
 import { chatOpen, chatPrefill } from '../chat'
 import { dataChanged } from '../live'
 
 const open = ref(false)
-const cfg = ref({ enabled: false, provider: 'rules', model: null })
+const cfg = ref({ enabled: false, provider: 'rules', model: null, stream: false })
 const msgs = ref([])          // {role, content, actions?}
 const input = ref('')
 const busy = ref(false)
 const body = ref(null)
 const inputEl = ref(null)
+
+// Transport: per-browser override (localStorage) wins over the household default
+// (cfg.stream from /assistant/config), which defaults to classic POST.
+const STREAM_KEY = 'edibl_chat_stream'
+const streamOverride = ref(readStreamOverride())
+const streaming = computed(() =>
+  streamOverride.value === null ? !!cfg.value.stream : streamOverride.value)
+function readStreamOverride() {
+  const v = localStorage.getItem(STREAM_KEY)
+  if (v === 'true') return true
+  if (v === 'false') return false
+  return null
+}
+function setStreaming(on) {
+  streamOverride.value = !!on
+  localStorage.setItem(STREAM_KEY, on ? 'true' : 'false')
+}
 
 const suggestions = [
   "What's expiring soon?",
@@ -44,6 +61,33 @@ async function scrollDown() {
   if (body.value) body.value.scrollTop = body.value.scrollHeight
 }
 
+async function sendPost(payload) {
+  const res = await api.post('/assistant/chat', { messages: payload })
+  msgs.value.push({ role: 'assistant', content: res.reply, actions: res.actions || [] })
+  if ((res.actions || []).some((a) => a.undoable)) dataChanged()
+}
+
+async function sendStream(payload) {
+  msgs.value.push({ role: 'assistant', content: '', actions: [] })
+  const idx = msgs.value.length - 1 // mutate via the reactive proxy, not the raw object
+  let errored = null
+  try {
+    await streamPost('/assistant/chat/stream', { messages: payload }, (ev) => {
+      const a = msgs.value[idx]
+      if (ev.type === 'delta') { a.content += ev.text; scrollDown() }
+      else if (ev.type === 'done') {
+        a.content = ev.reply || a.content
+        a.actions = ev.actions || []
+        if (a.actions.some((x) => x.undoable)) dataChanged()
+      } else if (ev.type === 'error') { errored = new Error(ev.error || 'Something went wrong.') }
+    })
+  } catch (e) {
+    if (!msgs.value[idx].content) msgs.value.splice(idx, 1)
+    throw e
+  }
+  if (errored) { msgs.value.pop(); throw errored }
+}
+
 async function send(text) {
   const content = (text ?? input.value).trim()
   if (!content || busy.value) return
@@ -52,11 +96,11 @@ async function send(text) {
   busy.value = true
   await scrollDown()
   try {
-    const payload = msgs.value.map((m) => ({ role: m.role, content: m.content }))
-    const res = await api.post('/assistant/chat', { messages: payload })
-    msgs.value.push({ role: 'assistant', content: res.reply, actions: res.actions || [] })
-    // If the assistant changed anything, tell the open views to refresh.
-    if ((res.actions || []).some((a) => a.undoable)) dataChanged()
+    const payload = msgs.value
+      .filter((m) => m.role === 'user' || m.role === 'assistant')
+      .map((m) => ({ role: m.role, content: m.content }))
+    if (streaming.value) await sendStream(payload)
+    else await sendPost(payload)
   } catch (e) {
     msgs.value.push({ role: 'assistant', content: '⚠️ ' + (e.message || 'Something went wrong.') })
   } finally {
@@ -89,6 +133,9 @@ async function undoAction(a) {
       <div class="phead">
         <strong>🥑 Ask Edibl</strong>
         <div class="ph-right">
+          <label class="stream-toggle" title="Stream the reply as it's written (this browser)">
+            <input type="checkbox" :checked="streaming" @change="setStreaming($event.target.checked)" /> Stream
+          </label>
           <span class="tag" :class="cfg.enabled ? 'on' : 'off'">
             {{ cfg.enabled ? cfg.provider : 'not set up' }}</span>
           <button class="pclose" @click="open = false" aria-label="Close chat">✕</button>
@@ -112,7 +159,10 @@ async function undoAction(a) {
           </div>
         </div>
         <div v-for="(m, i) in msgs" :key="i" class="msg" :class="m.role">
-          <div class="bubble">{{ m.content }}</div>
+          <div class="bubble">
+            <template v-if="m.content">{{ m.content }}</template>
+            <span v-else class="muted">…</span>
+          </div>
           <div v-if="m.actions && m.actions.length" class="acts">
             <div v-for="(a, j) in m.actions" :key="j" class="act" :class="{ mut: a.undoable, done: a.undone }">
               <span class="tick">{{ a.undone ? '↩' : (a.undoable ? '✎' : '🔍') }}</span>
@@ -123,7 +173,7 @@ async function undoAction(a) {
             </div>
           </div>
         </div>
-        <div v-if="busy" class="msg assistant"><div class="bubble typing"><span></span><span></span><span></span></div></div>
+        <div v-if="busy && !streaming" class="msg assistant"><div class="bubble typing"><span></span><span></span><span></span></div></div>
       </div>
 
       <form class="pfoot" @submit.prevent="send()">
@@ -155,6 +205,9 @@ async function undoAction(a) {
 .phead { display: flex; align-items: center; justify-content: space-between;
   padding: 13px 15px; border-bottom: 1px solid var(--border);
   background: linear-gradient(180deg, var(--accent-soft), transparent); }
+.ph-right { display: flex; align-items: center; gap: 8px; }
+.stream-toggle { display: flex; align-items: center; gap: 4px; font-size: .72rem; color: var(--muted); cursor: pointer; user-select: none; }
+.stream-toggle input { width: auto; margin: 0; }
 .ph-right { display: flex; align-items: center; gap: 8px; }
 .pclose { background: transparent; color: var(--muted); border: none; padding: 4px 8px;
   font-size: 1rem; line-height: 1; border-radius: 8px; cursor: pointer; }

@@ -12,6 +12,22 @@ const models = ref([])
 const modelsMsg = ref('')
 const loadingModels = ref(false)
 
+// Household default for streaming chat replies (owner-editable; each browser
+// overrides it on the chat widget). Default is classic POST.
+const chatStreamDefault = ref(false)
+const chatSaving = ref(false)
+async function loadChatDefault() {
+  try { chatStreamDefault.value = !!(await api.get('/assistant/config')).stream } catch (e) { /* keep default */ }
+}
+async function saveChatDefault(on) {
+  chatSaving.value = true
+  try {
+    chatStreamDefault.value = !!(await api.put('/assistant/chat-settings', { stream: on })).stream
+    ui.success('Saved chat default')
+  } catch (e) { ui.error(e.message || 'Could not save') } finally { chatSaving.value = false }
+}
+onMounted(loadChatDefault)
+
 const providerLabels = { '': '— none (disabled) —', ollama: 'Ollama',
   openai: 'OpenAI-compatible', anthropic: 'Anthropic',
   homeassistant: "Home Assistant's agent" }
@@ -243,6 +259,13 @@ async function resetSettings() {
         <span class="badge" :class="s.enabled ? 'fresh' : 'expired'">{{ s.enabled ? 'connected' : 'not configured' }}</span>
         <span v-if="s.enabled" class="chip">{{ s.tools ? 'full chat CRUD' : 'completion-only' }}</span>
       </div>
+
+      <label class="row" style="gap:8px;align-items:center;margin-bottom:12px">
+        <input type="checkbox" style="width:auto" :checked="chatStreamDefault" :disabled="chatSaving"
+          @change="saveChatDefault($event.target.checked)" />
+        <span>Stream chat responses by default
+          <span class="muted" style="font-size:.8rem">— each browser can override on the chat widget</span></span>
+      </label>
 
       <label class="field"><span>Provider</span>
         <select v-model="form.provider">

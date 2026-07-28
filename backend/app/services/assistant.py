@@ -818,21 +818,28 @@ _DEFAULTS = {
 }
 
 
-def _llm_overrides():
-    """UI-set (persisted) overrides for the current household, or {} if none / no
-    request context (e.g. tests, the MCP process)."""
-    try:
-        from ..auth import current_group
-        from .settings import get_llm_overrides
-        return get_llm_overrides(current_group().id)
-    except Exception:  # noqa: BLE001 — no request/group context
-        return {}
+def _llm_overrides(gid=None):
+    """UI-set (persisted) overrides for a household. Pass ``gid`` explicitly from a
+    background job — the worker has an app context but NO request, so there is no
+    current group and ``current_group()`` would raise. In a request, ``gid=None``
+    resolves the current group; with no request and no gid there are simply no
+    overrides. A real DB error is deliberately NOT swallowed (that catch-all is what
+    silently hid per-group job config)."""
+    from .settings import get_llm_overrides
+    if gid is None:
+        from flask import g, has_request_context
+        if not (has_request_context() and getattr(g, "current_group", None)):
+            return {}
+        gid = g.current_group.id
+    return get_llm_overrides(gid)
 
 
-def _cfg():
-    """Effective config: UI overrides > add-on/env > provider default."""
+def _cfg(gid=None):
+    """Effective config: UI overrides > add-on/env > provider default. Pass ``gid``
+    from a background job so it honours that group's UI-configured provider (the
+    worker has no request context)."""
     c = current_app.config
-    ov = _llm_overrides()
+    ov = _llm_overrides(gid)
     provider = ov.get("llm_provider") or c.get("LLM_PROVIDER") or ""
     base, model = _DEFAULTS.get(provider, ("", ""))
     api_key = ov.get("llm_api_key") or c.get("LLM_API_KEY") or ""
@@ -861,7 +868,7 @@ def job_cfg(gid, kind, opts=None):
     Home Assistant uses its Supervisor token. A model-only change (or the same
     provider) keeps the chat credentials."""
     opts = opts or {}
-    base = _cfg()
+    base = _cfg(gid)   # honour this group's UI-configured provider in the worker
     try:
         from .settings import job_preference
         # gid is passed explicitly: jobs run in the worker thread, which has an

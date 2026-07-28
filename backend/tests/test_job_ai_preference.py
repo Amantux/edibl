@@ -31,7 +31,7 @@ def test_organize_preference_shared_by_categorize_and_cluster(app, auth_client):
 
 def test_job_cfg_switching_vendor_drops_the_chat_key(app, monkeypatch):
     with app.app_context():
-        monkeypatch.setattr(assistant, "_cfg", lambda: {
+        monkeypatch.setattr(assistant, "_cfg", lambda gid=None: {
             "provider": "anthropic", "base_url": "https://api.anthropic.com",
             "api_key": "sk-ant-secret", "model": "claude", "agent_id": "",
             "timeout": 60, "max_steps": 6})
@@ -43,7 +43,7 @@ def test_job_cfg_switching_vendor_drops_the_chat_key(app, monkeypatch):
 
 def test_job_cfg_model_only_keeps_provider_and_key(app, monkeypatch):
     with app.app_context():
-        monkeypatch.setattr(assistant, "_cfg", lambda: {
+        monkeypatch.setattr(assistant, "_cfg", lambda gid=None: {
             "provider": "ollama", "base_url": "http://h", "api_key": "k",
             "model": "big", "agent_id": "", "timeout": 60, "max_steps": 6})
         cfg = assistant.job_cfg("g1", "enrich", {"model": "smaller"})
@@ -58,11 +58,27 @@ def test_stored_pref_applies_without_a_request_context(app, auth_client, monkeyp
         gid = db.session.query(User).filter_by(email="t@t.com").first().group_id
         st.set_job_settings(gid, organize={"provider": "ollama", "model": "tiny"})
         # A bare app context simulates the worker (no g.current_group).
-        monkeypatch.setattr(assistant, "_cfg", lambda: {
+        monkeypatch.setattr(assistant, "_cfg", lambda gid=None: {
             "provider": "", "base_url": "", "api_key": "", "model": "",
             "agent_id": "", "timeout": 60, "max_steps": 6})
         cfg = assistant.job_cfg(gid, "categorize", {})
         assert cfg["provider"] == "ollama" and cfg["model"] == "tiny"
+
+
+def test_ui_configured_provider_applies_to_jobs_without_request(app, auth_client, monkeypatch):
+    """A group that set its provider in the Edibl UI (per-group override, no env)
+    must have its jobs use THAT provider. The worker has no request context, so
+    _cfg(gid) must resolve the group's overrides instead of falling back to env —
+    the other half of the current_group() blocker."""
+    from app.services.settings import set_llm
+    with app.app_context():
+        gid = db.session.query(User).filter_by(email="t@t.com").first().group_id
+        set_llm(gid, provider="ollama", base_url="http://ui-host:11434", model="ui-model")
+        monkeypatch.setitem(app.config, "LLM_PROVIDER", "")   # nothing in env/add-on
+        cfg = assistant.job_cfg(gid, "enrich", {})            # "same as chat", no override
+        assert cfg["provider"] == "ollama"
+        assert cfg["base_url"] == "http://ui-host:11434"
+        assert cfg["model"] == "ui-model"
 
 
 def test_job_settings_rejects_hosted_vendor(auth_client):

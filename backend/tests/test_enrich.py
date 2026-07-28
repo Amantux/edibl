@@ -70,7 +70,7 @@ def test_synthesis_is_provider_agnostic(app, monkeypatch):
     ANY provider (here anthropic), not just an Ollama-shaped /api/generate call."""
     from app.services import enrich
     with app.app_context():
-        monkeypatch.setattr("app.services.assistant._cfg", lambda: {
+        monkeypatch.setattr("app.services.assistant._cfg", lambda gid=None: {
             "provider": "anthropic", "base_url": "", "api_key": "k", "model": "claude",
             "timeout": 5, "max_steps": 6, "agent_id": ""})
         monkeypatch.setattr("app.services.assistant._complete",

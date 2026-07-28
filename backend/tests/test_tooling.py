@@ -11,7 +11,7 @@ def _gid(app):
 
 
 def _use_llm(monkeypatch, reply):
-    monkeypatch.setattr("app.services.assistant._cfg", lambda: {
+    monkeypatch.setattr("app.services.assistant._cfg", lambda gid=None: {
         "provider": "ollama", "base_url": "", "api_key": "", "model": "m",
         "timeout": 5, "max_steps": 6, "agent_id": ""})
     monkeypatch.setattr("app.services.assistant._complete",
@@ -127,7 +127,7 @@ def test_categorize_job_errors_without_provider(auth_client, app, monkeypatch):
     with app.app_context():
         db.session.add(Product(name="X", group_id=gid, category="other"))
         db.session.commit()
-        monkeypatch.setattr("app.services.assistant._cfg", lambda: {"provider": ""})
+        monkeypatch.setattr("app.services.assistant._cfg", lambda gid=None: {"provider": ""})
         job = jobs.enqueue("categorize", gid)
         jobs.run_job(jobs.claim_one())
         from app.models import Job
@@ -169,7 +169,7 @@ def test_categorize_applies_model_override(auth_client, app, monkeypatch):
     with app.app_context():
         db.session.add(Product(name="X", group_id=gid, category="other"))
         db.session.commit()
-        monkeypatch.setattr("app.services.assistant._cfg", lambda: {
+        monkeypatch.setattr("app.services.assistant._cfg", lambda gid=None: {
             "provider": "ollama", "base_url": "", "api_key": "", "model": "default",
             "timeout": 5, "max_steps": 6, "agent_id": ""})
 

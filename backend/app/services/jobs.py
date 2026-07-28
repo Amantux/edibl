@@ -135,12 +135,15 @@ def _enrich_job(job: Job) -> dict:
     """Describe products missing a search_text (up to _ENRICH_MAX per run), via
     Ollama web search. Commits per item so progress + partial results survive."""
     from . import enrich
+    from .assistant import job_cfg
     from ..api.products import _apply_description, _describe_fields  # local: api↔services
     from ..models import Product
 
     if not enrich.enabled():
         raise JobError("Web search isn't configured (set an Ollama search key).")
     gid = job.group_id
+    # Per-run override > the stored "Enrichment" async preference > chat provider.
+    cfg = job_cfg(gid, "enrich", job.params or {})
 
     def missing_q():
         return (db.session.query(Product)
@@ -151,7 +154,7 @@ def _enrich_job(job: Job) -> dict:
     bump(job, done=0, total=len(products))
     described = 0
     for i, p in enumerate(products, 1):
-        result = enrich.describe(_describe_fields(p))
+        result = enrich.describe(_describe_fields(p), cfg=cfg)
         if result:
             _apply_description(p, result)
             described += 1

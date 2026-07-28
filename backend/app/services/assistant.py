@@ -850,6 +850,40 @@ def _cfg():
     }
 
 
+def job_cfg(gid, kind, opts=None):
+    """Effective config for a background job of ``kind`` (enrich / categorize /
+    cluster). Precedence: per-run ``opts`` (provider/model) > the stored async
+    preference for the kind > the chat provider.
+
+    Edibl keeps a single API key (the chat provider's), so switching a job to a
+    DIFFERENT vendor uses that vendor's default base URL and NO key — it never
+    sends the chat key to another vendor's endpoint. Local Ollama needs none;
+    Home Assistant uses its Supervisor token. A model-only change (or the same
+    provider) keeps the chat credentials."""
+    opts = opts or {}
+    base = _cfg()
+    try:
+        from .settings import job_preference
+        # gid is passed explicitly: jobs run in the worker thread, which has an
+        # app context but NO request, so current_group() would raise and the
+        # preference (per-group, no env fallback) would be silently dropped.
+        pref_provider, pref_model = job_preference(gid, kind)
+    except Exception:  # noqa: BLE001 — best-effort; fall back to the chat cfg
+        pref_provider, pref_model = None, None
+    provider = (opts.get("provider") or pref_provider or "").strip()
+    model = (opts.get("model") or pref_model or "").strip()
+    cfg = dict(base)
+    if provider and provider != base["provider"]:
+        d_base, d_model = _DEFAULTS.get(provider, ("", ""))
+        cfg["provider"] = provider
+        cfg["base_url"] = d_base
+        cfg["api_key"] = os.environ.get("SUPERVISOR_TOKEN", "") if provider == "homeassistant" else ""
+        cfg["model"] = d_model
+    if model:
+        cfg["model"] = model
+    return cfg
+
+
 def _ollama_headers(cfg):
     """Ollama now supports auth (e.g. Ollama cloud / a secured instance). Send the
     key as a bearer token when one is configured."""
@@ -883,6 +917,10 @@ def config_public():
 
 
 PROVIDER_CHOICES = ("", "ollama", "openai", "anthropic", "homeassistant")
+# Background jobs may only switch to a provider that needs no separately-stored
+# key, because Edibl keeps a single API key (the chat provider's). "" = same as
+# chat; a hosted vendor (openai/anthropic) would run keyless and always fail.
+JOB_PROVIDER_CHOICES = ("", "ollama", "homeassistant")
 
 
 def settings_public():

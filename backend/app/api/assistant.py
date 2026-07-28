@@ -10,7 +10,9 @@ from flask import Blueprint, request, jsonify, Response, stream_with_context
 from ..auth import login_required, owner_required, current_group
 from ..extensions import limiter, db
 from ..services import assistant
-from ..services.settings import get_chat_stream, set_chat_stream
+from ..services.settings import (
+    get_chat_stream, set_chat_stream, get_job_settings, set_job_settings,
+)
 
 bp = Blueprint("assistant", __name__)
 
@@ -63,6 +65,32 @@ def put_chat_settings():
     stream = bool((request.get_json(force=True) or {}).get("stream"))
     set_chat_stream(current_group().id, stream)
     return jsonify({"stream": stream})
+
+
+@bp.get("/assistant/job-settings")
+@login_required
+def get_job_settings_endpoint():
+    """The async-job AI preference: a provider+model default for background work,
+    separate from chat. `enrich` = product descriptions; `organize` = categorize +
+    cluster. Blank provider = same as chat."""
+    return jsonify(get_job_settings(current_group().id))
+
+
+@bp.put("/assistant/job-settings")
+@owner_required
+def put_job_settings_endpoint():
+    """Set the async-job AI preference (owner only). Body:
+    {enrich:{provider,model}, organize:{provider,model}}. Blank provider = same as chat."""
+    data = request.get_json(force=True) or {}
+    for area in ("enrich", "organize"):
+        blk = data.get(area)
+        if isinstance(blk, dict) and blk.get("provider"):
+            if str(blk["provider"]) not in assistant.JOB_PROVIDER_CHOICES:
+                return jsonify({"error": "Background jobs can only use Ollama or Home "
+                    "Assistant (Edibl stores a single API key). For a hosted vendor, "
+                    "use 'Same as chat' with a model override."}), 422
+    set_job_settings(current_group().id, enrich=data.get("enrich"), organize=data.get("organize"))
+    return jsonify(get_job_settings(current_group().id))
 
 
 @bp.get("/assistant/settings")

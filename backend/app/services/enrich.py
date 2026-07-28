@@ -47,12 +47,12 @@ def _query(fields) -> str:
     return " ".join(str(p).strip() for p in parts if p).strip()
 
 
-def _complete_json(system, user) -> dict | None:
-    """One completion through the configured provider (ollama/openai/anthropic/HA)
-    → parsed JSON object, or None. Provider-agnostic — uses assistant._complete so
-    enrichment honors whatever LLM is wired up, not just an Ollama-shaped one."""
+def _complete_json(system, user, cfg=None) -> dict | None:
+    """One completion through a provider → parsed JSON object, or None.
+    Provider-agnostic (uses assistant._complete). ``cfg`` lets the enrich job pass
+    the async "Enrichment" preference; None → the chat provider."""
     from .assistant import _cfg, _PROVIDERS, _complete
-    cfg = _cfg()
+    cfg = cfg or _cfg()
     if cfg.get("provider") not in _PROVIDERS:
         return None
     reply = _complete(cfg, system, user)
@@ -66,7 +66,7 @@ def _complete_json(system, user) -> dict | None:
 _SYNTH_SYSTEM = "You write concise, factual product descriptions. Respond ONLY with JSON."
 
 
-def _synthesize(fields, results):
+def _synthesize(fields, results, cfg=None):
     snippets = "\n\n".join(f"{r.get('title', '')}\n{r.get('content', '')}"[:600]
                            for r in results[:3])
     name = fields.get("name") or "this product"
@@ -74,7 +74,7 @@ def _synthesize(fields, results):
         user = (f"From the web results below, write a concise factual description of the "
                 f"food/product '{name}' (1-2 sentences) and 6-10 search keywords. Respond "
                 f'ONLY as JSON: {{"description":"...","keywords":["..."]}}.\n\n{snippets}')
-        data = _complete_json(_SYNTH_SYSTEM, user)
+        data = _complete_json(_SYNTH_SYSTEM, user, cfg)
         desc = (data.get("description") or "").strip() if data else ""
         if desc:
             return {"description": desc,
@@ -118,7 +118,7 @@ def extract_product(results):
     return None
 
 
-def describe(fields) -> dict | None:
+def describe(fields, cfg=None) -> dict | None:
     if not _search_key():
         return None
     query = _query(fields)
@@ -127,7 +127,7 @@ def describe(fields) -> dict | None:
     results = web_search(query, key=_search_key())
     if not results:
         return None
-    out = _synthesize(fields, results)
+    out = _synthesize(fields, results, cfg)
     if not out.get("description"):
         return None
     out["sources"] = [r.get("url") for r in results[:3] if r.get("url")]

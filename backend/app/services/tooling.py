@@ -35,13 +35,13 @@ def _confidence(value) -> float:
     return max(0.0, min(1.0, c))
 
 
-def _cfg_or_raise(model=None):
+def _job_cfg_or_raise(gid, kind, opts):
+    """Config for an organize job, honouring per-run opts > the stored "Background"
+    async preference > the chat provider (see assistant.job_cfg)."""
     from .jobs import JobError
-    cfg = assistant._cfg()
+    cfg = assistant.job_cfg(gid, kind, opts)
     if cfg["provider"] not in assistant._PROVIDERS:
         raise JobError("No LLM provider configured (set one in Settings).")
-    if model:  # per-run model override
-        cfg = {**cfg, "model": str(model)[:100]}
     return cfg
 
 
@@ -88,7 +88,7 @@ def run_categorize(job) -> dict:
     gid = job.group_id
     opts = job.params or {}
     note = str(opts.get("note") or "")
-    cfg = _cfg_or_raise(opts.get("model"))
+    cfg = _job_cfg_or_raise(gid, "categorize", opts)
     examples = icl_examples(gid, "categorize")
     threshold = _threshold()
     cats = ", ".join(CATEGORIES)
@@ -144,7 +144,7 @@ def run_cluster(job) -> dict:
     gid = job.group_id
     opts = job.params or {}
     note = str(opts.get("note") or "")
-    cfg = _cfg_or_raise(opts.get("model"))
+    cfg = _job_cfg_or_raise(gid, "cluster", opts)
     products = (db.session.query(Product)
                 .filter(Product.group_id == gid)
                 .order_by(Product.created_at.asc()).limit(_CLUSTER_ITEMS_MAX).all())

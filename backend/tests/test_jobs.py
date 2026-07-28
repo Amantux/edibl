@@ -39,7 +39,7 @@ def test_enrich_job_describes_missing_products(auth_client, app, monkeypatch):
         db.session.commit()
         monkeypatch.setattr("app.services.enrich.enabled", lambda: True)
         monkeypatch.setattr("app.services.enrich.describe",
-                            lambda fields: {"description": "dairy", "keywords": ["food"]})
+                            lambda fields, cfg=None: {"description": "dairy", "keywords": ["food"]})
 
         job = jobs.enqueue("enrich", gid)
         jobs.run_job(jobs.claim_one())

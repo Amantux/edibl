@@ -62,6 +62,44 @@ def set_chat_stream(gid, on):
     db.session.commit()
 
 
+# --- Async-job AI preference (background work, separate from chat) ----------
+# "enrich" = product-description jobs; "organize" = categorize + cluster. Blank
+# provider = same as the chat provider.
+JOB_KEYS = ("enrich_provider", "enrich_model", "organize_provider", "organize_model")
+
+
+def job_preference(gid, kind):
+    """Stored async default ``(provider, model)`` for a background job. ``enrich``
+    has its own; the organize jobs (``categorize``/``cluster``) share ``organize``.
+    Either element is None when unset (→ same as the chat provider)."""
+    prefix = "enrich" if kind == "enrich" else "organize"
+    try:
+        d = _all(gid)
+    except Exception:  # noqa: BLE001 — best-effort; never break a job
+        return (None, None)
+    return (d.get(f"{prefix}_provider") or None, d.get(f"{prefix}_model") or None)
+
+
+def get_job_settings(gid):
+    """UI view: {enrich:{provider,model}, organize:{provider,model}}."""
+    d = _all(gid)
+    return {area: {"provider": d.get(f"{area}_provider", ""), "model": d.get(f"{area}_model", "")}
+            for area in ("enrich", "organize")}
+
+
+def set_job_settings(gid, enrich=None, organize=None):
+    """Upsert the async-job AI preference. Each area is {provider, model}; a field
+    left out is untouched, '' clears it (falls back to the chat provider)."""
+    for area, blk in (("enrich", enrich), ("organize", organize)):
+        if not isinstance(blk, dict):
+            continue
+        if "provider" in blk:
+            _set(gid, f"{area}_provider", str(blk.get("provider") or "").strip())
+        if "model" in blk:
+            _set(gid, f"{area}_model", str(blk.get("model") or "").strip()[:100])
+    db.session.commit()
+
+
 def clear_llm(gid):
     """Drop all LLM overrides so the effective config falls back to the add-on /
     env defaults (the 'reset to add-on default' action)."""

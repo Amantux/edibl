@@ -28,6 +28,26 @@ async function saveChatDefault(on) {
 }
 onMounted(loadChatDefault)
 
+// Async-job AI preference: a provider+model default for background jobs, separate
+// from chat. Blank provider = same as chat. A per-run choice still wins.
+const jobAi = ref({ enrich: { provider: '', model: '' }, organize: { provider: '', model: '' } })
+const jobAiSaving = ref(false)
+const JOB_AREAS = [
+  { k: 'enrich', l: 'Enrichment (product descriptions)' },
+  { k: 'organize', l: 'Background (auto-categorize + families)' },
+]
+async function loadJobAi() {
+  try { jobAi.value = await api.get('/assistant/job-settings') } catch (e) { /* keep defaults */ }
+}
+async function saveJobAi() {
+  jobAiSaving.value = true
+  try {
+    jobAi.value = await api.put('/assistant/job-settings', jobAi.value)
+    ui.success('Saved background-task AI')
+  } catch (e) { ui.error(e.message || 'Could not save') } finally { jobAiSaving.value = false }
+}
+onMounted(loadJobAi)
+
 const providerLabels = { '': '— none (disabled) —', ollama: 'Ollama',
   openai: 'OpenAI-compatible', anthropic: 'Anthropic',
   homeassistant: "Home Assistant's agent" }
@@ -304,6 +324,29 @@ async function resetSettings() {
       </div>
     </div>
     <div v-else class="muted">Loading…</div>
+  </div>
+
+  <div class="card">
+    <h2>AI for background tasks</h2>
+    <p class="muted" style="margin-top:0">Optionally run background jobs on a different model
+      than chat — e.g. a cheap or local model for bulk work. <strong>Same as chat</strong> uses
+      the provider above (add a model to just change the model). A per-run choice (on the job
+      buttons) still wins. Switching provider is limited to <strong>Ollama</strong> or
+      <strong>Home Assistant</strong> — Edibl stores a single API key, so a hosted vendor
+      (OpenAI/Anthropic) can't be keyed separately for jobs.</p>
+    <div v-for="area in JOB_AREAS" :key="area.k" style="margin-bottom:14px">
+      <div class="muted" style="font-size:.85rem;font-weight:600;margin-bottom:4px">{{ area.l }}</div>
+      <div class="row" style="gap:8px">
+        <select v-model="jobAi[area.k].provider" style="flex:1">
+          <option value="">Same as chat</option>
+          <option v-for="p in ['ollama','homeassistant']" :key="p" :value="p">
+            {{ providerLabels[p] || p }}
+          </option>
+        </select>
+        <input v-model="jobAi[area.k].model" placeholder="model (optional)" style="flex:1" />
+      </div>
+    </div>
+    <button :disabled="jobAiSaving" @click="saveJobAi">{{ jobAiSaving ? 'Saving…' : 'Save' }}</button>
   </div>
 
   <div class="card">

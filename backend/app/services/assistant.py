@@ -1034,10 +1034,13 @@ def list_models(provider=None, base_url=None, api_key=None):
         return {"models": [], "provider": provider or "none", "error": "no provider set"}
     b, _m = _DEFAULTS.get(provider, ("", ""))
     same = provider == saved["provider"]
+    # For a provider that isn't the active chat one, use ITS own stored key
+    # (per-provider storage), so listing models for a background-task provider works.
     cfg = {
         "provider": provider,
         "base_url": base_url or (saved["base_url"] if same else "") or b,
-        "api_key": api_key or (saved["api_key"] if same else ""),
+        "api_key": api_key or (saved["api_key"] if same
+                               else _job_key(_llm_overrides(), current_app.config, provider)),
         "timeout": saved["timeout"],
     }
     if provider == "homeassistant":

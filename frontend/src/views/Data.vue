@@ -48,6 +48,21 @@ async function saveJobAi() {
 }
 onMounted(loadJobAi)
 
+// Model picker for the background-task preference: probe the chosen provider
+// (blank = the chat provider) for its models, so you can pick a small/local SLM
+// instead of typing it. Uses that provider's saved config.
+const jobModels = ref({ enrich: [], organize: [] })
+const jobModelsLoading = ref({ enrich: false, organize: false })
+async function listJobModels(area) {
+  jobModelsLoading.value[area] = true
+  try {
+    const r = await api.post('/assistant/models', { provider: jobAi.value[area].provider })
+    jobModels.value[area] = r.models || []
+    if (r.error) ui.error('Could not list models: ' + r.error)
+    else if (!jobModels.value[area].length) ui.info('No models found — type the model name')
+  } catch (e) { ui.error(e.message || 'Could not list models') } finally { jobModelsLoading.value[area] = false }
+}
+
 const providerLabels = { '': '— none (disabled) —', ollama: 'Ollama',
   openai: 'OpenAI-compatible', anthropic: 'Anthropic',
   homeassistant: "Home Assistant's agent" }
@@ -342,7 +357,11 @@ async function resetSettings() {
             {{ providerLabels[p] || p }}
           </option>
         </select>
-        <input v-model="jobAi[area.k].model" placeholder="model (optional)" style="flex:1" />
+        <input v-model="jobAi[area.k].model" :list="`jobmodels-${area.k}`"
+               placeholder="model (optional)" style="flex:1" />
+        <datalist :id="`jobmodels-${area.k}`"><option v-for="m in jobModels[area.k]" :key="m" :value="m" /></datalist>
+        <button type="button" class="secondary sm" :disabled="jobModelsLoading[area.k]"
+                @click="listJobModels(area.k)">{{ jobModelsLoading[area.k] ? '…' : 'List' }}</button>
       </div>
     </div>
     <button :disabled="jobAiSaving" @click="saveJobAi">{{ jobAiSaving ? 'Saving…' : 'Save' }}</button>

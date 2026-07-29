@@ -168,6 +168,8 @@ def create():
     _apply(p, data)
     db.session.add(p)
     db.session.commit()
+    from ..services.core_items import safe_sync
+    safe_sync(p.group_id, product_id=p.id)  # marking staple should list it if already low
     return jsonify(product_out(p)), 201
 
 
@@ -175,8 +177,15 @@ def create():
 @login_required
 def update(product_id):
     p = _get(product_id)
+    was_staple = p.staple
     _apply(p, request.get_json(force=True) or {})
     db.session.commit()
+    from ..services.core_items import retract_auto, safe_sync
+    if was_staple and not p.staple:
+        # Un-marked as a staple → clear any auto row it left on the list (sync only
+        # looks at current staples, so it won't retract this one).
+        retract_auto(p.group_id, p.id)
+    safe_sync(p.group_id, product_id=p.id)  # staple/threshold change → refresh the list
     return jsonify(product_out(p))
 
 

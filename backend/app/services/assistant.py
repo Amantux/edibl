@@ -39,7 +39,9 @@ SYSTEM_PROMPT = (
     "food the household actually has on hand, where it is, and how fresh it is. Use "
     "the provided tools to look things up and to make changes (adding stock, "
     "recording what was eaten or thrown out, editing the shopping list, moving items "
-    "between locations, and grouping products into display families). Prefer "
+    "between locations, and grouping products into display families). You can also "
+    "mark a product as a core 'always in stock' staple with set_staple, so it's "
+    "automatically added to the shopping list whenever it runs low. Prefer "
     "calling a tool over guessing. When you record that food went bad, be gentle and "
     "offer a practical tip. Keep replies short and to the point."
 )
@@ -206,6 +208,8 @@ def h_update_stock(gid, name, quantity=None, unit=None, location=None,
         except ValueError:
             pass
     db.session.commit()
+    from .core_items import safe_sync
+    safe_sync(gid, product_id=s.product_id)  # direct qty edit → refresh staples
     text = f"Updated {s.product.name}: now {s.quantity} {s.unit}."
     return text, {"op": "restore_lot", "lotId": s.id, "fields": prev}
 
@@ -218,8 +222,11 @@ def h_delete_stock(gid, name):
     s = lots[0]
     label = f"{s.quantity} {s.unit} of {s.product.name}"
     snap = _lot_snapshot(s)
+    pid = s.product_id
     db.session.delete(s)
     db.session.commit()
+    from .core_items import safe_sync
+    safe_sync(gid, product_id=pid)  # removing a lot may drop a staple below its level
     return f"Removed {label} from stock.", {"op": "recreate_lot", "lot": snap}
 
 
@@ -387,6 +394,42 @@ def h_group_products(gid, family, products=None):
     return msg + ".", {"op": "restore_families", "changes": changes}
 
 
+def h_set_staple(gid, product, staple=True, threshold=None):
+    """Mark a product as a core / always-in-stock staple (or unmark it), optionally
+    setting the low-stock threshold that triggers an auto shopping-list add. Reversible."""
+    nm = (product or "").strip()
+    if not nm:
+        return "Which product should I mark as a staple?"
+    p = (db.session.query(Product)
+         .filter(Product.group_id == gid, Product.name.ilike(f"%{nm}%"))
+         .order_by(Product.name.asc()).first())
+    if not p:
+        return f"Couldn't find a product matching '{nm}'."
+    prev = {"staple": bool(p.staple), "reorder_threshold": p.reorder_threshold}
+    was_staple = bool(p.staple)
+    p.staple = bool(staple)
+    if threshold is not None:
+        try:
+            p.reorder_threshold = float(threshold)
+        except (TypeError, ValueError):
+            pass
+    db.session.commit()
+    from .core_items import retract_auto, safe_sync
+    if was_staple and not p.staple:
+        retract_auto(gid, p.id)  # un-marked → clear any auto row it left behind
+    safe_sync(gid, product_id=p.id)  # list it now if it's already low
+    if p.staple:
+        # Mirror reorder_state's resolution (reorder_threshold → min_quantity → 1) so
+        # the number we quote matches when the list actually triggers.
+        thr = (p.reorder_threshold if p.reorder_threshold is not None
+               else p.min_quantity if p.min_quantity is not None else 1)
+        msg = (f"Marked {p.name} as a staple — I'll add it to the shopping list when "
+               f"it drops to {thr} or below.")
+    else:
+        msg = f"{p.name} is no longer a staple."
+    return msg, {"op": "restore_staple", "productId": p.id, "fields": prev}
+
+
 # name -> (handler, JSON-schema parameters, description)
 TOOLS = {
     "do_i_have": (h_do_i_have,
@@ -505,13 +548,26 @@ TOOLS = {
                         "required": ["family", "products"]},
                        "Group several products under one display family (e.g. put whole + "
                        "oat milk together under 'Milk'). Reversible."),
+    "set_staple": (h_set_staple,
+                   {"type": "object", "properties": {
+                       "product": {"type": "string"},
+                       "staple": {"type": "boolean",
+                                  "description": "true to mark as core/always-in-stock, "
+                                                 "false to unmark"},
+                       "threshold": {"type": "number",
+                                     "description": "low-stock level that triggers an "
+                                                    "auto shopping-list add (default 1)"}},
+                    "required": ["product"]},
+                   "Mark a product as a core 'always in stock' staple (or unmark it), so "
+                   "it's auto-added to the shopping list when it runs low. Reversible."),
 }
 
 
 # Tools that change data (surfaced in the chat UI with an Undo control).
 _MUTATING = {"add_stock", "update_stock", "delete_stock", "record_consumption",
              "open_stock", "adjust_stock", "move_stock", "split_stock",
-             "freeze_stock", "thaw_stock", "add_to_shopping_list", "group_products"}
+             "freeze_stock", "thaw_stock", "add_to_shopping_list", "group_products",
+             "set_staple"}
 _READONLY_LABELS = {
     "do_i_have": "Checked stock", "whats_in_stock": "Listed stock",
     "expiring_soon": "Checked what's expiring", "grouped_stock": "Grouped stock",
@@ -832,6 +888,16 @@ def apply_undo(gid, undo):
                 p.family = ch.get("prevFamily", "") or ""
         db.session.commit()
         return "Undone — restored the previous grouping."
+    if op == "restore_staple":  # undo set_staple
+        p = _owned(Product, undo.get("productId"), gid)
+        if p is not None:
+            f = undo.get("fields") or {}
+            p.staple = bool(f.get("staple"))
+            p.reorder_threshold = f.get("reorder_threshold")
+            db.session.commit()
+            from .core_items import safe_sync
+            safe_sync(gid, product_id=p.id)
+        return "Undone — reverted the staple change."
     if op == "delete_shopping":  # undo add_to_shopping_list
         i = _owned(ShoppingItem, undo.get("itemId"), gid)
         if i:

@@ -136,6 +136,32 @@ def _ensure_acquisition(lot: StockLot, *, source=None, derived_from=None) -> Acq
     return acq
 
 
+def _restock_sync(lot):
+    """Best-effort: after a command changes a lot's on-hand, refresh staple auto-
+    restock for that product. A shopping-list hiccup must NEVER break the committed
+    stock mutation, and non-staples cost only an attribute check (no query)."""
+    try:
+        if lot is None or not getattr(lot, "product_id", None):
+            return
+        p = lot.product
+        if p is None or not p.staple:
+            return
+        from ...services.core_items import safe_sync
+        safe_sync(lot.group_id, product_id=lot.product_id)
+    except Exception:  # noqa: BLE001 - side effect only; the mutation already committed
+        db.session.rollback()
+
+
+def _batch_restock_sync(gid):
+    """Full-group staple refresh after a batch op (reconcile/transform) that may have
+    crossed several thresholds at once. Best-effort, same guarantee as _restock_sync."""
+    try:
+        from ...services.core_items import safe_sync
+        safe_sync(gid)
+    except Exception:  # noqa: BLE001
+        db.session.rollback()
+
+
 # --------------------------------------------------------------------------- #
 # add
 # --------------------------------------------------------------------------- #
@@ -172,6 +198,7 @@ def add_lot(lot: StockLot, *, actor_user_id=None, source_app="web",
     collision = _commit_or_replay(replay)
     if collision is not None:
         return collision
+    _restock_sync(lot)
     return CommandResult(lot, ev, summary, {"lotId": lot.id})
 
 
@@ -276,6 +303,7 @@ def consume_lot(lot: StockLot, *, amount=None, outcome="eaten", freshness=None,
     insight = None
     if o in LOSS_OUTCOMES:
         insight = product_insights(gid, lot.product_id).get("suggestion") or None
+    _restock_sync(lot)
     return CommandResult(lot, ev, summary,
                          {"consumptionId": ce.id, "consumedAmount": amt, "insight": insight})
 
@@ -384,6 +412,7 @@ def reverse_event(event: InventoryEvent, *, actor_user_id=None, source_app="web"
     collision = _commit_or_replay(replay)
     if collision is not None:
         return collision
+    _restock_sync(lot)  # undo may have restored or removed stock → refresh staples
     return CommandResult(lot, ev, summary, {})
 
 
@@ -423,6 +452,7 @@ def adjust_lot(lot: StockLot, *, new_quantity, quantity_kind="exact", reason="",
     collision = _commit_or_replay(replay)
     if collision is not None:
         return collision
+    _restock_sync(lot)
     return CommandResult(lot, ev, summary, {})
 
 
@@ -620,6 +650,7 @@ def reconcile_location(gid, *, location_id=None, counts=None, missing=None,
 
     summary = f"Reconciled: {counted} corrected, {removed} removed, {added} added"
     db.session.commit()
+    _batch_restock_sync(gid)  # a whole-location walk can cross staple thresholds
     return ReconcileResult(batch, summary, counted, removed, added, ids)
 
 
@@ -790,4 +821,5 @@ def transform(gid, *, sources, products, actor_user_id=None, source_app="web"):
     summary = (f"Transformed {len(sources or [])} source(s) into "
                f"{len(produced)} item(s)")
     db.session.commit()
+    _batch_restock_sync(gid)  # sources drawn down / products added may cross thresholds
     return TransformResult(batch, summary, produced, ids)

@@ -371,6 +371,9 @@ def update(lot_id):
     if "attrs" in data and isinstance(data["attrs"], dict):
         s.attrs = {**(s.attrs or {}), **data["attrs"]}
     db.session.commit()
+    # A direct quantity/finished edit here bypasses the command layer's restock hook.
+    from ..services.core_items import safe_sync
+    safe_sync(s.group_id, product_id=s.product_id)
     return jsonify(stock_out(s))
 
 

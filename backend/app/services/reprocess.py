@@ -68,5 +68,8 @@ def run_reprocess(job) -> dict:
 
         bump(job, done=i)  # commits this product's changes + progress + heartbeat
 
+    from .core_items import safe_sync
+    safe_sync(gid)  # reclassification can't change on-hand, but keep staples consistent
+
     return {"reclassified": reclassified, "familyAssigned": family_assigned,
             "expiryUpdated": expiry_updated, "scanned": len(products)}

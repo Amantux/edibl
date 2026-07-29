@@ -84,12 +84,14 @@ async function del(l) {
         <span v-if="l.childCount" class="badge">{{ l.childCount }} sub</span>
         <span v-if="l.tempC != null" class="badge">{{ l.tempC }}°C</span>
         <span class="grow"></span><span class="muted" style="font-size:.72rem">view →</span></div>
-      <div class="row" style="margin-top:8px;gap:6px" @click.stop>
+      <div style="margin-top:8px" @click.stop>
         <input v-model="l.description" placeholder="What this area normally stores…"
-          style="flex:1;font-size:.8rem;padding:6px 8px" aria-label="Area description"
+          style="width:100%;font-size:.8rem;padding:6px 8px" aria-label="Area description"
           @change="saveDesc(l)" @keyup.enter="saveDesc(l)" />
-        <button class="ghost sm" :disabled="genBusy === l.id" :aria-label="`Generate description for ${l.name}`"
-          title="Generate from what's in it" @click="generateDesc(l)">✨</button></div>
+        <div class="row" style="justify-content:flex-end;margin-top:4px">
+          <button class="ghost sm" style="font-size:.72rem;padding:2px 6px" :disabled="genBusy === l.id"
+            :aria-label="`Generate description for ${l.name}`"
+            title="Generate from what's in it" @click="generateDesc(l)">✨ Generate</button></div></div>
     </div>
   </div>
   <div v-else class="empty"><div class="ico">📍</div><p>No locations yet — add a fridge, freezer, or pantry to start.</p>

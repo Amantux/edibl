@@ -471,7 +471,7 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
     <input class="oi" v-model="omniQuery" placeholder="Search stock, or type a question / “add 2 L milk”…" />
     <button v-if="omniQuery" type="button" class="ghost sm" @click="omniQuery=''" aria-label="Clear">✕</button>
     <button type="button" class="secondary sm" @click="openAdd">＋ Add</button>
-    <button type="submit" class="tonal sm">Ask</button>
+    <button type="submit" class="secondary sm">Ask</button>
   </form>
 
   <!-- Smart lists: the answers you actually want -->
@@ -598,7 +598,7 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
 
   <!-- Grouped view (everything) -->
   <div v-else-if="filter.view==='all' && groupsFiltered.length" class="card tablewrap" style="padding:0">
-    <table>
+    <table class="stock-grouped">
       <thead><tr><th>Group</th><th>Products</th><th>On hand</th><th>Next expiry</th><th></th></tr></thead>
       <tbody>
         <template v-for="g in groupsFiltered" :key="g.group">
@@ -858,6 +858,12 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
 .freshbar .fb.fresh { background: var(--success); }
 .freshbar .fb.soon { background: var(--warning); }
 .freshbar .fb.bad { background: var(--danger); }
+/* Mobile: drop the secondary "products / where" column so the grouped table fits
+   the viewport (group name + expand still convey it) instead of clipping off-screen. */
+@media (max-width: 720px) {
+  table.stock-grouped { min-width: 0; }
+  .stock-grouped :is(th, td):nth-child(2) { display: none; }
+}
 .scanbox { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-bottom: 10px; }
 .scanbox video { width: 100%; max-height: 200px; border-radius: 8px; background: #000; }
 .outcome-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }

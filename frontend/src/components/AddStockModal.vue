@@ -305,7 +305,7 @@ watch(() => props.modelValue, async (v) => {
         <label class="field" style="flex:1"><span>Location</span>
           <select v-model="form.locationId" @change="locationHint = ''; suggestedLocId = ''"><option value="">Unassigned</option>
             <option v-for="l in locations" :key="l.id" :value="l.id">{{ l.name }}</option></select>
-          <span v-if="locationHint" class="muted" style="font-size:.72rem">✨ Suggested: {{ locationHint }} · change if wrong</span></label>
+          <span v-if="locationHint" class="muted" style="font-size:.72rem;font-weight:400">✨ Suggested: {{ locationHint }} · change if wrong</span></label>
       </div>
       <label class="field" v-if="conditionScale.length"><span>Condition (optional)</span>
         <select v-model="form.freshness">

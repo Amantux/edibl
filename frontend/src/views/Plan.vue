@@ -115,7 +115,7 @@ async function remove(id) {
     <button class="secondary sm" style="margin-left:8px" @click="load">Retry</button>
   </div>
 
-  <div class="card" style="background:var(--accent-soft);border-color:var(--accent)">
+  <div class="card" style="background:var(--surface-2)">
     <strong>How this works:</strong> <span class="muted">myMeal owns the recipes; Edibl owns the real inventory.
     Planned ingredients (from myMeal or pasted below) are reconciled against what you actually have —
     so you can see the shortfall and order exactly what's missing.</span>
@@ -185,7 +185,7 @@ async function remove(id) {
   <div v-if="loading && !plan" class="card"><div class="muted">Loading your plan…</div></div>
   <div v-else-if="plan" class="card">
     <div class="row"><h2 style="flex:1;margin:0">Do I have what I need?</h2>
-      <span class="badge" :class="plan.canMakeAll ? 'fresh' : 'expiring'">
+      <span v-if="plan.items.length" class="badge" :class="plan.canMakeAll ? 'fresh' : 'expiring'">
         {{ plan.canMakeAll ? 'All covered ✓' : plan.shortfall.length + ' short' }}</span></div>
     <table v-if="plan.items.length" style="margin-top:12px">
       <thead><tr><th>Ingredient</th><th>Need</th><th>On hand</th><th>Status</th><th></th></tr></thead>

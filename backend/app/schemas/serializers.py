@@ -155,6 +155,7 @@ def product_out(p):
             "staple": bool(p.staple), "doNotSuggest": bool(p.do_not_suggest),
         },
         "shelfLifeDays": p.shelf_life_days, "notes": p.notes,
+        "nutrition": p.nutrition or None,
         "createdAt": iso(p.created_at),
     }
 
@@ -182,7 +183,8 @@ def stock_out(s):
         "id": s.id,
         "product": {"id": s.product.id, "name": s.product.name,
                     "category": s.product.category, "brand": s.product.brand,
-                    "family": s.product.family or "", "staple": bool(s.product.staple)}
+                    "family": s.product.family or "", "staple": bool(s.product.staple),
+                    "nutrition": s.product.nutrition or None}
         if s.product else None,
         # Convenience grouping key: the product's family, else its name.
         "groupKey": (s.product.family or s.product.name) if s.product else "",

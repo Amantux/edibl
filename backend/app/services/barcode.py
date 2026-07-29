@@ -9,6 +9,7 @@ Future computer-vision / on-device recognition can plug in behind the same
 ``lookup_*`` contract: return ``{name, brand, category}`` or ``None``.
 """
 import logging
+import math
 import re
 
 from flask import current_app
@@ -36,6 +37,67 @@ def _guess_category(tags):
     return "other"
 
 
+# Our normalized nutrition key -> Open Food Facts nutriment base key.
+_NUTR_KEYS = {
+    "kcal": "energy-kcal", "protein": "proteins", "carbs": "carbohydrates",
+    "sugar": "sugars", "fat": "fat", "satFat": "saturated-fat",
+    "fiber": "fiber", "sodium": "sodium",
+}
+
+
+def _num(x):
+    """A non-negative finite float, or None (missing/garbled/NaN/inf)."""
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return None
+    # Reject NaN, +/-inf and negatives. OFF data is community-entered and json.loads
+    # parses a literal `Infinity` token to inf; letting it through would put inf in
+    # Product.nutrition, and jsonify would then emit invalid JSON (`Infinity`) that
+    # breaks the whole /stock/insights + any stock-list response client-side.
+    return v if (math.isfinite(v) and v >= 0) else None
+
+
+def _nutrition_from_off(p):
+    """Extract a compact, normalized nutrition dict from an OFF product, or None.
+    Shape: {basis, source, per100?, perServing?, servingSize?, servingQuantity?} where
+    per100/perServing carry kcal + macros. Never invents values; sodium is derived from
+    salt (salt/2.5) only when a direct sodium figure is absent."""
+    nutr = p.get("nutriments")
+    if not isinstance(nutr, dict):
+        return None
+
+    def block(suffix):
+        out = {}
+        for our, off in _NUTR_KEYS.items():
+            v = _num(nutr.get(f"{off}{suffix}"))
+            if v is not None:
+                out[our] = round(v, 2)
+        if "sodium" not in out:  # derive from salt only as a fallback
+            salt = _num(nutr.get(f"salt{suffix}"))
+            if salt is not None:
+                out["sodium"] = round(salt / 2.5, 4)
+        return out
+
+    per100, per_serving = block("_100g"), block("_serving")
+    if not per100 and not per_serving:
+        return None
+    serving_size = (p.get("serving_size") or "").strip()
+    data_per = str(p.get("nutrition_data_per") or "").lower()
+    basis = "100ml" if ("ml" in serving_size.lower() or "ml" in data_per) else "100g"
+    out = {"basis": basis, "source": "openfoodfacts"}
+    if per100:
+        out["per100"] = per100
+    if per_serving:
+        out["perServing"] = per_serving
+    if serving_size:
+        out["servingSize"] = serving_size[:32]
+    sq = _num(p.get("serving_quantity"))
+    if sq is not None:
+        out["servingQuantity"] = sq
+    return out
+
+
 def _from_off(code):
     """Open Food Facts — food-focused, no key. {name,brand,category,...} or None."""
     import httpx
@@ -56,7 +118,8 @@ def _from_off(code):
         return None
     return {"name": name, "brand": (p.get("brands") or "").split(",")[0].strip(),
             "category": _guess_category(p.get("categories_tags")),
-            "barcode": code, "source": "openfoodfacts"}
+            "barcode": code, "source": "openfoodfacts",
+            "nutrition": _nutrition_from_off(p)}
 
 
 def _from_product_db(code):

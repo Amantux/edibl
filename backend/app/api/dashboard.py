@@ -82,6 +82,48 @@ def dashboard():
     })
 
 
+_MACROS = ("kcal", "protein", "carbs", "sugar", "fat", "satFat", "fiber", "sodium")
+_TO_GRAMS = {"g": 1.0, "gram": 1.0, "grams": 1.0, "kg": 1000.0}
+_TO_ML = {"ml": 1.0, "l": 1000.0, "liter": 1000.0, "litre": 1000.0}
+
+
+def _pantry_nutrition(active, products):
+    """Sum kcal + macros across on-hand stock, but ONLY where a product has per-100g/ml
+    nutrition AND its lot quantity is in a matching mass/volume unit, so the total is
+    honest. Anything else (no nutrition, or a count/presence unit that can't convert to
+    the nutrition basis) is counted as excluded, never guessed. None if nothing sums."""
+    from ..services.units import canonical_unit
+    totals = {k: 0.0 for k in _MACROS}
+    included = excluded = 0
+    for s in active:
+        p = products.get(s.product_id)
+        n = getattr(p, "nutrition", None) if p else None
+        per100 = n.get("per100") if isinstance(n, dict) else None
+        qty = s.quantity if (s.quantity_kind or "exact") in ("exact", "estimated", "approximate") else None
+        unit = canonical_unit(s.unit)
+        basis = n.get("basis") if isinstance(n, dict) else None
+        grams = None
+        if per100 and qty:
+            if basis == "100ml" and unit in _TO_ML:
+                grams = qty * _TO_ML[unit]
+            elif basis != "100ml" and unit in _TO_GRAMS:
+                grams = qty * _TO_GRAMS[unit]
+        if grams is not None:
+            factor = grams / 100.0
+            for k in _MACROS:
+                v = per100.get(k)
+                if isinstance(v, (int, float)):
+                    totals[k] += v * factor
+            included += 1
+        else:
+            excluded += 1
+    if not included:
+        return None  # nothing summable → no card (rather than a misleading all-zero total)
+    # Keep genuine zeros (0 g sugar is data, not "unknown").
+    kept = {k: round(v, 1) for k, v in totals.items()}
+    return {"totals": kept, "itemsIncluded": included, "itemsExcluded": excluded}
+
+
 @bp.get("/stock/insights")
 @login_required
 def spend_insights():
@@ -188,6 +230,7 @@ def spend_insights():
                             for c, v in sorted(spend_by_cat.items(), key=lambda kv: kv[1], reverse=True)],
         "wasteCost": money_out(waste_cost.quantize(Decimal("0.01"))),
         "priceHistory": price_history[:40],
+        "pantryNutrition": _pantry_nutrition(active, products),
     })
 
 

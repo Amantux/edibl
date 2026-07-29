@@ -223,6 +223,13 @@ class Product(IDMixin, TimestampMixin, db.Model):
     tracking_mode: Mapped[str] = mapped_column(String(16), default="")
     # Optional per-product override of the category shelf-life table (days).
     shelf_life_days: Mapped[int] = mapped_column(nullable=True)
+    # Normalized nutrition captured from a barcode lookup (OFF): {basis, per100?,
+    # perServing?, servingSize?, ...}. Per specific packaged product, so it lives here
+    # (a FoodConcept is too broad to carry one label's numbers). None = unknown.
+    # none_as_null: store Python None as SQL NULL (not the JSON token `null`), so
+    # `nutrition.is_(None)` reliably finds "no nutrition" rows however None got there
+    # (the enrich backfill depends on this); the {} sentinel stays non-NULL.
+    nutrition: Mapped[dict | None] = mapped_column(JSON(none_as_null=True), nullable=True)
     notes: Mapped[str] = mapped_column(Text, default="")
     group_id: Mapped[str] = mapped_column(String(36), ForeignKey("groups.id"))
     group = relationship("Group", back_populates="products")

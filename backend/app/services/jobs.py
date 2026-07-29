@@ -130,18 +130,66 @@ def bump(job: Job, done: int | None = None, total: int | None = None) -> None:
 _ENRICH_MAX = 200
 
 
+_NUTRITION_MAX = 50
+
+
+def _backfill_nutrition(gid) -> int:
+    """Top up nutrition for barcode-bearing products that have none, via the same
+    Open Food Facts lookup a scan uses. Best-effort + self-gating (returns 0 when
+    EDIBL_BARCODE_LOOKUP is off, since lookup_barcode yields None); bounded per run."""
+    from flask import current_app
+    from .barcode import lookup_barcode
+    from ..models import Product
+
+    # Only run when lookups are actually enabled — otherwise every product would be
+    # "attempted" with no chance of a hit and get sentinel-marked as checked (below),
+    # so they'd never be retried once the user turns lookups on.
+    if not current_app.config.get("BARCODE_LOOKUP"):
+        return 0
+
+    rows = (db.session.query(Product)
+            .filter(Product.group_id == gid, Product.barcode != "",
+                    Product.nutrition.is_(None))
+            .order_by(Product.created_at.asc()).limit(_NUTRITION_MAX).all())
+    filled = 0
+    for p in rows:
+        try:
+            hit = lookup_barcode(p.barcode)
+        except Exception:  # noqa: BLE001 — a transient lookup error: leave NULL, retry next run
+            continue
+        nutrition = (hit or {}).get("nutrition")
+        if isinstance(nutrition, dict) and nutrition:
+            p.nutrition = nutrition
+            filled += 1
+        else:
+            # Looked up cleanly but OFF has no nutrition for this barcode → sentinel {}
+            # (serializes back to null, but is non-NULL so it drops out of this query
+            # instead of being re-fetched — and re-hammering OFF — on every run).
+            p.nutrition = {}
+        db.session.commit()
+    return filled
+
+
 @register("enrich")
 def _enrich_job(job: Job) -> dict:
     """Describe products missing a search_text (up to _ENRICH_MAX per run), via
-    Ollama web search. Commits per item so progress + partial results survive."""
+    Ollama web search, and top up missing nutrition from barcodes. Commits per item
+    so progress + partial results survive."""
     from . import enrich
     from .assistant import job_cfg
     from ..api.products import _apply_description, _describe_fields  # local: api↔services
     from ..models import Product
 
-    if not enrich.enabled():
-        raise JobError("Web search isn't configured (set an Ollama search key).")
     gid = job.group_id
+    # Nutrition backfill first — it's OFF-gated, independent of web-search enrichment,
+    # so it runs (and reports) even when web search isn't configured.
+    nutrition_filled = _backfill_nutrition(gid)
+
+    if not enrich.enabled():
+        if nutrition_filled:
+            return {"described": 0, "scanned": 0, "remaining": 0,
+                    "nutritionFilled": nutrition_filled}
+        raise JobError("Web search isn't configured (set an Ollama search key).")
     # Per-run override > the stored "Enrichment" async preference > chat provider.
     cfg = job_cfg(gid, "enrich", job.params or {})
 
@@ -159,7 +207,8 @@ def _enrich_job(job: Job) -> dict:
             _apply_description(p, result)
             described += 1
         bump(job, done=i)
-    return {"described": described, "scanned": len(products), "remaining": missing_q().count()}
+    return {"described": described, "scanned": len(products),
+            "remaining": missing_q().count(), "nutritionFilled": nutrition_filled}
 
 
 @register("categorize")

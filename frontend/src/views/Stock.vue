@@ -380,6 +380,20 @@ const sheetLoc = ref('')                // location select for move
 function openSheet(s) { sheetFor.value = s; sheetMode.value = ''; sheetVal.value = ''; sheetLoc.value = s.location?.id || '' }
 function closeSheet() { sheetFor.value = null; sheetMode.value = '' }
 function sheetStart(mode) { sheetMode.value = mode; sheetVal.value = sheetFor.value?.quantity ?? '' }
+// Compact nutrition line for the action sheet — per serving if known, else per 100.
+const sheetNutrition = computed(() => {
+  const n = sheetFor.value?.product?.nutrition
+  const b = n && (n.perServing || n.per100)
+  if (!b) return null
+  const per = n.perServing ? (n.servingSize ? `per ${n.servingSize}` : 'per serving')
+    : `per 100${n.basis === '100ml' ? 'ml' : 'g'}`
+  const parts = []
+  if (b.kcal != null) parts.push(`${Math.round(b.kcal)} kcal`)
+  for (const [k, lab] of [['protein', 'P'], ['carbs', 'C'], ['fat', 'F']]) {
+    if (b[k] != null) parts.push(`${lab} ${Math.round(b[k])}g`)
+  }
+  return parts.length ? { per, text: parts.join(' · ') } : null
+})
 async function sheetCommit() {
   const s = sheetFor.value
   if (!s) return
@@ -687,6 +701,8 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
       <h2 style="margin-bottom:4px">{{ sheetFor.product?.name }}</h2>
       <p class="muted" style="margin-top:0">{{ sheetFor.quantityKind==='exact' ? (sheetFor.quantity+' '+sheetFor.unit) : sheetFor.quantityText }}
         · {{ sheetFor.storageMethod.replace('_',' ') }}<span v-if="sheetFor.packageState==='opened'"> · open</span></p>
+      <p v-if="sheetNutrition" class="muted" style="margin-top:-2px;font-size:.8rem;font-variant-numeric:tabular-nums">
+        🍎 {{ sheetNutrition.text }} <span style="opacity:.7">{{ sheetNutrition.per }}</span></p>
 
       <template v-if="!sheetMode">
         <button class="opt" @click="sheetStart('correct')"><span class="em">📏</span> Correct amount</button>

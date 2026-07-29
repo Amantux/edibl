@@ -39,6 +39,18 @@ const monthLabel = (mk) => {
     .toLocaleDateString(undefined, { month: 'short' }) + (m === '01' ? ` '${y.slice(2)}` : '')
 }
 
+// Pantry nutrition: macro rows + a formatter (sodium is stored in grams, shown as mg).
+const NUTRI = [['kcal', 'Calories', 'kcal'], ['protein', 'Protein', 'g'], ['carbs', 'Carbs', 'g'],
+  ['sugar', 'Sugar', 'g'], ['fat', 'Fat', 'g'], ['satFat', 'Sat fat', 'g'],
+  ['fiber', 'Fiber', 'g'], ['sodium', 'Sodium', 'mg']]
+const nutriRows = NUTRI.map(([key, label, unit]) => ({ key, label, unit }))
+function nutriVal(row) {
+  const v = data.value?.pantryNutrition?.totals?.[row.key]
+  if (v == null) return '—'
+  const shown = row.key === 'sodium' ? v * 1000 : v
+  return `${Math.round(shown).toLocaleString()} ${row.unit}`
+}
+
 const spendSeries = computed(() => data.value?.spendByMonth || [])
 const maxSpend = computed(() => Math.max(1, ...spendSeries.value.map((p) => p.spend || 0)))
 const byCategory = computed(() => data.value?.spendByCategory || [])
@@ -84,6 +96,21 @@ function spark(points) {
       <div class="stat"><div class="value" :style="data.valueOnHand.expiredUnused ? 'color:var(--warning)' : ''">
           {{ fmt(data.valueOnHand.expiredUnused) }}</div>
         <div class="label">Expired, unused</div></div>
+    </div>
+
+    <div v-if="data.pantryNutrition" class="card">
+      <h3>Pantry nutrition</h3>
+      <p class="muted" style="font-size:.85rem;margin-top:-4px">
+        Across on-hand weighed/measured stock — {{ data.pantryNutrition.itemsIncluded }}
+        item{{ data.pantryNutrition.itemsIncluded === 1 ? '' : 's' }} counted<span
+          v-if="data.pantryNutrition.itemsExcluded">, {{ data.pantryNutrition.itemsExcluded }}
+        not countable (by-count or no nutrition label)</span>.</p>
+      <div class="nutri-grid">
+        <div v-for="m in nutriRows" :key="m.key" class="nutri">
+          <div class="nv tnum">{{ nutriVal(m) }}</div>
+          <div class="nl">{{ m.label }}</div>
+        </div>
+      </div>
     </div>
 
     <div class="card">
@@ -167,6 +194,11 @@ h3 { margin:0 0 6px; }
 .hbar-fill { height:100%; background:var(--accent); border-radius:6px; }
 .hbar-val { font-variant-numeric:tabular-nums; font-size:.85rem; min-width:64px; text-align:right; }
 .tnum { font-variant-numeric:tabular-nums; }
+.nutri-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:10px; margin-top:10px; }
+@media (max-width:520px) { .nutri-grid { grid-template-columns:repeat(2, 1fr); } }
+.nutri { background:var(--surface-2, rgba(127,127,127,.10)); border-radius:8px; padding:8px 10px; }
+.nutri .nv { font-size:1.05rem; font-weight:600; }
+.nutri .nl { font-size:.72rem; color:var(--muted); text-transform:uppercase; letter-spacing:.03em; }
 .num { text-align:right; }
 .spark { display:block; }
 .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }

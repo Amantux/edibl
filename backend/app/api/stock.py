@@ -97,11 +97,13 @@ def _resolve_product(data):
         from ..models import ITEM_TYPES, TRACKING_MODES
         it = (data.get("itemType") or "food").strip().lower()
         tm = (data.get("trackingMode") or "").strip().lower()
+        nutrition = data.get("nutrition")
         p = Product(name=name, brand=brand,
                     category=(data.get("category") or "other").strip(),
                     family=family, barcode=barcode,
                     default_unit=canonical_unit(data.get("unit")),
                     item_type=it if it in ITEM_TYPES else "food",
+                    nutrition=nutrition if isinstance(nutrition, dict) else None,
                     tracking_mode=tm if tm in TRACKING_MODES else "", group_id=gid)
         db.session.add(p)
     else:
@@ -113,6 +115,9 @@ def _resolve_product(data):
             p.barcode = barcode
         if brand and not p.brand:
             p.brand = brand
+        nutrition = data.get("nutrition")
+        if isinstance(nutrition, dict) and not p.nutrition:
+            p.nutrition = nutrition
     # Flush under a SAVEPOINT: a concurrent add of the same (group, barcode) can trip
     # the partial unique index (uq_products_group_barcode). On that race, reuse the
     # product that won the barcode rather than surfacing a 500.

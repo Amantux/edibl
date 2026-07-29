@@ -15,15 +15,7 @@ const locations = ref([])
 const loading = ref(true)
 const filter = ref({ view: 'all', groupBy: 'family' })
 const expanded = reactive({})
-const currency = ref('USD')
 const GROUP_BYS = [['family', 'Family'], ['category', 'Category'], ['location', 'Location']]
-const fmtMoney = (n) => {
-  if (n == null) return ''
-  try {
-    return new Intl.NumberFormat(undefined, { style: 'currency', currency: currency.value,
-      maximumFractionDigits: 2 }).format(n)
-  } catch { return `${currency.value} ${Number(n).toFixed(2)}` }
-}
 const showAdd = ref(false)
 const showBulk = ref(false)
 const assistantCfg = ref({ enabled: false })
@@ -66,12 +58,11 @@ function _regroup(lots, keyOf) {
     let g = map.get(k)
     if (!g) {
       g = { group: k, category: '', products: new Set(), lots: [], lotCount: 0,
-        expiring: 0, expired: 0, _value: 0, nextExpiry: null, nextExpiryStatus: 'unknown' }
+        expiring: 0, expired: 0, nextExpiry: null, nextExpiryStatus: 'unknown' }
       map.set(k, g)
     }
     g.lots.push(s); g.lotCount++
     if (s.product?.name) g.products.add(s.product.name)
-    if (s.price != null) g._value += Number(s.price)
     if (s.expiryStatus === 'expiring') g.expiring++
     else if (s.expiryStatus === 'expired') g.expired++
     if (s.expiryDate && (!g.nextExpiry || s.expiryDate < g.nextExpiry)) {
@@ -80,7 +71,6 @@ function _regroup(lots, keyOf) {
   }
   return [...map.values()].map((g) => ({
     ...g, products: [...g.products].sort(), productCount: g.products.size,
-    valueOnHand: g._value || null,
     summary: `${g.lotCount} lot${g.lotCount > 1 ? 's' : ''}`,
   })).sort((a, b) => a.group.localeCompare(b.group))
 }
@@ -208,9 +198,7 @@ async function loadSuggest() {
 async function load(silent = false) {
   if (!silent) loading.value = true
   if (filter.value.view === 'all') {
-    const gr = await api.get('/stock/grouped')
-    groups.value = gr.groups
-    currency.value = gr.currency || 'USD'
+    groups.value = (await api.get('/stock/grouped')).groups
   } else {
     const path = filter.value.view === 'freezer' ? '/dashboard/freezer' : '/dashboard/wine'
     flatItems.value = (await api.get(path)).items
@@ -634,8 +622,7 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
             <td style="white-space:nowrap"><span class="badge" :class="g.nextExpiryStatus">{{ nextExp(g) }}</span>
               <span v-if="g.expiring || g.expired" class="muted" style="font-size:.7rem">
                 {{ g.expired ? '· ' + g.expired + ' expired' : '· ' + g.expiring + ' soon' }}</span></td>
-            <td style="text-align:right;white-space:nowrap">
-              <span v-if="g.valueOnHand!=null" class="chip val" title="Value on hand">{{ fmtMoney(g.valueOnHand) }}</span></td>
+            <td></td>
           </tr>
           <tr v-for="s in (expanded[g.group] ? g.lots : [])" :key="s.id" class="lot">
             <td><span class="ind">↳</span> {{ s.product?.name }}
@@ -649,9 +636,7 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
             <td class="muted">{{ s.location?.name || '—' }}<span v-if="s.source" class="muted"> · {{ s.source }}</span><span v-if="s.addedBy" class="muted"> · 👤 {{ s.addedBy }}</span></td>
             <td>{{ s.quantityKind === 'exact' ? (s.quantity + ' ' + s.unit) : s.quantityText }}
               <span class="chip">{{ s.storageMethod.replace('_',' ') }}</span>
-              <span v-if="s.packageState === 'opened'" class="chip">open</span>
-              <span v-if="s.price!=null" class="chip val"
-                :title="s.unitPrice!=null ? fmtMoney(s.unitPrice)+' / '+s.unit : 'price paid'">{{ fmtMoney(s.price) }}</span></td>
+              <span v-if="s.packageState === 'opened'" class="chip">open</span></td>
             <td><span class="badge" :class="s.expiryStatus" :title="s.expiryExplain">{{ expLabel(s) }}</span>
               <span v-if="s.expiryEstimated" class="muted" style="font-size:.7rem"> est</span></td>
             <td style="text-align:right;white-space:nowrap">
@@ -678,9 +663,7 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
               @click="toggleStaple(s.product)">{{ s.product.staple ? '★' : '☆' }}</button>
             <span v-if="s.attrs?.cut" class="muted"> · {{ s.attrs.animal }} {{ s.attrs.cut }}</span></td>
           <td class="muted">{{ s.location?.name || '—' }}<span v-if="s.addedBy" class="muted"> · 👤 {{ s.addedBy }}</span></td>
-          <td>{{ s.quantityKind === 'exact' ? (s.quantity + ' ' + s.unit) : s.quantityText }}
-            <span v-if="s.price!=null" class="chip val"
-              :title="s.unitPrice!=null ? fmtMoney(s.unitPrice)+' / '+s.unit : 'price paid'">{{ fmtMoney(s.price) }}</span></td>
+          <td>{{ s.quantityKind === 'exact' ? (s.quantity + ' ' + s.unit) : s.quantityText }}</td>
           <td><span class="chip">{{ s.storageMethod.replace('_',' ') }}</span>
             <span v-if="s.packageState === 'opened'" class="chip">open</span></td>
           <td><span class="badge" :class="s.expiryStatus" :title="s.expiryExplain">{{ expLabel(s) }}</span></td>
@@ -871,9 +854,6 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
   font-size: 1rem; line-height: 1; cursor: pointer; vertical-align: baseline; }
 .star:hover { background: transparent; color: var(--star); }
 .star.on { color: var(--star); }
-/* money chip — neutral, tabular, so it doesn't compete with the accent chips */
-.chip.val { background: var(--surface-2, rgba(127,127,127,.12)); color: var(--muted);
-  font-variant-numeric: tabular-nums; }
 /* freshness distribution bar under a group's on-hand count */
 .freshbar { display: flex; height: 4px; margin-top: 5px; border-radius: 999px;
   overflow: hidden; background: var(--surface-2, rgba(127,127,127,.15)); max-width: 130px; }

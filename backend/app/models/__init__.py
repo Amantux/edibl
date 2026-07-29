@@ -118,6 +118,9 @@ class Location(IDMixin, TimestampMixin, db.Model):
     kind: Mapped[str] = mapped_column(String(24), default="other")
     temp_c: Mapped[float] = mapped_column(Float, nullable=True)  # storage temperature
     notes: Mapped[str] = mapped_column(Text, default="")
+    # "What this area normally stores" — drives smart default placement; AI-assisted
+    # or generated, and refined by the chat bot + where the user actually puts things.
+    description: Mapped[str] = mapped_column(Text, nullable=False, server_default="", default="")
     group_id: Mapped[str] = mapped_column(String(36), ForeignKey("groups.id"))
     group = relationship("Group", back_populates="locations")
     parent_id: Mapped[str] = mapped_column(String(36), ForeignKey("locations.id"), nullable=True)

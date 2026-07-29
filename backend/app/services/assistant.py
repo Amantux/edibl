@@ -41,7 +41,9 @@ SYSTEM_PROMPT = (
     "recording what was eaten or thrown out, editing the shopping list, moving items "
     "between locations, and grouping products into display families). You can also "
     "mark a product as a core 'always in stock' staple with set_staple, so it's "
-    "automatically added to the shopping list whenever it runs low. Prefer "
+    "automatically added to the shopping list whenever it runs low. Use describe_area to "
+    "record what a storage area normally holds (e.g. 'ice cream goes in the freezer') — "
+    "this tunes where new items are placed by default. Prefer "
     "calling a tool over guessing. When you record that food went bad, be gentle and "
     "offer a practical tip. Keep replies short and to the point."
 )
@@ -430,6 +432,30 @@ def h_set_staple(gid, product, staple=True, threshold=None):
     return msg, {"op": "restore_staple", "productId": p.id, "fields": prev}
 
 
+def h_describe_area(gid, area, description=None, generate=False):
+    """Set or generate a storage area's description ('what it normally stores'). This
+    curates smart default placement — e.g. saying ice cream goes in the freezer teaches
+    future suggestions. Reversible."""
+    nm = (area or "").strip()
+    if not nm:
+        return "Which storage area?"
+    from ..models import Location
+    loc = (db.session.query(Location)
+           .filter(Location.group_id == gid, Location.name.ilike(f"%{nm}%"))
+           .order_by(Location.name.asc()).first())
+    if not loc:
+        return f"Couldn't find a storage area matching '{nm}'."
+    prev = loc.description or ""
+    if description and not generate:
+        loc.description = str(description)[:240]
+    else:
+        from .placement import describe_area
+        loc.description = describe_area(gid, loc)
+    db.session.commit()
+    return (f"{loc.name}: {loc.description}",
+            {"op": "restore_area_desc", "locationId": loc.id, "prev": prev})
+
+
 # name -> (handler, JSON-schema parameters, description)
 TOOLS = {
     "do_i_have": (h_do_i_have,
@@ -560,6 +586,18 @@ TOOLS = {
                     "required": ["product"]},
                    "Mark a product as a core 'always in stock' staple (or unmark it), so "
                    "it's auto-added to the shopping list when it runs low. Reversible."),
+    "describe_area": (h_describe_area,
+                      {"type": "object", "properties": {
+                          "area": {"type": "string", "description": "storage area name, "
+                                   "e.g. Freezer, Pantry"},
+                          "description": {"type": "string", "description": "what it "
+                                          "normally stores; omit to auto-generate"},
+                          "generate": {"type": "boolean", "description": "true to generate "
+                                       "the description from the area's contents"}},
+                       "required": ["area"]},
+                      "Set or generate a storage area's description of what it normally "
+                      "stores. This tunes smart default placement (e.g. 'ice cream goes in "
+                      "the freezer'). Reversible."),
 }
 
 
@@ -567,7 +605,7 @@ TOOLS = {
 _MUTATING = {"add_stock", "update_stock", "delete_stock", "record_consumption",
              "open_stock", "adjust_stock", "move_stock", "split_stock",
              "freeze_stock", "thaw_stock", "add_to_shopping_list", "group_products",
-             "set_staple"}
+             "set_staple", "describe_area"}
 _READONLY_LABELS = {
     "do_i_have": "Checked stock", "whats_in_stock": "Listed stock",
     "expiring_soon": "Checked what's expiring", "grouped_stock": "Grouped stock",
@@ -898,6 +936,13 @@ def apply_undo(gid, undo):
             from .core_items import safe_sync
             safe_sync(gid, product_id=p.id)
         return "Undone — reverted the staple change."
+    if op == "restore_area_desc":  # undo describe_area
+        from ..models import Location
+        loc = _owned(Location, undo.get("locationId"), gid)
+        if loc is not None:
+            loc.description = undo.get("prev") or ""
+            db.session.commit()
+        return "Undone — reverted the area description."
     if op == "delete_shopping":  # undo add_to_shopping_list
         i = _owned(ShoppingItem, undo.get("itemId"), gid)
         if i:

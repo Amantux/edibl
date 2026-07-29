@@ -124,7 +124,7 @@ def event_out(ev):
 def location_out(loc, with_counts=True):
     data = {
         "id": loc.id, "name": loc.name, "kind": loc.kind, "tempC": loc.temp_c,
-        "notes": loc.notes,
+        "notes": loc.notes, "description": loc.description or "",
         "parent": {"id": loc.parent.id, "name": loc.parent.name} if loc.parent else None,
         "createdAt": iso(loc.created_at),
     }

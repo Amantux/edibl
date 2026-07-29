@@ -831,12 +831,21 @@ def classify():
     """Contextualize a food item as it's typed: category, unit, storage, item type,
     tracking mode, canonical group, and a shelf-life hint. Uses the configured LLM
     when available, else a fast keyword heuristic. Body: { name }. Read-only."""
-    from ..services import assistant
+    from ..services import assistant, placement
     data = request.get_json(force=True) or {}
     name = (data.get("name") or "").strip()
     if not name:
         return jsonify({"error": "name required"}), 422
-    return jsonify(assistant.classify_food(name))
+    result = assistant.classify_food(name)
+    # Suggest where it should go (history → area descriptions → storage-method heuristic).
+    # Isolated so a placement hiccup can never break classify (its "never raises" contract).
+    try:
+        result["suggestedLocation"] = placement.suggest_location(
+            current_group().id, name, category=result.get("category"),
+            storage_method=result.get("storageMethod"))
+    except Exception:  # noqa: BLE001 — best-effort; classify still returns
+        result["suggestedLocation"] = None
+    return jsonify(result)
 
 
 def _detection_out(d):

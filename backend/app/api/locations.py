@@ -53,6 +53,7 @@ def create():
     if kind not in LOCATION_KINDS:
         kind = "other"
     loc = Location(name=data.get("name", ""), kind=kind, notes=data.get("notes", ""),
+                   description=data.get("description", ""),
                    temp_c=data.get("tempC"), parent_id=parent_id,
                    group_id=current_group().id)
     db.session.add(loc)
@@ -74,7 +75,7 @@ def get(location_id):
 def update(location_id):
     loc = _get(location_id)
     data = request.get_json(force=True) or {}
-    for k in ("name", "notes"):
+    for k in ("name", "notes", "description"):
         if k in data:
             setattr(loc, k, data[k])
     if "kind" in data and data["kind"] in LOCATION_KINDS:
@@ -86,6 +87,18 @@ def update(location_id):
         if err:
             return jsonify({"error": err}), 422
         loc.parent_id = parent_id
+    db.session.commit()
+    return jsonify(location_out(loc))
+
+
+@bp.post("/locations/<location_id>/describe")
+@login_required
+def describe(location_id):
+    """Generate 'what this area normally stores' (LLM when configured, else a heuristic
+    from its kind + current contents) and persist it. Returns the updated location."""
+    from ..services import placement
+    loc = _get(location_id)
+    loc.description = placement.describe_area(current_group().id, loc)
     db.session.commit()
     return jsonify(location_out(loc))
 

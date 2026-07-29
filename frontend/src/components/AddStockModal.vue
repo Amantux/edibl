@@ -102,6 +102,8 @@ function applyProductDefaults() {
 
 const classifying = ref(false)
 const classifyHint = ref('')
+const locationHint = ref('')   // "Suggested: Freezer" — cleared when the user overrides
+const suggestedLocId = ref('')  // the area WE auto-filled, so a re-classify can replace it
 let classifyToken = 0
 async function classifyAndFill() {
   const name = (form.value.productName || '').trim()
@@ -117,6 +119,18 @@ async function classifyAndFill() {
     if ((!form.value.unit || form.value.unit === 'count') && c.unit) form.value.unit = c.unit
     if (form.value.storageMethod === 'refrigerated' && c.storageMethod) form.value.storageMethod = c.storageMethod
     form.value.itemType = c.itemType || 'food'
+    // Default placement: fill when the user hasn't picked an area and history
+    // (applyProductDefaults) didn't place it — and REPLACE an earlier auto-suggestion
+    // when the name is re-classified. Never overrides a user/history choice; picking a
+    // different area just becomes the next correction.
+    const wasAuto = form.value.locationId && form.value.locationId === suggestedLocId.value
+    if (c.suggestedLocation && (!form.value.locationId || wasAuto)) {
+      form.value.locationId = c.suggestedLocation.locationId
+      suggestedLocId.value = c.suggestedLocation.locationId
+      locationHint.value = c.suggestedLocation.locationName
+    } else if (wasAuto) {                       // re-classified, no suggestion → drop the stale one
+      form.value.locationId = ''; suggestedLocId.value = ''; locationHint.value = ''
+    }
     classifyHint.value = c.category
       ? `✨ ${c.category}${c.storageMethod ? ' · ' + c.storageMethod.replace('_', ' ') : ''}` : ''
   } catch (e) { /* silent */ } finally { if (token === classifyToken) classifying.value = false }
@@ -289,8 +303,9 @@ watch(() => props.modelValue, async (v) => {
         <label class="field" style="width:120px"><span>Unit</span>
           <input v-model="form.unit" list="dl-add-units" /></label>
         <label class="field" style="flex:1"><span>Location</span>
-          <select v-model="form.locationId"><option value="">Unassigned</option>
-            <option v-for="l in locations" :key="l.id" :value="l.id">{{ l.name }}</option></select></label>
+          <select v-model="form.locationId" @change="locationHint = ''; suggestedLocId = ''"><option value="">Unassigned</option>
+            <option v-for="l in locations" :key="l.id" :value="l.id">{{ l.name }}</option></select>
+          <span v-if="locationHint" class="muted" style="font-size:.72rem">✨ Suggested: {{ locationHint }} · change if wrong</span></label>
       </div>
       <label class="field" v-if="conditionScale.length"><span>Condition (optional)</span>
         <select v-model="form.freshness">

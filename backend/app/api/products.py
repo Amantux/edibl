@@ -69,7 +69,21 @@ def list_products():
                             Product.barcode.ilike(like), Product.search_text.ilike(like)))
     if request.args.get("category"):
         q = q.filter(Product.category == request.args["category"])
-    return jsonify([product_out(p) for p in q.order_by(Product.name.asc()).all()])
+    rows = q.order_by(Product.name.asc()).all()
+    # Prefill fuel: each product's most-recent lot price (one extra query, not N).
+    from ..schemas.serializers import money_out
+    last_price = {}
+    for s in (db.session.query(StockLot)
+              .filter(StockLot.group_id == current_group().id, StockLot.cost.isnot(None))
+              .order_by(StockLot.purchase_date.is_(None).asc(),
+                        StockLot.purchase_date.asc(), StockLot.created_at.asc()).all()):
+        last_price[s.product_id] = s.cost   # later rows overwrite → last wins
+    out = []
+    for p in rows:
+        d = product_out(p)
+        d["lastPrice"] = money_out(last_price.get(p.id))
+        out.append(d)
+    return jsonify(out)
 
 
 @bp.get("/products/suggestions")

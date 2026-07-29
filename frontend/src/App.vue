@@ -12,6 +12,7 @@ onMounted(ensureMe)
 const NAV = [
   { to: '/', icon: '📊', label: 'Dashboard' },
   { to: '/stock', icon: '🥫', label: 'Stock' },
+  { to: '/insights', icon: '💰', label: 'Spend' },
   { to: '/plan', icon: '🍽️', label: 'Meal plan' },
   { to: '/shopping', icon: '🛒', label: 'Shopping' },
   { to: '/locations', icon: '📍', label: 'Locations' },

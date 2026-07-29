@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 
 from flask import Blueprint, request, jsonify, abort
 from sqlalchemy.exc import IntegrityError
@@ -7,8 +8,9 @@ from ..extensions import db
 from ..models import (StockLot, Product, Location, ConsumptionEvent, InventoryEvent,
                       Detection, utcnow, STORAGE_METHODS, PACKAGE_STATES, QUANTITY_KINDS)
 from ..auth import login_required, current_group, current_user
-from ..schemas.serializers import stock_out, expiry_status
+from ..schemas.serializers import stock_out, expiry_status, to_money
 from ..services.estimation import estimate_expiry, product_insights
+from ..services.settings import get_currency
 from ..services import inventory
 from ..services.units import canonical_unit
 
@@ -184,7 +186,7 @@ def _expiry_facts(data, product, gid, storage, purchase):
             "use_by": None, "expiry_basis": "estimated", "expiry_confidence": conf}
 
 
-def _build_lot(data, product, gid):
+def _build_lot(data, product, gid, currency=None):
     storage = data.get("storageMethod") or "refrigerated"
     if storage not in STORAGE_METHODS:
         storage = "refrigerated"
@@ -215,7 +217,9 @@ def _build_lot(data, product, gid):
         expiry_date=expiry, expiry_estimated=estimated,
         best_by=facts["best_by"], use_by=facts["use_by"],
         expiry_basis=facts["expiry_basis"], expiry_confidence=facts["expiry_confidence"],
-        cost=data.get("cost"), source=data.get("source", ""), lot_code=data.get("lotCode", ""),
+        cost=to_money(data.get("price") if data.get("price") is not None else data.get("cost")),
+        currency=currency if currency is not None else get_currency(gid),
+        source=data.get("source", ""), lot_code=data.get("lotCode", ""),
         notes=data.get("notes", ""), attrs=data.get("attrs") or {}, group_id=gid,
         created_by=current_user().id,
     )
@@ -265,8 +269,10 @@ def grouped():
                  "totalQuantity": 0.0, "unit": s.unit, "lotCount": 0,
                  "products": set(), "expiring": 0, "expired": 0,
                  "nextExpiry": None, "nextExpiryStatus": "unknown", "lots": [],
-                 "openCount": 0, "sealedCount": 0, "_qtys": []}
+                 "openCount": 0, "sealedCount": 0, "_qtys": [], "_value": Decimal("0")}
             groups[key] = g
+        if s.cost is not None:
+            g["_value"] += Decimal(str(s.cost))
         # Only real amounts contribute to the numeric total; presence/unknown lots
         # count as lots + show in `summary`, but never inflate the number.
         if (s.quantity_kind or "exact") in ("exact", "estimated", "approximate"):
@@ -288,16 +294,22 @@ def grouped():
             g["nextExpiryStatus"] = st
         g["lots"].append(stock_out(s))
     from ..services.quantity import aggregate
+    from ..schemas.serializers import money_out
     out = []
+    total_value = Decimal("0")
     for g in groups.values():
         g["products"] = sorted(g["products"])
         g["productCount"] = len(g["products"])
         g["summary"] = _group_summary(g)
         g["amounts"] = [q.as_dict() for q in aggregate(g["_qtys"])]
-        del g["_qtys"]
+        total_value += g["_value"]
+        g["valueOnHand"] = money_out(g["_value"])
+        del g["_qtys"], g["_value"]
         out.append(g)
     out.sort(key=lambda g: (g["nextExpiry"] is None, g["nextExpiry"] or "", g["group"]))
-    return jsonify({"groups": out, "total": len(out)})
+    return jsonify({"groups": out, "total": len(out),
+                    "valueOnHand": money_out(total_value),
+                    "currency": get_currency(gid)})
 
 
 @bp.post("/stock")
@@ -760,6 +772,7 @@ def _bulk_create(shared, items, gid, batch_key=None):
             return None, (jsonify({"error": "unknown location"}), 422)
         prepared.append((it, name, eff_loc))
     created = []
+    currency = get_currency(gid)  # hoist: one settings read per batch, not per item
     for i, (it, name, eff_loc) in enumerate(prepared):
         category = it.get("category") or shared.get("category") or "other"
         product = _resolve_product({"productName": name, "category": category,
@@ -776,10 +789,10 @@ def _bulk_create(shared, items, gid, batch_key=None):
             "purchaseDate": it.get("purchaseDate") or shared.get("purchaseDate"),
             "expiryDate": it.get("expiryDate"),
             "source": it.get("source") or shared.get("source") or "",
-            "cost": it.get("cost"),
+            "cost": it.get("cost"), "price": it.get("price"),
             "attrs": {**(shared.get("attrs") or {}), **(it.get("attrs") or {})},
         }
-        lot = _build_lot(merged, product, gid)
+        lot = _build_lot(merged, product, gid, currency=currency)
         res = inventory.add_lot(
             lot, actor_user_id=current_user().id, source_app="bulk",
             provenance=merged.get("source") or "bulk", confidence=it.get("confidence"),

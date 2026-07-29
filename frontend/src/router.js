@@ -1,6 +1,7 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 import Dashboard from './views/Dashboard.vue'
 import Stock from './views/Stock.vue'
+import Insights from './views/Insights.vue'
 import Shopping from './views/Shopping.vue'
 import Plan from './views/Plan.vue'
 import Locations from './views/Locations.vue'
@@ -15,6 +16,7 @@ import { ensureMe } from './me'
 const routes = [
   { path: '/', component: Dashboard },
   { path: '/stock', component: Stock },
+  { path: '/insights', component: Insights },
   { path: '/shopping', component: Shopping },
   { path: '/plan', component: Plan },
   { path: '/locations', component: Locations },

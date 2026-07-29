@@ -4,6 +4,8 @@ Used for the chat LLM provider: values set here override the add-on / env
 defaults, so a provider can be configured in Home Assistant *or* in the Edibl UI
 and is remembered either way.
 """
+import os
+
 from ..extensions import db
 from ..models import Setting
 
@@ -52,6 +54,25 @@ def set_llm(gid, provider=None, base_url=None, api_key=None, model=None, agent_i
         # separate. Fall back to the legacy single slot only when no provider is known.
         target = (provider.strip() if provider is not None else "") or _all(gid).get("llm_provider", "")
         _set(gid, f"{target}_api_key" if target else "llm_api_key", api_key)
+    db.session.commit()
+
+
+CURRENCY_KEY = "currency"
+
+
+def get_currency(gid):
+    """The household's currency code for prices (single-currency by design). Falls
+    back to the EDIBL_CURRENCY env default, else 'USD'. Uppercased, <=8 chars."""
+    try:
+        stored = (_all(gid).get(CURRENCY_KEY) or "").strip()
+    except Exception:  # noqa: BLE001 — best-effort read, never break pricing
+        stored = ""
+    code = stored or os.environ.get("EDIBL_CURRENCY", "") or "USD"
+    return code.strip().upper()[:8]
+
+
+def set_currency(gid, code):
+    _set(gid, CURRENCY_KEY, (code or "").strip().upper()[:8])
     db.session.commit()
 
 

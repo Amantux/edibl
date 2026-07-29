@@ -1330,11 +1330,15 @@ _EXTRACT_SYSTEM = (
     "\"name\" (string, the item as written), \"quantity\" (number), \"unit\" (string "
     "like count/g/kg/ml/l/pack), optional \"category\" (e.g. dairy, produce, meat), "
     "\"family\" (a short GENERIC group with brands/sizes stripped, e.g. 'Teriyaki "
-    "Marinade' for 'Wegmans Teriyaki Marinade', 'Milk' for 'Organic Whole Milk'), and "
+    "Marinade' for 'Wegmans Teriyaki Marinade', 'Milk' for 'Organic Whole Milk'), "
+    "optional \"price\" (number: the total paid for THAT line — the extended/line "
+    "price, not the unit price — as a plain number with no currency symbol; omit if "
+    "the line has no price), and "
     "\"confidence\" (number 0-1: how sure you are the name and quantity are correct — "
     "lower it for garbled/ambiguous lines). "
-    "Merge obvious duplicates. Skip prices, taxes, totals, discounts, store info, "
-    "and non-food items. If nothing food-like is present, return []."
+    "Merge obvious duplicates (sum their quantity and price). Skip taxes, totals, "
+    "subtotals, discounts, store info, and non-food items. If nothing food-like is "
+    "present, return []."
 )
 
 
@@ -1373,6 +1377,12 @@ def _parse_items(text):
         family = str(d.get("family") or d.get("group") or "").strip() or generic_family(name)
         if family and family.lower() != name.lower():
             item["family"] = family
+        # Line price (total paid for this line) — pass through for review; the API's
+        # to_money() is the authoritative coercion/validation at ingestion.
+        from ..schemas.serializers import money_out, to_money
+        price = to_money(d.get("price") if d.get("price") is not None else d.get("cost"))
+        if price is not None:
+            item["price"] = money_out(price)
         try:
             conf = float(d.get("confidence"))
             if 0 <= conf <= 1:

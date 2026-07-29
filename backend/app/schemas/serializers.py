@@ -1,10 +1,44 @@
 """JSON serialization with computed freshness fields."""
 from datetime import datetime, date
+from decimal import Decimal, InvalidOperation
 
 from ..models import utcnow
 
 # Days-to-expiry threshold for the "expiring soon" bucket.
 EXPIRING_SOON_DAYS = 5
+
+
+def to_money(x):
+    """Coerce a user/JSON value to a 2dp Decimal, or None. Money is Decimal, never
+    float — this is the single coercion point used at ingestion + aggregation."""
+    if x is None or x == "":
+        return None
+    try:
+        v = Decimal(str(x)).quantize(Decimal("0.01"))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+    # Column is Numeric(10, 2): a negative price is nonsense and an out-of-range one
+    # would raise DataError on Postgres (uncaught 500). Treat either as "no price".
+    if not v.is_finite() or v < 0 or v >= Decimal("100000000"):
+        return None
+    return v
+
+
+def money_out(x):
+    """Render a Decimal money value for JSON (no Decimal JSON type). Kept as a float
+    at the wire boundary only; all arithmetic upstream stays Decimal."""
+    return float(x) if x is not None else None
+
+
+def _unit_price(cost, quantity):
+    """Price per unit = cost / quantity, as a 4dp Decimal, when both are usable
+    (quantity > 0). None otherwise — presence/unknown lots have no per-unit price."""
+    if cost is None or not quantity or quantity <= 0:
+        return None
+    try:
+        return (Decimal(str(cost)) / Decimal(str(quantity))).quantize(Decimal("0.0001"))
+    except (InvalidOperation, ValueError, TypeError, ZeroDivisionError):
+        return None
 
 
 def iso(dt):
@@ -180,7 +214,12 @@ def stock_out(s):
         "expiryExplain": expiry_explain(s),
         "daysToExpiry": _days_to_expiry(s.expiry_date),
         "expiryStatus": expiry_status(s.expiry_date),
-        "cost": s.cost, "source": s.source, "lotCode": s.lot_code,
+        # Money: `cost`/`price` are the same lot price (float on the wire, Decimal in
+        # DB); `unitPrice` = price / amount when both are known; `currency` is the code.
+        "cost": money_out(s.cost), "price": money_out(s.cost),
+        "unitPrice": money_out(_unit_price(s.cost, s.quantity if _numeric_kind(s) else None)),
+        "currency": getattr(s, "currency", "") or "",
+        "source": s.source, "lotCode": s.lot_code,
         "finished": s.finished, "notes": s.notes, "attrs": s.attrs or {},
         "acquisitionLotId": getattr(s, "acquisition_lot_id", None),
         "acquisition": acquisition_out(s.acquisition_lot)
@@ -194,7 +233,7 @@ def acquisition_out(a):
     return {
         "id": a.id, "source": a.source, "acquiredAt": iso(a.acquired_at),
         "originalQuantity": a.original_quantity, "unit": a.unit,
-        "cost": a.cost, "currency": a.currency, "lotCode": a.lot_code,
+        "cost": money_out(a.cost), "currency": a.currency, "lotCode": a.lot_code,
         "provenance": a.provenance, "derivedFrom": a.derived_from or {},
     }
 

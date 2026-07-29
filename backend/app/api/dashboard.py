@@ -1,16 +1,48 @@
+from collections import defaultdict
+from datetime import timedelta
+from decimal import Decimal
+
 from flask import Blueprint, request, jsonify
 
 from ..extensions import db
-from ..models import StockLot, Product, Location
+from ..models import StockLot, Product, Location, ConsumptionEvent, LOSS_OUTCOMES, utcnow
 from ..auth import login_required, current_group
-from ..schemas.serializers import stock_out, expiry_status
+from ..schemas.serializers import stock_out, expiry_status, money_out
 from ..services.estimation import predict_runout, waste_insights
+from ..services.settings import get_currency
 
 bp = Blueprint("dashboard", __name__)
 
 
 def _active(gid):
     return db.session.query(StockLot).filter_by(group_id=gid, finished=False).all()
+
+
+def _month_key(dt):
+    return dt.strftime("%Y-%m") if dt else None
+
+
+def _typical_unit_prices(gid):
+    """Per product: (typical_unit_price, last_unit_price, last_price) as Decimals,
+    learned from that product's priced lots. Typical = mean of known unit prices;
+    used to value waste and prefill re-adds."""
+    lots = (db.session.query(StockLot)
+            .filter(StockLot.group_id == gid, StockLot.cost.isnot(None))
+            .order_by(StockLot.purchase_date.is_(None).asc(),
+                      StockLot.purchase_date.asc(), StockLot.created_at.asc()).all())
+    from ..services.units import canonical_unit
+    unit_prices, last_unit, last_price, price_unit = defaultdict(list), {}, {}, {}
+    for s in lots:
+        last_price[s.product_id] = Decimal(str(s.cost))
+        if s.quantity and s.quantity > 0:
+            up = (Decimal(str(s.cost)) / Decimal(str(s.quantity)))
+            unit_prices[s.product_id].append(up)
+            last_unit[s.product_id] = up
+            price_unit[s.product_id] = canonical_unit(s.unit)  # unit this price is PER
+    typical = {}
+    for pid, ups in unit_prices.items():
+        typical[pid] = (sum(ups) / len(ups)).quantize(Decimal("0.0001"))
+    return typical, last_unit, last_price, price_unit
 
 
 @bp.get("/dashboard")
@@ -20,7 +52,7 @@ def dashboard():
     lots = _active(gid)
     buckets = {"fresh": 0, "expiring": 0, "expired": 0, "unknown": 0}
     by_category, by_location = {}, {}
-    total_value = 0.0
+    total_value = Decimal("0")
     open_pkgs = 0
     for s in lots:
         buckets[expiry_status(s.expiry_date)] += 1
@@ -30,7 +62,8 @@ def dashboard():
         by_category[cat] = by_category.get(cat, 0) + 1
         loc = s.location.name if s.location else "Unassigned"
         by_location[loc] = by_location.get(loc, 0) + 1
-        total_value += (s.cost or 0)
+        if s.cost is not None:
+            total_value += Decimal(str(s.cost))
     expiring = sorted(
         [s for s in lots if expiry_status(s.expiry_date) in ("expiring", "expired")],
         key=lambda s: (s.expiry_date or s.created_at),
@@ -40,12 +73,121 @@ def dashboard():
             "lots": len(lots),
             "products": db.session.query(Product).filter_by(group_id=gid).count(),
             "locations": db.session.query(Location).filter_by(group_id=gid).count(),
-            "value": round(total_value, 2),
+            "value": money_out(total_value.quantize(Decimal("0.01"))),
             "open": open_pkgs,
             **buckets,
         },
         "byCategory": by_category, "byLocation": by_location,
         "expiring": [stock_out(s) for s in expiring[:20]],
+    })
+
+
+@bp.get("/stock/insights")
+@login_required
+def spend_insights():
+    """Spend + value analytics for the household, all money in Decimal → float only
+    at the wire. Query: `months` (spend-over-time / category window, default 12).
+
+    Returns: value on hand (by category + total + expired-unused), spend by month
+    (from lot purchase dates), spend by category over the window, waste cost (loss-
+    outcome consumption events valued at each product's typical unit price, counted
+    only when the event's unit matches the priced unit; currently-expired on-hand
+    value is reported separately as valueOnHand.expiredUnused), and per-product price
+    history (with typical/last price for re-add prefill)."""
+    gid = current_group().id
+    months = max(1, min(int(request.args.get("months", 12) or 12), 36))
+    # DB datetimes are naive (SQLite/Postgres columns) — compare in naive UTC.
+    now = utcnow().replace(tzinfo=None)
+    window_start = (now - timedelta(days=months * 31)).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+
+    products = {p.id: p for p in db.session.query(Product).filter_by(group_id=gid).all()}
+
+    # ---- Value on hand (active lots) ----
+    active = _active(gid)
+    value_by_cat, total_value, expired_value = defaultdict(lambda: Decimal("0")), Decimal("0"), Decimal("0")
+    for s in active:
+        if s.cost is None:
+            continue
+        c = Decimal(str(s.cost))
+        cat = products[s.product_id].category if s.product_id in products else "other"
+        value_by_cat[cat] += c
+        total_value += c
+        if expiry_status(s.expiry_date) == "expired":
+            expired_value += c
+
+    # ---- Spend over time + by category (all priced lots, keyed by purchase date) ----
+    priced = (db.session.query(StockLot)
+              .filter(StockLot.group_id == gid, StockLot.cost.isnot(None)).all())
+    by_month, spend_by_cat = defaultdict(lambda: Decimal("0")), defaultdict(lambda: Decimal("0"))
+    for s in priced:
+        when = s.purchase_date or s.created_at
+        c = Decimal(str(s.cost))
+        mk = _month_key(when)
+        if mk:
+            by_month[mk] += c
+        if when and when >= window_start:
+            cat = products[s.product_id].category if s.product_id in products else "other"
+            spend_by_cat[cat] += c
+    # Dense last-N-months series (zero-filled), oldest → newest.
+    series, cur = [], now.replace(day=1)
+    for _ in range(months):
+        series.append({"month": _month_key(cur), "spend": money_out(by_month.get(_month_key(cur), Decimal("0")))})
+        cur = (cur.replace(day=1) - timedelta(days=1)).replace(day=1)
+    series.reverse()
+
+    # ---- Waste cost: loss-outcome consumption valued at the product's unit price ----
+    from ..services.units import canonical_unit
+    typical, last_unit, last_price, price_unit = _typical_unit_prices(gid)
+    waste_cost = Decimal("0")
+    events = (db.session.query(ConsumptionEvent)
+              .filter(ConsumptionEvent.group_id == gid,
+                      ConsumptionEvent.outcome.in_(tuple(LOSS_OUTCOMES))).all())
+    for ev in events:
+        up = typical.get(ev.product_id) or last_unit.get(ev.product_id)
+        # Only value the loss when the event's unit matches the unit the price is per —
+        # a per-count price times a gram quantity would be a meaningless number.
+        if (up is not None and ev.quantity
+                and canonical_unit(ev.unit) == price_unit.get(ev.product_id)):
+            waste_cost += up * Decimal(str(ev.quantity))
+
+    # ---- Per-product price history (only products with a priced lot) ----
+    hist = defaultdict(list)
+    for s in sorted(priced, key=lambda s: (s.purchase_date or s.created_at)):
+        when = s.purchase_date or s.created_at
+        unit = None
+        if s.quantity and s.quantity > 0:
+            unit = money_out((Decimal(str(s.cost)) / Decimal(str(s.quantity))).quantize(Decimal("0.0001")))
+        hist[s.product_id].append({"at": when.isoformat() if when else None,
+                                   "price": money_out(Decimal(str(s.cost))), "unitPrice": unit})
+    price_history = []
+    for pid, points in hist.items():
+        p = products.get(pid)
+        price_history.append({
+            "productId": pid, "name": p.name if p else "?",
+            "category": p.category if p else "other",
+            "points": points,
+            "lastPrice": money_out(last_price.get(pid)),
+            "typicalUnitPrice": money_out(typical.get(pid)),
+        })
+    price_history.sort(key=lambda h: len(h["points"]), reverse=True)
+
+    this_month = money_out(by_month.get(_month_key(now), Decimal("0")))
+    return jsonify({
+        "currency": get_currency(gid),
+        "valueOnHand": {
+            "total": money_out(total_value.quantize(Decimal("0.01"))),
+            "expiredUnused": money_out(expired_value.quantize(Decimal("0.01"))),
+            "byCategory": [{"category": c, "value": money_out(v.quantize(Decimal("0.01")))}
+                           for c, v in sorted(value_by_cat.items(), key=lambda kv: kv[1], reverse=True)],
+        },
+        "spendThisMonth": this_month,
+        "spendByMonth": series,
+        "windowMonths": months,
+        "spendByCategory": [{"category": c, "spend": money_out(v.quantize(Decimal("0.01")))}
+                            for c, v in sorted(spend_by_cat.items(), key=lambda kv: kv[1], reverse=True)],
+        "wasteCost": money_out(waste_cost.quantize(Decimal("0.01"))),
+        "priceHistory": price_history[:40],
     })
 
 

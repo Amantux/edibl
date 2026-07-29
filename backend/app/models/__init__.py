@@ -8,8 +8,9 @@ import hashlib
 import secrets
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal
 
-from sqlalchemy import (String, Text, Float, Boolean, DateTime, ForeignKey, JSON,
+from sqlalchemy import (String, Text, Float, Numeric, Boolean, DateTime, ForeignKey, JSON,
                         Integer, Index, UniqueConstraint, text)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -329,7 +330,7 @@ class AcquisitionLot(IDMixin, TimestampMixin, db.Model):
     receipt_ref: Mapped[str] = mapped_column(String(128), default="")
     original_quantity: Mapped[float] = mapped_column(Float, nullable=True)
     unit: Mapped[str] = mapped_column(String(32), default="count")
-    cost: Mapped[float] = mapped_column(Float, nullable=True)          # money-as-float; Numeric TODO
+    cost: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)  # Decimal, never float
     currency: Mapped[str] = mapped_column(String(8), default="")
     lot_code: Mapped[str] = mapped_column(String(64), default="")
     provenance: Mapped[str] = mapped_column(String(64), default="manual")
@@ -373,7 +374,10 @@ class StockLot(IDMixin, TimestampMixin, db.Model):
     # can explain it honestly. EXPIRY_BASES: use_by/best_by/user/estimated/frozen/thawed.
     expiry_basis: Mapped[str] = mapped_column(String(16), default="")
     expiry_confidence: Mapped[float] = mapped_column(Float, nullable=True)
-    cost: Mapped[float] = mapped_column(Float, nullable=True)
+    # What was paid for this lot (Decimal, never float — see delta_value precedent).
+    # 0007 → 0008 converted the legacy Float. `currency` mirrors the household default.
+    cost: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    currency: Mapped[str] = mapped_column(String(8), default="")
     source: Mapped[str] = mapped_column(String(64), default="")  # store/butcher/farm
     lot_code: Mapped[str] = mapped_column(String(64), default="")
     finished: Mapped[bool] = mapped_column(Boolean, default=False)  # fully consumed

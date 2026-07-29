@@ -172,3 +172,11 @@ def _categorize_job(job: Job) -> dict:
 def _cluster_job(job: Job) -> dict:
     from .tooling import run_cluster
     return run_cluster(job)
+
+
+@register("reprocess")
+def _reprocess_job(job: Job) -> dict:
+    """Normalize existing inventory to the current ingestion logic (re-classify
+    stuck 'other' items, assign families, recompute estimated expiries)."""
+    from .reprocess import run_reprocess
+    return run_reprocess(job)

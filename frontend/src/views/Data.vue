@@ -220,8 +220,19 @@ function organizeBody() {
   if (organizeForm.value.model.trim()) b.model = organizeForm.value.model.trim()
   return b
 }
-onMounted(() => { resumeCategorize(); resumeCluster() })
-onUnmounted(() => { stopCategorize(); stopCluster() })
+// Update existing data: reprocess items added before the ingestion fixes
+// (re-classify stuck "other" items, assign families, recompute estimated expiries).
+const {
+  job: reproJob, active: reproActive,
+  start: startReprocess, resume: resumeReprocess, stop: stopReprocess,
+} = useJobRunner('reprocess', {
+  onDone: (j) => j.status === 'error'
+    ? ui.error(j.error || 'Update failed.')
+    : ui.success(`Updated existing data — ${j.result?.reclassified ?? 0} re-categorized · `
+        + `${j.result?.familyAssigned ?? 0} grouped · ${j.result?.expiryUpdated ?? 0} expiries fixed`),
+})
+onMounted(() => { resumeCategorize(); resumeCluster(); resumeReprocess() })
+onUnmounted(() => { stopCategorize(); stopCluster(); stopReprocess() })
 
 onMounted(() => { loadSettings(); loadMyMeal(); resumeEnrich() })
 async function loadSettings() {
@@ -440,6 +451,18 @@ async function resetSettings() {
       </button>
       <router-link to="/review" class="muted" style="font-size:.9rem">Review suggestions →</router-link>
     </div>
+  </div>
+
+  <div class="card">
+    <h2>Update existing data</h2>
+    <p class="muted" style="margin-top:0">Reprocess items you added earlier with the current
+      logic — re-classify anything stuck in “other”, group them into families, and fix estimated
+      expiries. Categories and dates you set yourself are never changed. Safe to run again.</p>
+    <button class="secondary" :disabled="reproActive" @click="startReprocess()">
+      {{ reproActive ? `Updating… ${reproJob.done}/${reproJob.total || '…'}` : 'Update existing data' }}
+    </button>
+    <progress v-if="reproActive" :value="reproJob.done" :max="reproJob.total || 1"
+              style="width:100%;max-width:520px;margin-top:8px"></progress>
   </div>
 </template>
 

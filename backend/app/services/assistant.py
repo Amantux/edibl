@@ -38,7 +38,8 @@ SYSTEM_PROMPT = (
     "You are Edibl, a concise, friendly kitchen-inventory assistant. You know what "
     "food the household actually has on hand, where it is, and how fresh it is. Use "
     "the provided tools to look things up and to make changes (adding stock, "
-    "recording what was eaten or thrown out, and editing the shopping list). Prefer "
+    "recording what was eaten or thrown out, editing the shopping list, moving items "
+    "between locations, and grouping products into display families). Prefer "
     "calling a tool over guessing. When you record that food went bad, be gentle and "
     "offer a practical tip. Keep replies short and to the point."
 )
@@ -354,6 +355,38 @@ def h_food_insights(gid, name=""):
                      for r in rows)
 
 
+def h_group_products(gid, family, products=None):
+    """Put several products under one display family (e.g. whole + oat milk → 'Milk').
+    Same effect as accepting a cluster suggestion; reversible."""
+    fam = (family or "").strip()
+    names = products if isinstance(products, list) else ([products] if products else [])
+    if not fam or not names:
+        return "Tell me a family name and which products to group."
+    changes, grouped, missing = [], [], []
+    for raw in names:
+        nm = str(raw or "").strip()
+        if not nm:
+            continue
+        p = (db.session.query(Product)
+             .filter(Product.group_id == gid, Product.name.ilike(f"%{nm}%"))
+             .order_by(Product.name.asc()).first())
+        if not p:
+            missing.append(nm)
+            continue
+        if (p.family or "") != fam:
+            changes.append({"productId": p.id, "prevFamily": p.family or ""})
+            p.family = fam
+        grouped.append(p.name)
+    if not grouped:
+        return f"Couldn't find any of those to group: {', '.join(missing)}."
+    db.session.commit()
+    msg = f"Grouped {len(grouped)} product{'s' if len(grouped) != 1 else ''} under '{fam}': " \
+          + ", ".join(grouped)
+    if missing:
+        msg += f" (couldn't find: {', '.join(missing)})"
+    return msg + ".", {"op": "restore_families", "changes": changes}
+
+
 # name -> (handler, JSON-schema parameters, description)
 TOOLS = {
     "do_i_have": (h_do_i_have,
@@ -463,13 +496,22 @@ TOOLS = {
                       {"type": "object", "properties": {
                           "name": {"type": "string"}}},
                       "Lifecycle insight: what you waste + per-item suggestions."),
+    "group_products": (h_group_products,
+                       {"type": "object", "properties": {
+                           "family": {"type": "string",
+                                      "description": "display group name, e.g. Milk"},
+                           "products": {"type": "array", "items": {"type": "string"},
+                                        "description": "product names to put in this group"}},
+                        "required": ["family", "products"]},
+                       "Group several products under one display family (e.g. put whole + "
+                       "oat milk together under 'Milk'). Reversible."),
 }
 
 
 # Tools that change data (surfaced in the chat UI with an Undo control).
 _MUTATING = {"add_stock", "update_stock", "delete_stock", "record_consumption",
              "open_stock", "adjust_stock", "move_stock", "split_stock",
-             "freeze_stock", "thaw_stock", "add_to_shopping_list"}
+             "freeze_stock", "thaw_stock", "add_to_shopping_list", "group_products"}
 _READONLY_LABELS = {
     "do_i_have": "Checked stock", "whats_in_stock": "Listed stock",
     "expiring_soon": "Checked what's expiring", "grouped_stock": "Grouped stock",
@@ -783,6 +825,13 @@ def apply_undo(gid, undo):
             db.session.delete(ev)
         db.session.commit()
         return "Undone — put it back and removed the consumption record."
+    if op == "restore_families":  # undo group_products
+        for ch in (undo.get("changes") or []):
+            p = _owned(Product, ch.get("productId"), gid)
+            if p is not None:
+                p.family = ch.get("prevFamily", "") or ""
+        db.session.commit()
+        return "Undone — restored the previous grouping."
     if op == "delete_shopping":  # undo add_to_shopping_list
         i = _owned(ShoppingItem, undo.get("itemId"), gid)
         if i:

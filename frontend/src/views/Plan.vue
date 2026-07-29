@@ -146,10 +146,10 @@ async function remove(id) {
           <div class="covbar" :title="`${Math.round((r.coverage||0)*100)}% of ingredients on hand`">
             <span class="cov" :style="{ width: Math.round((r.coverage || 0) * 100) + '%' }"></span></div>
           <div v-if="r.missing && r.missing.length" class="muted sm missing">
-            missing: <span v-for="(m, i) in r.missing" :key="i" class="chip">{{ m.name || m }}</span></div>
+            missing: <span v-for="(m, i) in r.missing" :key="i" class="chip warn">{{ m.name || m }}</span></div>
         </div>
         <div class="cookact">
-          <button class="sm" :disabled="cookingId === r.recipeId" @click="cookRecipe(r)">🍳 Cook it</button>
+          <button class="tonal sm" :disabled="cookingId === r.recipeId" @click="cookRecipe(r)">🍳 Cook it</button>
           <button v-if="r.missingCount" class="secondary sm" :disabled="cookingId === r.recipeId"
             @click="shopRecipe(r)">🛒 Shop missing</button>
         </div>
@@ -169,7 +169,7 @@ async function remove(id) {
             uses: <span v-for="(u, i) in r.uses" :key="i" class="chip">{{ u.name || u }}</span></div>
         </div>
         <div class="cookact">
-          <button class="sm" :disabled="cookingId === r.recipeId" @click="cookRecipe(r)">🍳 Cook it</button>
+          <button class="tonal sm" :disabled="cookingId === r.recipeId" @click="cookRecipe(r)">🍳 Cook it</button>
         </div>
       </div>
     </div>
@@ -211,6 +211,7 @@ async function remove(id) {
 .cookrow { display: flex; align-items: flex-start; gap: 12px; padding: 10px 0; border-top: 1px solid var(--border); }
 .cookrow:first-child { border-top: none; }
 .cookmain { flex: 1; min-width: 0; }
+.cookmain strong { margin-right: 8px; }
 .cookact { display: flex; gap: 6px; flex: none; flex-wrap: wrap; justify-content: flex-end; }
 .missing { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px; align-items: baseline; }
 .covbar { height: 5px; background: var(--accent-soft); border-radius: 999px; margin-top: 6px; overflow: hidden; max-width: 240px; }

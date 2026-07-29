@@ -485,7 +485,7 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
     <input class="oi" v-model="omniQuery" placeholder="Search stock, or type a question / “add 2 L milk”…" />
     <button v-if="omniQuery" type="button" class="ghost sm" @click="omniQuery=''" aria-label="Clear">✕</button>
     <button type="button" class="secondary sm" @click="openAdd">＋ Add</button>
-    <button type="submit" class="sm">Ask</button>
+    <button type="submit" class="tonal sm">Ask</button>
   </form>
 
   <!-- Smart lists: the answers you actually want -->
@@ -869,8 +869,8 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
 /* ★ staple toggle — quiet by default, accent when active */
 .star { background: transparent; color: var(--muted); border: none; padding: 0 4px;
   font-size: 1rem; line-height: 1; cursor: pointer; vertical-align: baseline; }
-.star:hover { background: transparent; color: var(--accent); }
-.star.on { color: var(--accent); }
+.star:hover { background: transparent; color: var(--star); }
+.star.on { color: var(--star); }
 /* money chip — neutral, tabular, so it doesn't compete with the accent chips */
 .chip.val { background: var(--surface-2, rgba(127,127,127,.12)); color: var(--muted);
   font-variant-numeric: tabular-nums; }

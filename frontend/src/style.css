@@ -1,16 +1,30 @@
+/* Fraunces — the display face (self-hosted; no CDN under HA ingress + CSP). Carries
+   the brand on page titles + KPI numbers only; body stays the workhorse sans. */
+@font-face {
+  font-family: "Fraunces"; font-style: normal; font-weight: 340 640;
+  font-display: swap; src: url(./assets/fraunces-var.woff2) format("woff2");
+}
 :root {
   --accent: #2f9e44; --accent-hover: #268138; --accent-soft: rgba(47,158,68,0.12);
-  --bg: #f6f8f4; --surface: #fff; --surface-2: #f0f4ee; --border: #e2e8dd;
-  --text: #1b2a1f; --muted: #6b7a6e; --danger: #dc2626; --warning: #d97706; --success: #16a34a;
-  --radius: 14px; --radius-sm: 9px; --shadow: 0 1px 2px rgba(20,40,25,.06), 0 6px 20px rgba(20,40,25,.06);
+  /* Warm stone neutrals — a "fresh kitchen" ground, so the green accent stays scarce. */
+  --bg: #f7f5ef; --surface: #fffefb; --surface-2: #f0ede4; --border: #e6e1d4;
+  --text: #23201a; --muted: #77726a; --danger: #dc2626; --warning: #c2740a; --success: #16a34a;
+  --star: #dda520;                         /* staple ★ — a warm gold, NOT the green accent */
+  --warn-soft: rgba(194,116,10,.13);       /* tint behind warning chips (waste / missing) */
+  --chart: #b3a892;                         /* neutral data fill — spend isn't good/bad, so not green */
+  --display: "Fraunces", Georgia, "Times New Roman", serif;
+  --radius: 14px; --radius-sm: 9px; --shadow: 0 1px 2px rgba(40,30,15,.05), 0 6px 20px rgba(40,30,15,.06);
   /* Aliases so component-scoped styles resolve to the real tokens (were falling
      back to hardcoded hex). */
   --primary: var(--accent); --primary-hover: var(--accent-hover); --surface-raised: var(--surface-2);
-  --popover-shadow: 0 4px 12px rgba(20,40,25,.10), 0 12px 40px rgba(20,40,25,.14);
+  --popover-shadow: 0 4px 12px rgba(40,30,15,.10), 0 12px 40px rgba(40,30,15,.14);
 }
 @media (prefers-color-scheme: dark) {
-  :root { --bg:#101512; --surface:#18201a; --surface-2:#141a15; --border:#28332a;
-    --text:#e6efe8; --muted:#9fb0a3; --accent-soft: rgba(47,158,68,.18); }
+  :root { --bg:#14120e; --surface:#1c1a15; --surface-2:#211e17; --border:#3a352b;
+    --text:#ece7db; --muted:#a49d8f; --accent-soft: rgba(47,158,68,.18); --warn-soft: rgba(217,140,40,.16);
+    --chart:#6b6555; }
+  /* Tonal action needs more presence on near-black so it doesn't read dark-on-dark. */
+  button.tonal { background: rgba(47,158,68,.22); color:#5cc47f; }
 }
 * { box-sizing: border-box; }
 body { margin:0; font-family: "Inter", system-ui, sans-serif; background:var(--bg); color:var(--text); font-size:14.5px; line-height:1.5; }
@@ -26,7 +40,8 @@ textarea:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--acce
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 a { color: var(--accent); text-decoration: none; }
-h1 { font-size:1.5rem; margin:0; letter-spacing:-.01em; } h2 { font-size:1.05rem; margin:0 0 12px; } h3 { font-size:.95rem; margin:0; }
+h1 { font-family:var(--display); font-weight:600; font-size:1.7rem; margin:0; letter-spacing:-.005em; }
+h2 { font-size:1.05rem; margin:0 0 12px; } h3 { font-size:.95rem; margin:0; }
 .app-shell { display:flex; min-height:100vh; }
 .sidebar { width:230px; flex-shrink:0; background:var(--surface); border-right:1px solid var(--border); padding:16px 12px; display:flex; flex-direction:column; gap:3px; position:sticky; top:0; height:100vh; }
 .brand { display:flex; align-items:center; gap:9px; font-weight:800; font-size:1.2rem; padding:6px 10px 18px; letter-spacing:-.02em; }
@@ -50,6 +65,10 @@ button:hover { background:var(--accent-hover); } button:disabled { opacity:.5; c
 button.secondary { background:var(--surface); color:var(--text); border:1px solid var(--border); }
 button.secondary:hover { background:var(--surface-2); }
 button.ghost { background:transparent; color:var(--text); } button.danger { background:var(--danger); }
+/* Tonal: a soft-green action for repeated row actions (e.g. per-recipe "Cook it"),
+   so the ONE solid-green primary per view keeps its emphasis. */
+button.tonal { background:var(--accent-soft); color:var(--accent); }
+button.tonal:hover { background:var(--accent-soft); filter:brightness(.96); }
 button.sm { padding:5px 10px; font-size:.82rem; }
 button.linkbtn { background:transparent; color:var(--accent); border:none; padding:0; font-weight:600; cursor:pointer; }
 button.linkbtn:hover { background:transparent; text-decoration:underline; }
@@ -60,13 +79,22 @@ input, select, textarea { width:100%; padding:9px 11px; border:1px solid var(--b
 label.field { display:block; margin-bottom:12px; } label.field > span { display:block; font-size:.8rem; font-weight:600; color:var(--muted); margin-bottom:5px; }
 .card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:18px; box-shadow:var(--shadow); margin-bottom:16px; }
 .card-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:14px; }
+/* A fixed 2-up pair (parallel cards) that collapses to one column on mobile so
+   values inside never clip. */
+.two-col { grid-template-columns:repeat(2,minmax(0,1fr)); }
+@media (max-width:720px){ .two-col { grid-template-columns:1fr; } }
 .stat-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:12px; }
 .stat { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:16px; }
-.stat .value { font-size:1.7rem; font-weight:750; letter-spacing:-.02em; } .stat .label { color:var(--muted); font-size:.82rem; }
+.stat .value { font-family:var(--display); font-size:1.9rem; font-weight:560; letter-spacing:-.01em; font-variant-numeric:tabular-nums; }
+.stat .label { color:var(--muted); font-size:.82rem; }
 table { width:100%; border-collapse:collapse; } th,td { text-align:left; padding:10px 14px; border-bottom:1px solid var(--border); }
 th { font-size:.72rem; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
 tbody tr.clickable { cursor:pointer; } tbody tr.clickable:hover td { background:var(--accent-soft); }
-.chip { display:inline-flex; align-items:center; gap:5px; padding:2px 10px; border-radius:999px; font-size:.72rem; font-weight:600; background:var(--accent-soft); color:var(--accent); }
+/* Chips are NEUTRAL by default (category/meta labels) so the green accent stays
+   scarce; opt into semantic tints only where the meaning is real. */
+.chip { display:inline-flex; align-items:center; gap:5px; padding:2px 10px; border-radius:999px; font-size:.72rem; font-weight:600; background:var(--surface-2); color:var(--muted); }
+.chip.warn { background:var(--warn-soft); color:var(--warning); }        /* waste / missing — a loss */
+.chip.ok { background:var(--accent-soft); color:var(--accent); }         /* genuine positive, used sparingly */
 .badge { display:inline-flex; padding:2px 9px; border-radius:6px; font-size:.72rem; font-weight:600; background:var(--surface-2); color:var(--muted); border:1px solid var(--border); white-space:nowrap; }
 .badge.fresh { color:var(--success); } .badge.expiring { color:var(--warning); border-color:var(--warning); }
 .badge.expired { color:var(--danger); border-color:var(--danger); } .badge.unknown { color:var(--muted); }
@@ -96,7 +124,7 @@ pre.export { background:var(--surface-2); border:1px solid var(--border); border
 .smart:hover { background:var(--surface); transform:translateY(-2px); box-shadow:var(--shadow); border-color:var(--accent); }
 .smart.active, .smart.active:hover { background:var(--accent-soft); border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
 .smart .st-top { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
-.smart .st-n { font-size:1.5rem; font-weight:750; letter-spacing:-.02em; }
+.smart .st-n { font-family:var(--display); font-size:1.7rem; font-weight:560; letter-spacing:-.01em; font-variant-numeric:tabular-nums; }
 .smart .st-title { font-size:.82rem; font-weight:600; color:var(--muted); }
 .smart .st-peek { font-size:.8rem; color:var(--muted); line-height:1.45; }
 .smart .st-peek b { color:var(--text); font-weight:600; }
@@ -137,8 +165,10 @@ pre.export { background:var(--surface-2); border:1px solid var(--border); border
     transform:translateX(-100%); transition:transform .2s ease; box-shadow:var(--shadow); }
   .sidebar.open { transform:translateX(0); }
   .nav-backdrop { display:block; position:fixed; inset:0; background:rgba(15,23,20,.45); z-index:55; }
-  .content { padding:16px 14px; }
-  h1 { font-size:1.3rem; }
+  .content { padding:16px 14px 88px; }   /* bottom clearance so the chat FAB never overlaps content/actions */
+  h1 { font-size:1.45rem; }
+  /* Dense grouped/lot tables scroll horizontally rather than crushing columns off-screen. */
+  .tablewrap table { min-width:560px; }
   .page-head { gap:10px; flex-wrap:wrap; }
   /* Wide tables scroll horizontally instead of overflowing the page */
   .card, .tablewrap { overflow-x:auto; }

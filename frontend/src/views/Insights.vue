@@ -124,7 +124,7 @@ function spark(points) {
         <li v-for="n in wasteNudges" :key="n.productId">
           <div class="nudge-head">
             <span class="nudge-name">{{ n.name }}</span>
-            <span class="chip">wasted {{ n.count }}×</span>
+            <span class="chip warn">wasted {{ n.count }}×</span>
             <span v-if="n.wastedValue" class="tnum nudge-val">{{ fmt(n.wastedValue) }}</span>
           </div>
           <div class="muted nudge-sug">{{ n.suggestion }}</div>
@@ -160,7 +160,7 @@ function spark(points) {
       </div>
     </div>
 
-    <div class="card-grid" style="margin-top:16px">
+    <div class="card-grid two-col" style="margin-top:16px">
       <div class="card">
         <h3>Spend by category</h3>
         <p class="muted" style="font-size:.85rem;margin-top:-4px">Over the last {{ data.windowMonths }} months.</p>
@@ -193,12 +193,12 @@ function spark(points) {
           <th style="width:130px">Trend</th></tr></thead>
         <tbody>
           <tr v-for="h in history" :key="h.productId">
-            <td>{{ h.name }} <span class="muted" style="font-size:.8rem">· {{ h.category }}</span></td>
+            <td>{{ h.name }} <span v-if="h.category" class="muted" style="font-size:.8rem">· {{ h.category }}</span></td>
             <td class="num tnum">{{ fmtUnit(h.typicalUnitPrice) }}</td>
             <td class="num tnum">{{ fmt(h.lastPrice) }}</td>
             <td>
               <svg v-if="spark(h.points)" width="120" height="26" class="spark">
-                <polyline :points="spark(h.points)" fill="none" stroke="var(--accent)" stroke-width="1.5" />
+                <polyline :points="spark(h.points)" fill="none" stroke="var(--muted)" stroke-width="1.5" />
               </svg>
               <span v-else class="muted" style="font-size:.8rem">one buy</span>
             </td>
@@ -220,13 +220,13 @@ h3 { margin:0 0 6px; }
 .spendbars { display:flex; align-items:flex-end; gap:6px; height:150px; margin-top:8px; overflow-x:auto; }
 .spendbar { display:flex; flex-direction:column; align-items:center; justify-content:flex-end;
   flex:1 0 26px; min-width:26px; height:100%; }
-.spendbar-fill { width:70%; max-width:34px; background:var(--accent); border-radius:4px 4px 0 0;
+.spendbar-fill { width:70%; max-width:34px; background:var(--chart); border-radius:4px 4px 0 0;
   transition:height .2s; }
 .spendbar-x { font-size:.65rem; color:var(--muted); margin-top:4px; white-space:nowrap; }
 .hbar-row { display:grid; grid-template-columns:110px 1fr auto; align-items:center; gap:10px; padding:5px 0; }
 .hbar-label { font-size:.85rem; text-transform:capitalize; }
-.hbar-track { background:var(--accent-soft); border-radius:6px; height:12px; overflow:hidden; }
-.hbar-fill { height:100%; background:var(--accent); border-radius:6px; }
+.hbar-track { background:var(--surface-2); border-radius:6px; height:12px; overflow:hidden; }
+.hbar-fill { height:100%; background:var(--chart); border-radius:6px; }
 .hbar-val { font-variant-numeric:tabular-nums; font-size:.85rem; min-width:64px; text-align:right; }
 .tnum { font-variant-numeric:tabular-nums; }
 .nutri-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:10px; margin-top:10px; }

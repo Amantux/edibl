@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from flask import Blueprint, request, jsonify, abort
+from sqlalchemy.exc import IntegrityError
 
 from ..extensions import db
 from ..models import (StockLot, Product, Location, ConsumptionEvent, InventoryEvent,
@@ -70,6 +71,14 @@ def _resolve_product(data):
         p = db.session.get(Product, pid)
         if p and p.group_id == gid:
             return p
+    barcode = (data.get("barcode") or "").strip()
+    # A scanned barcode is the strongest identity: reuse the product that already
+    # carries it, so a re-scan never creates a duplicate (even if its name differs
+    # from what the online lookup returned this time).
+    if barcode:
+        p = db.session.query(Product).filter_by(group_id=gid, barcode=barcode).first()
+        if p:
+            return p
     name = (data.get("productName") or data.get("name") or "").strip()
     if not name:
         return None
@@ -79,21 +88,45 @@ def _resolve_product(data):
         # ("Wegmans Teriyaki Marinade" → "Teriyaki Marinade"), so variants group.
         from ..services.families import generic_family
         family = generic_family(name)
+    brand = (data.get("brand") or "").strip()
     p = db.session.query(Product).filter_by(group_id=gid, name=name).first()
-    if not p:
+    created = p is None
+    if created:
         from ..models import ITEM_TYPES, TRACKING_MODES
         it = (data.get("itemType") or "food").strip().lower()
         tm = (data.get("trackingMode") or "").strip().lower()
-        p = Product(name=name, category=(data.get("category") or "other").strip(),
-                    family=family, barcode=data.get("barcode") or "",
+        p = Product(name=name, brand=brand,
+                    category=(data.get("category") or "other").strip(),
+                    family=family, barcode=barcode,
                     default_unit=canonical_unit(data.get("unit")),
                     item_type=it if it in ITEM_TYPES else "food",
                     tracking_mode=tm if tm in TRACKING_MODES else "", group_id=gid)
         db.session.add(p)
+    else:
+        # Matched by name — back-fill facts we now know but didn't before, so the
+        # next scan recognizes it and the brand isn't lost.
+        if family and not p.family:
+            p.family = family
+        if barcode and not p.barcode:
+            p.barcode = barcode
+        if brand and not p.brand:
+            p.brand = brand
+    # Flush under a SAVEPOINT: a concurrent add of the same (group, barcode) can trip
+    # the partial unique index (uq_products_group_barcode). On that race, reuse the
+    # product that won the barcode rather than surfacing a 500.
+    sp = db.session.begin_nested()
+    try:
         db.session.flush()
-    elif family and not p.family:
-        # Let a new lot assign the grouping if the product doesn't have one yet.
-        p.family = family
+        sp.commit()
+    except IntegrityError:
+        sp.rollback()
+        if created:
+            db.session.expunge(p)
+        if barcode:
+            winner = db.session.query(Product).filter_by(group_id=gid, barcode=barcode).first()
+            if winner is not None:
+                return winner
+        raise
     return p
 
 
@@ -163,7 +196,16 @@ def _build_lot(data, product, gid):
     # A presence/unknown lot carries NO meaningful number: store 0 as an internal
     # placeholder (never the misleading default 1); quantity_kind is the source of
     # truth and the serializer surfaces null, not a fake amount.
-    qty = float(data.get("quantity") or 1) if kind in ("exact", "estimated", "approximate") else 0.0
+    if kind in ("exact", "estimated", "approximate"):
+        raw_q = data.get("quantity")
+        # Preserve an explicit 0 — only default to 1 when the amount is truly absent
+        # (`float(x or 1)` wrongly turned a real 0 into 1).
+        try:
+            qty = float(raw_q) if raw_q not in (None, "") else 1.0
+        except (TypeError, ValueError):
+            qty = 1.0
+    else:
+        qty = 0.0
     return StockLot(
         product_id=product.id, location_id=data.get("locationId") or None,
         quantity=qty, unit=canonical_unit(data.get("unit") or product.default_unit),
@@ -695,25 +737,33 @@ def delete(lot_id):
     return "", 204
 
 
-def _bulk_create(shared, items, gid):
+def _bulk_create(shared, items, gid, batch_key=None):
     """Create many lots at once. `shared` supplies defaults (storageMethod,
     category, locationId, source, purchaseDate, attrs) that each item can override.
-    Used by the generic bulk-add flow and the (optional) butchering preset."""
+    Used by the generic bulk-add flow and the (optional) butchering preset.
+
+    Each lot is routed through ``inventory.add_lot`` so it is logged as an event +
+    acquisition (same as a single add) and is idempotent: when ``batch_key`` is
+    given, a re-submitted batch (same key) replays instead of duplicating."""
     location_id = shared.get("locationId") or None
     if not _valid_location(gid, location_id):
         return None, (jsonify({"error": "unknown location"}), 422)
-    created = []
+    # Validate every location up front so a bad one doesn't leave a half-added batch
+    # (add_lot commits per item, so we can't roll the whole thing back afterwards).
+    prepared = []
     for it in items:
         name = (it.get("name") or it.get("productName") or "").strip()
         if not name:
             continue
         eff_loc = it.get("locationId") or location_id
         if not _valid_location(gid, eff_loc):
-            db.session.rollback()
             return None, (jsonify({"error": "unknown location"}), 422)
+        prepared.append((it, name, eff_loc))
+    created = []
+    for i, (it, name, eff_loc) in enumerate(prepared):
         category = it.get("category") or shared.get("category") or "other"
         product = _resolve_product({"productName": name, "category": category,
-                                    "barcode": it.get("barcode")})
+                                    "barcode": it.get("barcode"), "brand": it.get("brand")})
         merged = {
             "productName": name,
             "quantity": it.get("quantity", 1),
@@ -730,9 +780,11 @@ def _bulk_create(shared, items, gid):
             "attrs": {**(shared.get("attrs") or {}), **(it.get("attrs") or {})},
         }
         lot = _build_lot(merged, product, gid)
-        db.session.add(lot)
-        created.append(lot)
-    db.session.commit()
+        res = inventory.add_lot(
+            lot, actor_user_id=current_user().id, source_app="bulk",
+            provenance=merged.get("source") or "bulk", confidence=it.get("confidence"),
+            idempotency_key=(f"{batch_key}:{i}" if batch_key else None))
+        created.append(res.lot)
     return created, None
 
 
@@ -834,7 +886,15 @@ def _ingest_detection(d, over, gid):
         payload.pop("category")
     if payload.get("storageMethod") is None:
         payload.pop("storageMethod")
-    product = _resolve_product(payload)
+    # Reuse the product this detection was matched to (a ≥0.8 family match recorded
+    # at /stock/detect) — otherwise confirming a re-detection creates a duplicate.
+    product = None
+    if d.matched_product_id and not payload.get("productId"):
+        m = db.session.get(Product, d.matched_product_id)
+        if m and m.group_id == gid:
+            product = m
+    if product is None:
+        product = _resolve_product(payload)
     if not product:
         raise ValueError("could not resolve product")
     if not _valid_location(gid, payload.get("locationId")):
@@ -918,7 +978,8 @@ def bulk_add():
         return jsonify({"error": "items[] required"}), 422
     if len(items) > 500:
         return jsonify({"error": "too many items (max 500)"}), 422
-    created, err = _bulk_create(data.get("shared") or {}, items, current_group().id)
+    created, err = _bulk_create(data.get("shared") or {}, items, current_group().id,
+                                batch_key=data.get("idempotencyKey"))
     if err:
         return err
     return jsonify({"created": len(created),
@@ -956,7 +1017,9 @@ def butcher_session():
         "category": c.get("category") or "meat",
         "attrs": {"cut": c.get("cut", (c.get("name") or "Cut")), "weightG": c.get("weightG")},
     } for c in cuts]
-    created, err = _bulk_create(shared, items, gid)
+    # The butcher session id is a natural idempotency key — re-submitting the same
+    # session won't duplicate the cuts.
+    created, err = _bulk_create(shared, items, gid, batch_key=session_id)
     if err:
         return err
     return jsonify({"session": session_id, "created": len(created),

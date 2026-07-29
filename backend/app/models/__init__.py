@@ -185,6 +185,14 @@ class FoodConcept(IDMixin, TimestampMixin, db.Model):
 
 class Product(IDMixin, TimestampMixin, db.Model):
     __tablename__ = "products"
+    __table_args__ = (
+        # One product per barcode within a household — dedupes scans. Partial:
+        # empty barcodes are unconstrained. Built by create_all (baseline 0001)
+        # and, for existing DBs, by migration 0007.
+        db.Index("uq_products_group_barcode", "group_id", "barcode", unique=True,
+                 sqlite_where=db.text("barcode != ''"),
+                 postgresql_where=db.text("barcode != ''")),
+    )
     name: Mapped[str] = mapped_column(String(255))
     brand: Mapped[str] = mapped_column(String(255), default="")
     category: Mapped[str] = mapped_column(String(64), default="other")

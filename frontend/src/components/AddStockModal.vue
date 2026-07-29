@@ -23,7 +23,7 @@ const nameInput = ref(null)
 const loaded = ref(false)
 
 function blankForm() {
-  return { productName: '', category: '', family: '', quantity: 1, unit: 'count',
+  return { productName: '', brand: '', category: '', family: '', quantity: 1, unit: 'count',
     storageMethod: 'refrigerated', freshness: '', locationId: '', source: '',
     barcode: '', bestBy: '', itemType: 'food' }
 }
@@ -128,7 +128,7 @@ function close() { stopScan(); emit('update:modelValue', false) }
 async function submitAdd(keepOpen) {
   if (!form.value.productName.trim()) return
   const body = { ...form.value }
-  for (const k of ['bestBy', 'locationId', 'barcode', 'freshness', 'family', 'source', 'category']) {
+  for (const k of ['bestBy', 'locationId', 'barcode', 'freshness', 'family', 'source', 'category', 'brand']) {
     if (!body[k]) delete body[k]
   }
   try {
@@ -163,9 +163,16 @@ async function lookupBarcode() {
     const hit = res.found ? res.product : res.suggestion
     if (hit) {
       form.value.productName = form.value.productName || hit.name || ''
-      if (hit.category) form.value.category = hit.category
+      if (hit.brand) form.value.brand = hit.brand
+      // Only trust a confident category; "other" (the web-search fallback default)
+      // must not block classification below — that's what caused scanned cans to
+      // land as other + refrigerated + a ~10-day expiry.
+      if (hit.category && hit.category !== 'other') form.value.category = hit.category
       if (hit.family) form.value.family = hit.family
       applyProductDefaults()
+      // Classify so a scanned item gets a real category / storage / unit (and a
+      // sane estimated expiry) instead of the blank-form defaults.
+      await classifyAndFill()
       // Surface confidence: a web-search guess is weaker than a product-DB / OFF hit.
       ui.info(res.found ? `Known: ${hit.name}`
         : hit.source === 'websearch' ? `Web guess “${hit.name}” — please verify.`
@@ -296,6 +303,8 @@ watch(() => props.modelValue, async (v) => {
 
       <template v-if="showMore">
         <div class="row">
+          <label class="field" style="flex:1"><span>Brand</span>
+            <input v-model="form.brand" placeholder="optional — kept from a scan" /></label>
           <label class="field" style="flex:1"><span>Category</span>
             <input v-model="form.category" list="dl-add-cats" placeholder="e.g. dairy" /></label>
           <label class="field" style="flex:1"><span>Group (shows together, e.g. Milk)</span>

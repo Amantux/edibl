@@ -58,6 +58,15 @@ const maxCat = computed(() => Math.max(1, ...byCategory.value.map((c) => c.spend
 const valueByCat = computed(() => data.value?.valueOnHand?.byCategory || [])
 const history = computed(() => data.value?.priceHistory || [])
 
+// Waste nudges + trend
+const wasteNudges = computed(() => data.value?.wasteNudges || [])
+const wasteTrend = computed(() => data.value?.wasteTrend?.months || [])
+const maxWaste = computed(() => Math.max(1, ...wasteTrend.value.map((p) => p.value || 0)))
+const wasteDir = computed(() => data.value?.wasteTrend?.direction || 'flat')
+const hasWaste = computed(() => wasteNudges.value.length > 0
+  || !!data.value?.wasteCost || wasteTrend.value.some((t) => t.value))
+const DIR_LABEL = { up: '↑ rising', down: '↓ falling', flat: '→ steady' }
+
 // A product's price points → an SVG polyline (normalized), for a mini trend.
 function spark(points) {
   const vals = points.map((p) => p.price).filter((v) => v != null)
@@ -96,6 +105,32 @@ function spark(points) {
       <div class="stat"><div class="value" :style="data.valueOnHand.expiredUnused ? 'color:var(--warning)' : ''">
           {{ fmt(data.valueOnHand.expiredUnused) }}</div>
         <div class="label">Expired, unused</div></div>
+    </div>
+
+    <div v-if="hasWaste" class="card">
+      <h3>Cut your waste
+        <span class="dir" :class="wasteDir" :title="`Waste is ${wasteDir} vs the prior period`">
+          {{ DIR_LABEL[wasteDir] }}</span></h3>
+      <p class="muted" style="font-size:.85rem;margin-top:-4px">
+        What you're losing to spoilage — and how to trim it.</p>
+      <div v-if="wasteTrend.length" class="spendbars" style="height:90px">
+        <div v-for="p in wasteTrend" :key="p.month" class="spendbar"
+             :title="`${monthLabel(p.month)}: ${fmt(p.value)}`">
+          <div class="spendbar-fill waste" :style="{ height: (4 + (p.value / maxWaste) * 66) + 'px' }"></div>
+          <div class="spendbar-x">{{ monthLabel(p.month) }}</div>
+        </div>
+      </div>
+      <ul v-if="wasteNudges.length" class="nudges">
+        <li v-for="n in wasteNudges" :key="n.productId">
+          <div class="nudge-head">
+            <span class="nudge-name">{{ n.name }}</span>
+            <span class="chip">wasted {{ n.count }}×</span>
+            <span v-if="n.wastedValue" class="tnum nudge-val">{{ fmt(n.wastedValue) }}</span>
+          </div>
+          <div class="muted nudge-sug">{{ n.suggestion }}</div>
+        </li>
+      </ul>
+      <div v-else class="muted" style="margin-top:8px">No repeat waste — nice.</div>
     </div>
 
     <div v-if="data.pantryNutrition" class="card">
@@ -201,5 +236,16 @@ h3 { margin:0 0 6px; }
 .nutri .nl { font-size:.72rem; color:var(--muted); text-transform:uppercase; letter-spacing:.03em; }
 .num { text-align:right; }
 .spark { display:block; }
+.spendbar-fill.waste { background:var(--warning); }
+.dir { font-size:.72rem; font-weight:500; margin-left:8px; color:var(--muted); vertical-align:middle; }
+.dir.up { color:var(--danger); }
+.dir.down { color:var(--success); }
+.nudges { list-style:none; margin:10px 0 0; padding:0; display:flex; flex-direction:column; gap:2px; }
+.nudges li { padding:8px 0; border-top:1px solid var(--border, rgba(127,127,127,.18)); }
+.nudges li:first-child { border-top:none; }
+.nudge-head { display:flex; align-items:center; gap:8px; }
+.nudge-name { font-weight:600; }
+.nudge-val { margin-left:auto; color:var(--danger); }
+.nudge-sug { font-size:.85rem; margin-top:2px; }
 .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }
 </style>

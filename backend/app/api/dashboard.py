@@ -45,6 +45,85 @@ def _typical_unit_prices(gid):
     return typical, last_unit, last_price, price_unit
 
 
+_WASTE_WINDOW_DAYS = 90     # repeat-waste nudges look back this far
+_WASTE_TREND_MONTHS = 6     # wasted-value trend length
+
+
+def _waste_analysis(gid, events, typical, last_unit, price_unit, products, now):
+    """Repeat-waste nudges (last 90d, per product) + a 6-month wasted-value trend.
+
+    Each loss event is valued EXACTLY like wasteCost — the product's typical unit
+    price, counted only when the event's unit matches the priced unit — so the nudge
+    figures and the headline wasteCost never disagree. An unvalued loss (no price /
+    unit mismatch) still counts toward the repeat-waste *count*, just not its value.
+    Returns (nudges, trend). `events` is the group's loss-outcome events.
+    """
+    from ..services.units import canonical_unit
+    currency = get_currency(gid)
+
+    def value_of(ev):
+        up = typical.get(ev.product_id) or last_unit.get(ev.product_id)
+        if (up is not None and ev.quantity
+                and canonical_unit(ev.unit) == price_unit.get(ev.product_id)):
+            return up * Decimal(str(ev.quantity))
+        return Decimal("0")
+
+    # ---- Repeat-waste nudges (last 90 days, grouped by product) ----
+    cutoff = now - timedelta(days=_WASTE_WINDOW_DAYS)
+    per = {}
+    for ev in events:
+        if not ev.at or ev.at < cutoff or not ev.product_id:
+            continue
+        d = per.setdefault(ev.product_id, {"count": 0, "value": Decimal("0"), "expired": 0})
+        d["count"] += 1
+        d["value"] += value_of(ev)
+        if ev.outcome == "expired":
+            d["expired"] += 1
+
+    nudges = []
+    for pid, d in per.items():
+        if d["count"] < 2:
+            continue  # a one-off isn't a pattern
+        p = products.get(pid)
+        name = p.name if p else "This item"
+        low = name[:1].lower() + name[1:] if name else "it"
+        if d["expired"] * 2 >= d["count"]:      # mostly expiry-driven
+            suggestion = f"{name} keeps expiring — freeze it or buy less at a time."
+        elif d["count"] >= 3:                    # frequent small losses
+            suggestion = f"Wasted {low} {d['count']}× lately — try a smaller pack or freeze sooner."
+        else:                                    # two losses — nudge toward planning
+            suggestion = f"Buy {low} to a plan so it gets used in time."
+        nudges.append({
+            "productId": pid, "name": name, "count": d["count"],
+            "wastedValue": money_out(d["value"].quantize(Decimal("0.01"))),
+            "currency": currency, "suggestion": suggestion,
+        })
+    nudges.sort(key=lambda n: ((n["wastedValue"] or 0), n["count"]), reverse=True)
+    nudges = nudges[:5]
+
+    # ---- Dense 6-month wasted-value trend (oldest → newest) ----
+    by_month = defaultdict(lambda: Decimal("0"))
+    for ev in events:
+        if ev.at:
+            by_month[_month_key(ev.at)] += value_of(ev)
+    trend, cur = [], now.replace(day=1)
+    for _ in range(_WASTE_TREND_MONTHS):
+        mk = _month_key(cur)
+        trend.append({"month": mk, "value": money_out(by_month.get(mk, Decimal("0")))})
+        cur = (cur.replace(day=1) - timedelta(days=1)).replace(day=1)
+    trend.reverse()
+    half = _WASTE_TREND_MONTHS // 2
+    prior = sum((t["value"] or 0) for t in trend[:half])
+    recent = sum((t["value"] or 0) for t in trend[half:])
+    if recent > prior * 1.05:
+        direction = "up"
+    elif recent < prior * 0.95:
+        direction = "down"
+    else:
+        direction = "flat"
+    return nudges, {"months": trend, "direction": direction}
+
+
 @bp.get("/dashboard")
 @login_required
 def dashboard():
@@ -214,6 +293,9 @@ def spend_insights():
         })
     price_history.sort(key=lambda h: len(h["points"]), reverse=True)
 
+    waste_nudges, waste_trend = _waste_analysis(
+        gid, events, typical, last_unit, price_unit, products, now)
+
     this_month = money_out(by_month.get(_month_key(now), Decimal("0")))
     return jsonify({
         "currency": get_currency(gid),
@@ -229,6 +311,8 @@ def spend_insights():
         "spendByCategory": [{"category": c, "spend": money_out(v.quantize(Decimal("0.01")))}
                             for c, v in sorted(spend_by_cat.items(), key=lambda kv: kv[1], reverse=True)],
         "wasteCost": money_out(waste_cost.quantize(Decimal("0.01"))),
+        "wasteNudges": waste_nudges,
+        "wasteTrend": waste_trend,
         "priceHistory": price_history[:40],
         "pantryNutrition": _pantry_nutrition(active, products),
     })

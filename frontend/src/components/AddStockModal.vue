@@ -18,7 +18,6 @@ const products = ref([])
 const suggest = ref({ categories: [], units: [], families: [], storageMethods: [] })
 const freshnessScales = ref({})
 const groups = ref([])
-const currencyCode = ref('')
 const showMore = ref(false)
 const nameInput = ref(null)
 const loaded = ref(false)
@@ -26,7 +25,7 @@ const loaded = ref(false)
 function blankForm() {
   return { productName: '', brand: '', category: '', family: '', quantity: 1, unit: 'count',
     storageMethod: 'refrigerated', freshness: '', locationId: '', source: '',
-    barcode: '', bestBy: '', price: '', itemType: 'food' }
+    barcode: '', bestBy: '', itemType: 'food' }
 }
 const form = ref(blankForm())
 
@@ -69,7 +68,6 @@ async function loadData() {
   products.value = prods.items || prods
   freshnessScales.value = meta.freshnessScales || {}
   groups.value = grp.groups || []
-  if (grp.currency) currencyCode.value = grp.currency
   suggest.value = (sug && sug.storageMethods?.length) ? sug : {
     categories: meta.categories || [], units: meta.units || [], families: [],
     storageMethods: meta.storageMethods || [] }
@@ -96,8 +94,6 @@ function applyProductDefaults() {
     if (!form.value.category) form.value.category = p.category || ''
     if (!form.value.family) form.value.family = p.family || ''
     if ((!form.value.unit || form.value.unit === 'count') && p.defaultUnit) form.value.unit = p.defaultUnit
-    // Prefill the last price paid for this product (user can override).
-    if (!form.value.price && p.lastPrice != null) form.value.price = p.lastPrice
   }
   if (!form.value.locationId && productLocationMode.value[key]) {
     form.value.locationId = productLocationMode.value[key]
@@ -132,7 +128,7 @@ function close() { stopScan(); emit('update:modelValue', false) }
 async function submitAdd(keepOpen) {
   if (!form.value.productName.trim()) return
   const body = { ...form.value }
-  for (const k of ['bestBy', 'locationId', 'barcode', 'freshness', 'family', 'source', 'category', 'brand', 'price']) {
+  for (const k of ['bestBy', 'locationId', 'barcode', 'freshness', 'family', 'source', 'category', 'brand']) {
     if (!body[k]) delete body[k]
   }
   try {
@@ -142,7 +138,7 @@ async function submitAdd(keepOpen) {
   emit('added')
   if (keepOpen) {
     Object.assign(form.value, { productName: '', quantity: 1, barcode: '',
-      bestBy: '', freshness: '', price: '', itemType: 'food' })
+      bestBy: '', freshness: '', itemType: 'food' })
     ui.success('Added — keep going.')
     api.get('/products').then((p) => { products.value = p.items || p })  // learn the new product
     await nextTick(); nameInput.value?.focus()
@@ -292,9 +288,6 @@ watch(() => props.modelValue, async (v) => {
           <input type="number" min="0" v-model.number="form.quantity" @keyup.enter="add" /></label>
         <label class="field" style="width:120px"><span>Unit</span>
           <input v-model="form.unit" list="dl-add-units" /></label>
-        <label class="field" style="width:110px"><span>Price {{ currencyCode ? `(${currencyCode})` : '' }}</span>
-          <input type="number" min="0" step="0.01" v-model="form.price" placeholder="paid"
-            @keyup.enter="add" /></label>
         <label class="field" style="flex:1"><span>Location</span>
           <select v-model="form.locationId"><option value="">Unassigned</option>
             <option v-for="l in locations" :key="l.id" :value="l.id">{{ l.name }}</option></select></label>

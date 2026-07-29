@@ -183,7 +183,7 @@ async function addToShopping(sug) {
 
 function blankBulk() {
   return { shared: { storageMethod: 'refrigerated', category: '', family: '', locationId: '', source: '' },
-    rows: [{ name: '', quantity: 1, unit: 'count', storageMethod: '', price: null, confidence: null }] }
+    rows: [{ name: '', quantity: 1, unit: 'count', storageMethod: '', confidence: null }] }
 }
 
 async function loadSuggest() {
@@ -300,7 +300,7 @@ async function refresh() { await loadSuggest(); await load() }
 // barcode lookup / scan
 
 // bulk
-function addBulkRow() { bulk.value.rows.push({ name: '', quantity: 1, unit: 'count', storageMethod: '', price: null, confidence: null }) }
+function addBulkRow() { bulk.value.rows.push({ name: '', quantity: 1, unit: 'count', storageMethod: '', confidence: null }) }
 // Classify a manually-entered bulk row — fill its category/unit/storage if blank.
 async function classifyBulkRow(row) {
   const name = (row.name || '').trim()
@@ -315,10 +315,8 @@ async function classifyBulkRow(row) {
 }
 function pasteBulk(text) {
   const rows = text.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
-    const [name, qty, unit, price] = l.split(',').map((x) => (x || '').trim())
-    const p = Number(String(price).replace(/[^0-9.]/g, ''))
-    return { name, quantity: Number(qty) || 1, unit: unit || 'count', storageMethod: '',
-      price: price && Number.isFinite(p) ? p : null }
+    const [name, qty, unit] = l.split(',').map((x) => (x || '').trim())
+    return { name, quantity: Number(qty) || 1, unit: unit || 'count', storageMethod: '' }
   })
   if (rows.length) bulk.value.rows = rows
 }
@@ -803,13 +801,12 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
         <div class="qrow-meas">
           <input type="number" v-model.number="r.quantity" placeholder="qty" class="qrow-qty" aria-label="Quantity" />
           <input v-model="r.unit" list="dl-units" placeholder="unit" class="qrow-unit" aria-label="Unit" />
-          <input type="number" min="0" step="0.01" v-model.number="r.price" placeholder="price" class="qrow-price" aria-label="Price paid" />
           <input v-model="r.storageMethod" list="dl-storage" placeholder="(default storage)" class="qrow-store" aria-label="Storage" />
         </div>
       </div>
       <button class="secondary sm" @click="addBulkRow">＋ Another row</button>
-      <details style="margin-top:8px"><summary class="muted sm">Or paste “name, qty, unit, price” lines</summary>
-        <textarea rows="4" style="width:100%;margin-top:6px" placeholder="Ribeye, 2, pack, 18.99&#10;Ground beef, 1, kg, 7.50" @change="(e)=>pasteBulk(e.target.value)"></textarea>
+      <details style="margin-top:8px"><summary class="muted sm">Or paste “name, qty, unit” lines</summary>
+        <textarea rows="4" style="width:100%;margin-top:6px" placeholder="Ribeye, 2, pack&#10;Ground beef, 1, kg" @change="(e)=>pasteBulk(e.target.value)"></textarea>
       </details>
       <div class="row" style="justify-content:flex-end;margin-top:14px">
         <button class="secondary" @click="showBulk=false">Cancel</button>
@@ -880,6 +877,5 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
 .qrow-meas { display: flex; gap: 8px; }
 .qrow-qty { width: 70px; flex: none; }
 .qrow-unit { width: 90px; flex: none; }
-.qrow-price { width: 80px; flex: none; }
 .qrow-store { flex: 1; min-width: 0; }
 </style>

@@ -87,6 +87,29 @@ def mymeal_delete(path):
     return _write("DELETE", url, token, path)
 
 
+def mymeal_suggest():
+    """Rank myMeal recipes by what's in Edibl stock. myMeal fetches Edibl's own stock
+    (via /have) and returns {suggestions:[{recipeId,name,slug,haveCount,totalCount,
+    missingCount,coverage,missing[]}], ediblAvailable}. Graceful envelope on failure."""
+    return mymeal_post("/api/v1/ai/suggest")
+
+
+def mymeal_use_it_up(days=None, limit=None):
+    """Rank myMeal recipes that use soon-expiring Edibl stock. Returns
+    {suggestions:[{recipeId,name,slug,uses[],usesCount,soonestDaysLeft}], expiring[]}."""
+    body = {}
+    if days is not None:
+        body["days"] = days
+    if limit is not None:
+        body["limit"] = limit
+    return mymeal_post("/api/v1/ai/use-it-up", body)
+
+
+def mymeal_recipe(recipe_id):
+    """Fetch one myMeal recipe (id or slug) with its ingredients[], for cook/shop."""
+    return mymeal_get(f"/api/v1/recipes/{recipe_id}")
+
+
 def homehoard_get(path, params=None):
     cfg = current_app.config
     return _get(cfg["HOMEHOARD_URL"], cfg["HOMEHOARD_TOKEN"], path, params)

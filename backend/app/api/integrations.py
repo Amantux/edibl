@@ -35,6 +35,94 @@ def _planned_out(p):
             "meal": p.meal, "createdAt": iso(p.created_at)}
 
 
+def _map_recipe_ingredients(recipe):
+    """A myMeal recipe dict → Edibl ingredient list [{name, quantity, unit}]. The two
+    apps share no ingredient ids, so match by name string: prefer the parsed
+    ``food.name``, else the original free-text ``display``; unit prefers the parsed
+    abbreviation. Sub-recipe (refRecipe) lines have no food/qty and are skipped."""
+    # Aggregate duplicate lines by (name, unit): a recipe that lists "Flour" for the
+    # dough and again for dusting is one demand for the summed amount — so cook deducts
+    # it once (not twice) and shop adds a single row.
+    out = {}
+    for ing in (recipe.get("ingredients") or []):
+        food = ing.get("food") or {}
+        unit = ing.get("unit") or {}
+        name = (food.get("name") or ing.get("display") or "").strip()
+        if not name:
+            continue
+        u = unit.get("abbreviation") or "count"
+        try:
+            q = float(ing.get("quantity") or 1)
+        except (TypeError, ValueError):
+            q = 1.0
+        key = (name.lower(), u)
+        if key in out:
+            out[key]["quantity"] += q
+        else:
+            out[key] = {"name": name, "quantity": q, "unit": u}
+    return list(out.values())
+
+
+def cook_ingredients(gid, ingredients, *, source_app="plan", idempotency_key=None):
+    """Deduct each ingredient from real stock — match a food/beverage product and
+    consume the needed amount across its lots (prefer-open, then first-expiring,
+    spilling). Returns [{name, consumed, shortfall, matched}]. Shared by /plan/cook and
+    the recipe-cook route; never guesses across food types (an unmatched item is
+    reported, not consumed).
+
+    `idempotency_key` (from a client per-press token) is threaded into each consume so
+    a retried cook request replays instead of deducting twice. Best-effort: it dedupes
+    an exact resend; a retry after only PARTIAL success re-plans against the changed
+    stock and so isn't fully covered (would need an action-level guard)."""
+    from ..services import matching
+    from ..services.inventory import selection, consume_lot
+    results = []
+    for idx, it in enumerate(ingredients):
+        name = (it.get("name") or "").strip()
+        if not name:
+            continue
+        try:
+            qty = float(it.get("quantity") or 1)
+        except (TypeError, ValueError):
+            qty = 1.0
+        cands = matching.match_products(gid, name, item_types={"food", "beverage"})
+        product = cands[0].product if cands else None
+        consumed, shortfall = 0.0, qty
+        if product:
+            lots = [s for s in product.stock if not s.finished]
+            picks, shortfall = selection.plan_consumption(lots, qty)
+            for pk in picks:
+                key = f"{idempotency_key}:{idx}:{pk.lot.id}" if idempotency_key else None
+                consume_lot(pk.lot, amount=pk.take, outcome="eaten",
+                            actor_user_id=None, source_app=source_app,
+                            idempotency_key=key)
+                consumed += pk.take
+        results.append({"name": name, "consumed": round(consumed, 4),
+                        "shortfall": round(shortfall, 4), "matched": bool(product)})
+    return results
+
+
+def add_shortfall_to_shopping(gid, ingredients):
+    """Add each ingredient's shortfall (what's not on hand) to the shopping list as a
+    source='recipe' row, skipping anything already 'needed'. Returns the added rows."""
+    shortfall = analyze_demand(gid, ingredients)["shortfall"]
+    on_list = {i.name.lower() for i in db.session.query(ShoppingItem)
+               .filter_by(group_id=gid, status="needed").all()}
+    added = []
+    for s in shortfall:
+        key = s["name"].lower()
+        if key in on_list:
+            continue
+        on_list.add(key)  # track within the batch too, so a repeated shortfall name
+        # in a single call doesn't add two identical rows (analyze_demand doesn't merge)
+        i = ShoppingItem(name=s["name"], quantity=s["quantity"], unit=s["unit"],
+                         source="recipe", group_id=gid)
+        db.session.add(i)
+        added.append(i)
+    db.session.commit()
+    return added
+
+
 @bp.get("/integrations/status")
 @login_required
 def status():
@@ -159,18 +247,7 @@ def order():
     gid = current_group().id
     rows = db.session.query(PlannedItem).filter_by(group_id=gid).all()
     demand = [{"name": p.name, "quantity": p.quantity, "unit": p.unit} for p in rows]
-    shortfall = analyze_demand(gid, demand)["shortfall"]
-    on_list = {i.name.lower() for i in db.session.query(ShoppingItem)
-               .filter_by(group_id=gid, status="needed").all()}
-    added = []
-    for s in shortfall:
-        if s["name"].lower() in on_list:
-            continue
-        i = ShoppingItem(name=s["name"], quantity=s["quantity"], unit=s["unit"],
-                         source="recipe", group_id=gid)
-        db.session.add(i)
-        added.append(i)
-    db.session.commit()
+    added = add_shortfall_to_shopping(gid, demand)
     return jsonify({"added": len(added), "items": [shopping_out(i) for i in added]})
 
 
@@ -183,8 +260,6 @@ def cook():
     [{name, quantity?, unit?}], clear?: bool}. With no ingredients, uses the current
     plan. Returns per-ingredient consumed/shortfall; `clear` removes satisfied
     planned items. Never guesses across food types — an unmatched item is reported."""
-    from ..services import matching
-    from ..services.inventory import selection, consume_lot
     gid = current_group().id
     data = request.get_json(force=True) or {}
     ingredients = data.get("ingredients")
@@ -196,24 +271,7 @@ def cook():
             ingredients.append({"name": p.name, "quantity": p.quantity, "unit": p.unit})
             planned_by_key[p.name.lower()] = p
 
-    results = []
-    for it in ingredients:
-        name = (it.get("name") or "").strip()
-        if not name:
-            continue
-        qty = float(it.get("quantity") or 1)
-        cands = matching.match_products(gid, name, item_types={"food", "beverage"})
-        product = cands[0].product if cands else None
-        consumed, shortfall = 0.0, qty
-        if product:
-            lots = [s for s in product.stock if not s.finished]
-            picks, shortfall = selection.plan_consumption(lots, qty)
-            for pk in picks:
-                consume_lot(pk.lot, amount=pk.take, outcome="eaten",
-                            actor_user_id=None, source_app="plan")
-                consumed += pk.take
-        results.append({"name": name, "consumed": round(consumed, 4),
-                        "shortfall": round(shortfall, 4), "matched": bool(product)})
+    results = cook_ingredients(gid, ingredients)
 
     cleared = 0
     if data.get("clear"):
@@ -227,6 +285,76 @@ def cook():
 
     return jsonify({"cooked": results, "cleared": cleared,
                     "meal": data.get("meal", "")})
+
+
+@bp.get("/cook/suggestions")
+@login_required
+def cook_suggestions():
+    """Recipe suggestions from myMeal, ranked by Edibl's own stock (myMeal fetches it
+    via /have). ``?mode=make`` = what you can cook now; ``?mode=useup`` = recipes that
+    use soon-expiring items (?days, ?limit). Proxies myMeal's ranking and degrades
+    gracefully to {configured/reachable:false, suggestions:[]} when myMeal is off —
+    never a 500."""
+    mode = (request.args.get("mode") or "make").lower()
+    if mode == "useup":
+        res = integ.mymeal_use_it_up(days=request.args.get("days", type=int),
+                                     limit=request.args.get("limit", type=int))
+    else:
+        res = integ.mymeal_suggest()
+    out = {"mode": mode, "configured": res.get("configured", False),
+           "reachable": res.get("reachable", False), "suggestions": []}
+    if res.get("reachable"):
+        data = res.get("data") or {}
+        out["suggestions"] = data.get("suggestions") or []
+        out["expiring"] = data.get("expiring") or []
+    elif res.get("error"):
+        out["error"] = res["error"]
+    return jsonify(out)
+
+
+def _recipe_or_error(recipe_id):
+    """Fetch a myMeal recipe → (ingredients, recipe, error_response). error_response is
+    a ready (json, status) tuple when myMeal is unreachable or the recipe is unusable."""
+    res = integ.mymeal_recipe(recipe_id)
+    if not res.get("reachable"):
+        return None, None, (jsonify({
+            "configured": res.get("configured", False), "reachable": False,
+            "error": res.get("error") or "myMeal is not reachable"}), 502)
+    recipe = res.get("data") or {}
+    ingredients = _map_recipe_ingredients(recipe)
+    if not ingredients:
+        return None, None, (jsonify({"error": "recipe has no usable ingredients"}), 422)
+    return ingredients, recipe, None
+
+
+@bp.post("/cook/recipe/<recipe_id>")
+@login_required
+def cook_recipe(recipe_id):
+    """"I cooked this myMeal recipe" — fetch its ingredients and deduct them from real
+    stock (same consumption as /plan/cook). Returns per-ingredient consumed/shortfall."""
+    ingredients, recipe, err = _recipe_or_error(recipe_id)
+    if err:
+        return err
+    # A per-press token from the client makes a retried cook replay instead of
+    # deducting twice (the button is also disabled client-side during the request).
+    token = str((request.get_json(silent=True) or {}).get("idempotencyKey") or "").strip()
+    idem = f"cook:{recipe_id}:{token}" if token else None
+    results = cook_ingredients(current_group().id, ingredients, source_app="recipe",
+                               idempotency_key=idem)
+    return jsonify({"recipe": recipe.get("name") or "", "cooked": results})
+
+
+@bp.post("/cook/recipe/<recipe_id>/shop")
+@login_required
+def shop_recipe(recipe_id):
+    """Add a myMeal recipe's missing ingredients to the shopping list (source='recipe',
+    skips anything already on the list)."""
+    ingredients, recipe, err = _recipe_or_error(recipe_id)
+    if err:
+        return err
+    added = add_shortfall_to_shopping(current_group().id, ingredients)
+    return jsonify({"recipe": recipe.get("name") or "",
+                    "added": len(added), "items": [shopping_out(i) for i in added]})
 
 
 @bp.delete("/plan/<item_id>")

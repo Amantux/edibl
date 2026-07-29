@@ -182,7 +182,7 @@ def stock_out(s):
         "id": s.id,
         "product": {"id": s.product.id, "name": s.product.name,
                     "category": s.product.category, "brand": s.product.brand,
-                    "family": s.product.family or ""}
+                    "family": s.product.family or "", "staple": bool(s.product.staple)}
         if s.product else None,
         # Convenience grouping key: the product's family, else its name.
         "groupKey": (s.product.family or s.product.name) if s.product else "",

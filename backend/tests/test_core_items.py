@@ -150,6 +150,16 @@ def test_duplicate_auto_rows_collapse_to_one(auth_client, app):
         assert len(_open_items(gid, pid)) == 1  # converged
 
 
+def test_grouped_lots_expose_product_staple(auth_client, app):
+    """The grouped view needs each lot's product.staple to render the ★ toggle."""
+    gid = _gid(app)
+    with app.app_context():
+        _mk_product(gid, "Butter", staple=True, on_hand=1)
+    g = auth_client.get("/api/v1/stock/grouped").get_json()
+    lot = g["groups"][0]["lots"][0]
+    assert lot["product"]["staple"] is True
+
+
 def test_unmark_staple_retracts_orphan_auto_row(auth_client, app):
     from app.services.assistant import h_set_staple
     gid = _gid(app)

@@ -13,8 +13,17 @@ const flatItems = ref([])         // freezer / wine views
 const suggest = ref({ categories: [], units: [], families: [], freshness: [], storageMethods: [], names: [] })
 const locations = ref([])
 const loading = ref(true)
-const filter = ref({ view: 'all' })
+const filter = ref({ view: 'all', groupBy: 'family' })
 const expanded = reactive({})
+const currency = ref('USD')
+const GROUP_BYS = [['family', 'Family'], ['category', 'Category'], ['location', 'Location']]
+const fmtMoney = (n) => {
+  if (n == null) return ''
+  try {
+    return new Intl.NumberFormat(undefined, { style: 'currency', currency: currency.value,
+      maximumFractionDigits: 2 }).format(n)
+  } catch { return `${currency.value} ${Number(n).toFixed(2)}` }
+}
 const showAdd = ref(false)
 const showBulk = ref(false)
 const assistantCfg = ref({ enabled: false })
@@ -48,10 +57,65 @@ const focusedLots = computed(() => {
     : focus.value === 'open' ? openLots.value : allLots.value
   return base.filter(lotMatchesQuery)
 })
+// Re-bucket the flattened lots by category/location entirely client-side (the server
+// always groups by family); family falls through to the richer server payload.
+function _regroup(lots, keyOf) {
+  const map = new Map()
+  for (const s of lots) {
+    const k = keyOf(s) || '—'
+    let g = map.get(k)
+    if (!g) {
+      g = { group: k, category: '', products: new Set(), lots: [], lotCount: 0,
+        expiring: 0, expired: 0, _value: 0, nextExpiry: null, nextExpiryStatus: 'unknown' }
+      map.set(k, g)
+    }
+    g.lots.push(s); g.lotCount++
+    if (s.product?.name) g.products.add(s.product.name)
+    if (s.price != null) g._value += Number(s.price)
+    if (s.expiryStatus === 'expiring') g.expiring++
+    else if (s.expiryStatus === 'expired') g.expired++
+    if (s.expiryDate && (!g.nextExpiry || s.expiryDate < g.nextExpiry)) {
+      g.nextExpiry = s.expiryDate; g.nextExpiryStatus = s.expiryStatus
+    }
+  }
+  return [...map.values()].map((g) => ({
+    ...g, products: [...g.products].sort(), productCount: g.products.size,
+    valueOnHand: g._value || null,
+    summary: `${g.lotCount} lot${g.lotCount > 1 ? 's' : ''}`,
+  })).sort((a, b) => a.group.localeCompare(b.group))
+}
+const displayGroups = computed(() => {
+  if (filter.value.groupBy === 'category') return _regroup(allLots.value, (s) => s.product?.category)
+  if (filter.value.groupBy === 'location') return _regroup(allLots.value, (s) => s.location?.name)
+  return groups.value
+})
 const groupsFiltered = computed(() =>
-  !q.value ? groups.value
-    : groups.value.filter((g) => g.group.toLowerCase().includes(q.value) ||
+  !q.value ? displayGroups.value
+    : displayGroups.value.filter((g) => g.group.toLowerCase().includes(q.value) ||
       (g.products || []).some((n) => n.toLowerCase().includes(q.value))))
+
+// Freshness split for the mini distribution bar (fresh = the remainder).
+function freshBar(g) {
+  const total = g.lotCount || 1
+  const expired = g.expired || 0, expiring = g.expiring || 0
+  const fresh = Math.max(0, total - expired - expiring)
+  return { fresh: (fresh / total) * 100, expiring: (expiring / total) * 100,
+    expired: (expired / total) * 100 }
+}
+
+// ★ per-product staple toggle → PUT /products/<id> (auto-restocks the list server-side).
+async function toggleStaple(product) {
+  if (!product?.id) return
+  const next = !product.staple
+  for (const s of allLots.value) if (s.product?.id === product.id) s.product.staple = next
+  try {
+    await api.put(`/products/${product.id}`, { staple: next })
+    ui.success(next ? `Marked ${product.name} as a staple` : `${product.name} is no longer a staple`)
+  } catch (e) {
+    for (const s of allLots.value) if (s.product?.id === product.id) s.product.staple = !next
+    ui.error(e.message || 'Could not update staple.')
+  }
+}
 const smart = computed(() => ({
   expiring: expiringLots.value,
   open: openLots.value,
@@ -144,7 +208,9 @@ async function loadSuggest() {
 async function load(silent = false) {
   if (!silent) loading.value = true
   if (filter.value.view === 'all') {
-    groups.value = (await api.get('/stock/grouped')).groups
+    const gr = await api.get('/stock/grouped')
+    groups.value = gr.groups
+    currency.value = gr.currency || 'USD'
   } else {
     const path = filter.value.view === 'freezer' ? '/dashboard/freezer' : '/dashboard/wine'
     flatItems.value = (await api.get(path)).items
@@ -445,6 +511,10 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
       <button :class="{on:focus==='low'}" @click="focus='low'">Low</button>
     </div>
     <div class="grow"></div>
+    <div v-if="filter.view==='all' && focus==='all'" class="seg" role="group" aria-label="Group by">
+      <button v-for="[k,label] in GROUP_BYS" :key="k" :class="{on:filter.groupBy===k}"
+        :aria-pressed="filter.groupBy===k" @click="filter.groupBy=k">{{ label }}</button>
+    </div>
     <select v-model="filter.view" style="width:auto" @change="focus='all';load()">
       <option value="all">Everything</option>
       <option value="freezer">Freezer</option>
@@ -534,24 +604,40 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
         <template v-for="g in groupsFiltered" :key="g.group">
           <tr class="grp clickable" @click="toggle(g.group)">
             <td><span class="caret">{{ expanded[g.group] ? '▾' : '▸' }}</span>
-              <strong>{{ g.group }}</strong> <span v-if="g.category" class="chip">{{ g.category }}</span></td>
+              <strong>{{ g.group }}</strong> <span v-if="g.category" class="chip">{{ g.category }}</span>
+              <button v-if="g.productCount===1 && g.lots[0] && g.lots[0].product" class="star"
+                :class="{on:g.lots[0].product.staple}" :aria-pressed="g.lots[0].product.staple"
+                :aria-label="(g.lots[0].product.staple?'Unmark':'Mark')+' '+g.group+' as a staple'"
+                :title="g.lots[0].product.staple ? 'Always in stock — tap to unmark' : 'Mark as always in stock'"
+                @click.stop="toggleStaple(g.lots[0].product)">{{ g.lots[0].product.staple ? '★' : '☆' }}</button></td>
             <td class="muted">{{ g.products.join(', ') }}
               <span v-if="g.productCount > 1">· {{ g.productCount }} kinds</span></td>
-            <td style="min-width:130px">{{ g.summary }}
-              <div class="muted" style="font-size:.7rem">{{ g.lotCount }} lot{{ g.lotCount>1?'s':'' }}</div></td>
+            <td style="min-width:150px">{{ g.summary }}
+              <div class="freshbar" :title="`${g.expired||0} expired · ${g.expiring||0} soon`">
+                <span class="fb fresh" :style="{width:freshBar(g).fresh+'%'}"></span>
+                <span class="fb soon" :style="{width:freshBar(g).expiring+'%'}"></span>
+                <span class="fb bad" :style="{width:freshBar(g).expired+'%'}"></span></div></td>
             <td style="white-space:nowrap"><span class="badge" :class="g.nextExpiryStatus">{{ nextExp(g) }}</span>
               <span v-if="g.expiring || g.expired" class="muted" style="font-size:.7rem">
                 {{ g.expired ? '· ' + g.expired + ' expired' : '· ' + g.expiring + ' soon' }}</span></td>
-            <td></td>
+            <td style="text-align:right;white-space:nowrap">
+              <span v-if="g.valueOnHand!=null" class="chip val" title="Value on hand">{{ fmtMoney(g.valueOnHand) }}</span></td>
           </tr>
           <tr v-for="s in (expanded[g.group] ? g.lots : [])" :key="s.id" class="lot">
             <td><span class="ind">↳</span> {{ s.product?.name }}
+              <button v-if="g.productCount>1 && s.product" class="star" :class="{on:s.product.staple}"
+                :aria-pressed="s.product.staple"
+                :aria-label="(s.product.staple?'Unmark':'Mark')+' '+s.product.name+' as a staple'"
+                :title="s.product.staple ? 'Always in stock — tap to unmark' : 'Mark as always in stock'"
+                @click.stop="toggleStaple(s.product)">{{ s.product.staple ? '★' : '☆' }}</button>
               <span v-if="s.freshness" class="chip">{{ s.freshness }}</span>
               <span v-if="s.attrs?.cut" class="muted"> · {{ s.attrs.animal }} {{ s.attrs.cut }}</span></td>
             <td class="muted">{{ s.location?.name || '—' }}<span v-if="s.source" class="muted"> · {{ s.source }}</span><span v-if="s.addedBy" class="muted"> · 👤 {{ s.addedBy }}</span></td>
             <td>{{ s.quantityKind === 'exact' ? (s.quantity + ' ' + s.unit) : s.quantityText }}
               <span class="chip">{{ s.storageMethod.replace('_',' ') }}</span>
-              <span v-if="s.packageState === 'opened'" class="chip">open</span></td>
+              <span v-if="s.packageState === 'opened'" class="chip">open</span>
+              <span v-if="s.price!=null" class="chip val"
+                :title="s.unitPrice!=null ? fmtMoney(s.unitPrice)+' / '+s.unit : 'price paid'">{{ fmtMoney(s.price) }}</span></td>
             <td><span class="badge" :class="s.expiryStatus" :title="s.expiryExplain">{{ expLabel(s) }}</span>
               <span v-if="s.expiryEstimated" class="muted" style="font-size:.7rem"> est</span></td>
             <td style="text-align:right;white-space:nowrap">
@@ -571,9 +657,16 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
       <tbody>
         <tr v-for="s in flatItems" :key="s.id">
           <td><strong>{{ s.product?.name }}</strong>
+            <button v-if="s.product" class="star" :class="{on:s.product.staple}"
+              :aria-pressed="s.product.staple"
+              :aria-label="(s.product.staple?'Unmark':'Mark')+' '+s.product.name+' as a staple'"
+              :title="s.product.staple ? 'Always in stock — tap to unmark' : 'Mark as always in stock'"
+              @click="toggleStaple(s.product)">{{ s.product.staple ? '★' : '☆' }}</button>
             <span v-if="s.attrs?.cut" class="muted"> · {{ s.attrs.animal }} {{ s.attrs.cut }}</span></td>
           <td class="muted">{{ s.location?.name || '—' }}<span v-if="s.addedBy" class="muted"> · 👤 {{ s.addedBy }}</span></td>
-          <td>{{ s.quantityKind === 'exact' ? (s.quantity + ' ' + s.unit) : s.quantityText }}</td>
+          <td>{{ s.quantityKind === 'exact' ? (s.quantity + ' ' + s.unit) : s.quantityText }}
+            <span v-if="s.price!=null" class="chip val"
+              :title="s.unitPrice!=null ? fmtMoney(s.unitPrice)+' / '+s.unit : 'price paid'">{{ fmtMoney(s.price) }}</span></td>
           <td><span class="chip">{{ s.storageMethod.replace('_',' ') }}</span>
             <span v-if="s.packageState === 'opened'" class="chip">open</span></td>
           <td><span class="badge" :class="s.expiryStatus" :title="s.expiryExplain">{{ expLabel(s) }}</span></td>
@@ -757,6 +850,21 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
 .caret { display: inline-block; width: 1em; color: var(--muted, #999); }
 .lot td { background: var(--surface, rgba(255,255,255,.02)); font-size: .9rem; }
 .ind { color: var(--muted, #999); margin-right: 4px; }
+/* ★ staple toggle — quiet by default, accent when active */
+.star { background: transparent; color: var(--muted); border: none; padding: 0 4px;
+  font-size: 1rem; line-height: 1; cursor: pointer; vertical-align: baseline; }
+.star:hover { background: transparent; color: var(--accent); }
+.star.on { color: var(--accent); }
+/* money chip — neutral, tabular, so it doesn't compete with the accent chips */
+.chip.val { background: var(--surface-2, rgba(127,127,127,.12)); color: var(--muted);
+  font-variant-numeric: tabular-nums; }
+/* freshness distribution bar under a group's on-hand count */
+.freshbar { display: flex; height: 4px; margin-top: 5px; border-radius: 999px;
+  overflow: hidden; background: var(--surface-2, rgba(127,127,127,.15)); max-width: 130px; }
+.freshbar .fb { height: 100%; }
+.freshbar .fb.fresh { background: var(--success); }
+.freshbar .fb.soon { background: var(--warning); }
+.freshbar .fb.bad { background: var(--danger); }
 .scanbox { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-bottom: 10px; }
 .scanbox video { width: 100%; max-height: 200px; border-radius: 8px; background: #000; }
 .outcome-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }

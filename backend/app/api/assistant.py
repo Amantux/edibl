@@ -151,6 +151,16 @@ def list_models():
         provider=provider, base_url=data.get("baseUrl"), api_key=data.get("apiKey")))
 
 
+@bp.get("/assistant/metrics")
+@login_required
+def chat_metrics():
+    """Recent chat-latency samples + a stream-vs-POST summary (total ms, and
+    time-to-first-token for streams) — to diagnose why replies feel slow. Each
+    request is also logged (grep 'chat-metric' in the add-on log)."""
+    from ..services.chat_metrics import recent
+    return jsonify(recent())
+
+
 @bp.post("/assistant/chat")
 @login_required
 @limiter.limit("30/minute")
@@ -165,7 +175,11 @@ def chat():
         return jsonify({"error": "messages[] or message required"}), 422
     messages = [{"role": m.get("role", "user"), "content": str(m.get("content", ""))[:4000]}
                 for m in messages if m.get("content")][-20:]
+    from ..services.chat_metrics import ChatTimer
+    t = ChatTimer("post")
     result = assistant.run_chat(current_group().id, messages)
+    t.set(provider=result.get("provider"), model=result.get("model"))
+    t.done(ok=bool(result.get("enabled", True)))
     return jsonify(result)
 
 
@@ -190,12 +204,23 @@ def chat_stream():
     gid = current_group().id
 
     def generate():
+        from ..services.chat_metrics import ChatTimer
+        t = ChatTimer("stream")
         try:
             for ev in assistant.run_chat_stream(gid, messages):
+                if ev["type"] == "delta":
+                    t.first_token()
+                elif ev["type"] == "tool":
+                    t.tool()
+                elif ev["type"] == "done":
+                    t.set(provider=ev.get("provider"), model=ev.get("model"))
                 yield json.dumps(ev) + "\n"
         except Exception:  # noqa: BLE001 - never leak a stack into the stream
             db.session.rollback()
+            t.done(ok=False)
             yield json.dumps({"type": "error", "error": "The assistant failed."}) + "\n"
+            return
+        t.done()
 
     return Response(
         stream_with_context(generate()),

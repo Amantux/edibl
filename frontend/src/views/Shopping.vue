@@ -56,7 +56,7 @@ async function copyForDelivery() {
   <div class="page-head"><h1>🛒 Shopping list</h1><span class="badge">{{ items.length }}</span>
     <div class="grow"></div>
     <button class="secondary" @click="suggest">✨ Suggest from low stock</button>
-    <button @click="copyForDelivery">{{ copied ? '✓ Copied!' : '📋 Copy for delivery' }}</button></div>
+    <button class="secondary" @click="copyForDelivery">{{ copied ? '✓ Copied!' : '📋 Copy for delivery' }}</button></div>
 
   <div class="card">
     <form class="row" style="margin-bottom:14px" @submit.prevent="add">

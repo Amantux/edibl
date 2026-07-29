@@ -92,7 +92,7 @@ onMounted(loadDbBackend)
   <div class="card">
     <h2>Import</h2>
     <p class="muted" style="margin-top:0">Restore from an exported JSON file. Import is <strong>additive</strong> — it creates products, locations, stock, and shopping items that don't already exist, and never deletes anything.</p>
-    <label class="secondary" style="cursor:pointer;display:inline-block;padding:9px 15px;border-radius:9px">
+    <label class="secondary" style="cursor:pointer;display:inline-block;padding:9px 15px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--surface);font-weight:600;font-size:.9rem">
       {{ importing ? 'Importing…' : '⬆️ Choose export file' }}
       <input type="file" hidden accept=".json,application/json" :disabled="importing" @change="importFile" />
     </label>

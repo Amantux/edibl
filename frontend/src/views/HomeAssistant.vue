@@ -65,7 +65,7 @@ onMounted(() => {
     <div class="row" style="align-items:flex-end;gap:8px">
       <label class="field" style="flex:1"><span>New key name (what's it for?)</span>
         <input v-model="newTokenName" placeholder="e.g. HA MCP, myMeal" @keyup.enter="mintToken" /></label>
-      <label class="field" style="width:180px"><span>Access</span>
+      <label class="field" style="width:220px"><span>Access</span>
         <select v-model="newTokenScope">
           <option value="full">Full access (API + MCP)</option>
           <option value="rest">REST API only</option>
@@ -95,7 +95,7 @@ onMounted(() => {
           <td>{{ t.name }}</td>
           <td><span class="chip">{{ scopeLabel(t.scope) }}</span></td>
           <td class="muted"><code>{{ t.hint }}…</code></td>
-          <td style="text-align:right"><button class="ghost sm" @click="revokeToken(t.id)">Revoke</button></td>
+          <td style="text-align:right"><button class="ghost sm" style="color:var(--danger)" @click="revokeToken(t.id)">Revoke</button></td>
         </tr>
       </tbody>
     </table>

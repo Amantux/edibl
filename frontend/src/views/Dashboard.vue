@@ -76,7 +76,7 @@ async function addToList(sug) {
         <div class="st-peek">{{ reorder.slice(0,3).map(s=>s.name).join(' · ') || 'Set reorder levels on items' }}</div>
       </button>
       <button class="smart" @click="go('/locations')">
-        <div class="st-top"><span class="st-n">✓</span><span>📋</span></div>
+        <div class="st-top"><span class="st-n">{{ d.totals.locations }}</span><span>📋</span></div>
         <div class="st-title">Reconcile a place</div>
         <div class="st-peek">Walk a location and fix what's really there.</div>
       </button>
@@ -88,7 +88,6 @@ async function addToList(sug) {
       <div class="stat"><div class="value">{{ d.totals.products }}</div><div class="label">products</div></div>
       <button class="stat as-btn" @click="go('/locations')"><div class="value">{{ d.totals.locations }}</div><div class="label">locations →</div></button>
       <div class="stat"><div class="value">{{ d.totals.expired }}</div><div class="label" :style="d.totals.expired ? 'color:var(--danger)' : ''">expired</div></div>
-      <div v-if="d.totals.value" class="stat"><div class="value">${{ d.totals.value }}</div><div class="label">est. value</div></div>
     </div>
 
     <div class="card">
@@ -119,7 +118,7 @@ async function addToList(sug) {
             <td><strong>{{ s.name }}</strong> <span v-if="s.staple" class="chip">staple</span></td>
             <td>{{ s.available }} {{ s.unit }}<span v-if="s.reserved" class="muted"> · {{ s.reserved }} reserved</span></td>
             <td>{{ s.suggestedQuantity }} {{ s.unit }}</td>
-            <td style="text-align:right"><button class="sm" @click="addToList(s)">Add to list</button></td>
+            <td style="text-align:right"><button class="tonal sm" @click="addToList(s)">Add to list</button></td>
           </tr>
         </tbody>
       </table>

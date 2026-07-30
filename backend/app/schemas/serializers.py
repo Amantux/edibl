@@ -190,6 +190,9 @@ def stock_out(s):
         "groupKey": (s.product.family or s.product.name) if s.product else "",
         "location": {"id": s.location.id, "name": s.location.name, "kind": s.location.kind}
         if s.location else None,
+        # True when the location was a low-confidence auto-guess (needs review) — the
+        # UI colours it distinctly and lists it under "to place" until confirmed.
+        "locationEstimated": bool(getattr(s, "location_estimated", False)),
         # `quantity` is null for presence/unknown lots so no consumer reads a fake
         # number; `quantityText` ("some" / "unknown amount") is the human form.
         "quantity": (s.quantity if _numeric_kind(s) else None),

@@ -213,8 +213,24 @@ def _build_lot(data, product, gid, currency=None):
             qty = 1.0
     else:
         qty = 0.0
+    # Auto-place at ingestion: when no location was chosen, suggest one from the
+    # product's name / category / storage. A high-confidence suggestion is trusted; a
+    # low-confidence one is still placed but flagged (location_estimated) so the UI can
+    # colour it and surface it in a "to place" review list.
+    location_id = data.get("locationId") or None
+    location_estimated = False
+    if not location_id:
+        from ..services.placement import suggest_location
+        try:
+            sug = suggest_location(gid, product.name,
+                                   category=product.category, storage_method=storage)
+        except Exception:  # noqa: BLE001 — placement is best-effort, never blocks intake
+            sug = None
+        if sug:
+            location_id = sug["locationId"]
+            location_estimated = sug.get("confidence") == "low"
     return StockLot(
-        product_id=product.id, location_id=data.get("locationId") or None,
+        product_id=product.id, location_id=location_id, location_estimated=location_estimated,
         quantity=qty, unit=canonical_unit(data.get("unit") or product.default_unit),
         storage_method=storage, package_state=_package_state(data),
         quantity_kind=kind,
@@ -354,6 +370,7 @@ def update(lot_id):
         if not _valid_location(s.group_id, data["locationId"]):
             return jsonify({"error": "unknown location"}), 422
         s.location_id = data["locationId"] or None
+        s.location_estimated = False   # the user set/confirmed it — no longer a guess
     if "storageMethod" in data and data["storageMethod"] in STORAGE_METHODS:
         s.storage_method = data["storageMethod"]
     if "freshness" in data or "state" in data:
@@ -492,6 +509,9 @@ def move(lot_id):
                              actor_user_id=current_user().id,
                              source_app=data.get("sourceApp", "web"),
                              idempotency_key=data.get("idempotencyKey"))
+    if res.lot.location_estimated:      # a deliberate move confirms the placement
+        res.lot.location_estimated = False
+        db.session.commit()
     return jsonify({**stock_out(res.lot), "eventId": res.event.id if res.event else None})
 
 

@@ -28,8 +28,11 @@ def _tokens(s):
             if len(w) >= 3}
 
 
-def _out(loc, reason):
-    return {"locationId": loc.id, "locationName": loc.name, "reason": reason}
+def _out(loc, reason, confidence):
+    # confidence: "high" → auto-place and trust it; "low" → place tentatively but flag
+    # for review (shown in a distinct colour until the user confirms).
+    return {"locationId": loc.id, "locationName": loc.name,
+            "reason": reason, "confidence": confidence}
 
 
 def suggest_location(gid, name, category=None, storage_method=None):
@@ -58,7 +61,7 @@ def suggest_location(gid, name, category=None, storage_method=None):
             lid = max(counts, key=counts.get)
             loc = next((lc for lc in locs if lc.id == lid), None)
             if loc:
-                return _out(loc, "with the others")
+                return _out(loc, "with the others", "high")
 
     # (b) Description / name keyword match — the curated "what this area stores".
     want = _tokens(name) | _tokens(category)
@@ -69,23 +72,23 @@ def suggest_location(gid, name, category=None, storage_method=None):
         if score > best_score:
             best, best_score = lc, score
     if best is not None:
-        return _out(best, f"matches “{best.name}”")
+        return _out(best, f"matches “{best.name}”", "high")
 
     # (c) storage_method → area-kind heuristic (frozen→freezer, refrigerated→fridge, …).
     kind = _METHOD_KIND.get((storage_method or "").lower())
     if kind and by_kind.get(kind):
-        return _out(by_kind[kind][0], f"{storage_method} → {kind}")
+        return _out(by_kind[kind][0], f"{storage_method} → {kind}", "high")
 
     # (d) Optional LLM tiebreak — only when configured; never required.
     picked = _llm_pick(name, category, storage_method, locs)
     if picked is not None:
-        return _out(picked, "suggested")
+        return _out(picked, "suggested", "low")
 
     # Fallback: a sensible default area.
     for k in _DEFAULT_KIND_ORDER:
         if by_kind.get(k):
-            return _out(by_kind[k][0], "default area")
-    return _out(locs[0], "default area")
+            return _out(by_kind[k][0], "default area", "low")
+    return _out(locs[0], "default area", "low")
 
 
 def _llm_pick(name, category, storage_method, locs):

@@ -358,6 +358,10 @@ class StockLot(IDMixin, TimestampMixin, db.Model):
         String(36), ForeignKey("acquisition_lots.id"), nullable=True, index=True)
     acquisition_lot = relationship("AcquisitionLot", back_populates="positions")
     location_id: Mapped[str] = mapped_column(String(36), ForeignKey("locations.id"), nullable=True)
+    # True when the location was a LOW-confidence auto-guess at ingestion (needs review) —
+    # the UI flags these in a distinct colour; cleared once the user confirms/changes it.
+    location_estimated: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0")
     quantity: Mapped[float] = mapped_column(Float, default=1)
     unit: Mapped[str] = mapped_column(String(32), default="count")
     storage_method: Mapped[str] = mapped_column(String(24), default="refrigerated")

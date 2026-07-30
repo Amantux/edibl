@@ -147,3 +147,61 @@ def test_migration_0010_idempotent(app):
             mod.upgrade()  # column already present (metadata) → no-op, no raise
         assert "description" in {c["name"] for c in
                                  db.inspect(db.session.connection()).get_columns("locations")}
+
+
+# ---- ingestion auto-placement + confidence (location_estimated) ---------------
+def test_suggest_location_reports_confidence(auth_client, app):
+    with app.app_context():
+        gid = _gid()
+        _loc(gid, "Deep Freeze", "freezer")
+        db.session.commit()
+        assert suggest_location(gid, "Ice cream", storage_method="frozen")["confidence"] == "high"
+        # no usable signal + no matching kind → default fallback = low confidence
+        assert suggest_location(gid, "Mystery gadget")["confidence"] == "low"
+
+
+def test_ingestion_high_confidence_auto_places_not_flagged(auth_client, app):
+    with app.app_context():
+        gid = _gid()
+        _loc(gid, "Deep Freeze", "freezer")
+        db.session.commit()
+    r = auth_client.post("/api/v1/stock",
+                         json={"productName": "Ice cream", "quantity": 1,
+                               "storageMethod": "frozen"}).get_json()
+    assert r["location"]["name"] == "Deep Freeze"
+    assert r["locationEstimated"] is False          # frozen→freezer is trusted
+
+
+def test_ingestion_low_confidence_placed_but_flagged(auth_client, app):
+    with app.app_context():
+        gid = _gid()
+        _loc(gid, "Pantry", "pantry")               # no fridge/freezer to match
+        db.session.commit()
+    r = auth_client.post("/api/v1/stock",
+                         json={"productName": "Widget", "quantity": 1}).get_json()
+    assert r["location"]["name"] == "Pantry"
+    assert r["locationEstimated"] is True           # low-confidence guess → review
+
+
+def test_explicit_location_is_never_estimated(auth_client, app):
+    with app.app_context():
+        gid = _gid()
+        loc = _loc(gid, "Pantry", "pantry")
+        db.session.commit()
+        lid = loc.id
+    r = auth_client.post("/api/v1/stock",
+                         json={"productName": "Beans", "quantity": 1, "locationId": lid}).get_json()
+    assert r["locationEstimated"] is False
+
+
+def test_confirming_location_clears_estimated(auth_client, app):
+    with app.app_context():
+        gid = _gid()
+        _loc(gid, "Pantry", "pantry")
+        c = _loc(gid, "Cupboard", "cupboard")
+        db.session.commit()
+        cid = c.id
+    r = auth_client.post("/api/v1/stock", json={"productName": "Widget", "quantity": 1}).get_json()
+    assert r["locationEstimated"] is True
+    r2 = auth_client.put(f"/api/v1/stock/{r['id']}", json={"locationId": cid}).get_json()
+    assert r2["locationEstimated"] is False and r2["location"]["name"] == "Cupboard"

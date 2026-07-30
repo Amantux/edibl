@@ -44,9 +44,12 @@ function lotMatchesQuery(s) {
 const expiringLots = computed(() =>
   allLots.value.filter((s) => ['expiring', 'expired'].includes(s.expiryStatus)))
 const openLots = computed(() => allLots.value.filter((s) => s.packageState === 'opened'))
+// Lots whose location was a low-confidence auto-guess at ingestion — need confirming.
+const toPlaceLots = computed(() => allLots.value.filter((s) => s.locationEstimated))
 const focusedLots = computed(() => {
   const base = focus.value === 'expiring' ? expiringLots.value
-    : focus.value === 'open' ? openLots.value : allLots.value
+    : focus.value === 'open' ? openLots.value
+      : focus.value === 'toplace' ? toPlaceLots.value : allLots.value
   return base.filter(lotMatchesQuery)
 })
 // Re-bucket the flattened lots by category/location entirely client-side (the server
@@ -109,6 +112,7 @@ async function toggleStaple(product) {
 const smart = computed(() => ({
   expiring: expiringLots.value,
   open: openLots.value,
+  toplace: toPlaceLots.value,
   low: reorder.value,
 }))
 async function loadReorder() {
@@ -398,6 +402,13 @@ async function sheetCommit() {
     closeSheet(); await refresh()
   } catch (e) { flash(e.message || 'Action failed.') }
 }
+// Confirm an auto-guessed placement as-is → clears locationEstimated (colour normalises).
+async function confirmPlacement(s) {
+  try {
+    await api.put(`/stock/${s.id}`, { locationId: s.location?.id || null })
+    flash('Confirmed where it lives.'); await refresh()
+  } catch (e) { flash(e.message || 'Could not confirm.') }
+}
 async function sheetDelete() {
   const s = sheetFor.value
   if (!s || !confirm(`Remove ${s.product?.name}? (No consumption logged — use "Use" for that.)`)) return
@@ -491,6 +502,11 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
       <div class="st-title">Running low</div>
       <div class="st-peek">{{ smart.low.slice(0,3).map(s=>s.name).join(' · ') || 'Set reorder levels on items' }}</div>
     </button>
+    <button v-if="smart.toplace.length" class="smart warn" :class="{active:focus==='toplace'}" @click="setFocus('toplace')">
+      <div class="st-top"><span class="st-n">{{ smart.toplace.length }}</span><span>📍</span></div>
+      <div class="st-title">To place</div>
+      <div class="st-peek">{{ smart.toplace.slice(0,3).map(s=>s.product?.name).join(' · ') || 'Confirm where these live' }}</div>
+    </button>
     <button class="smart" @click="openReconcile()">
       <div class="st-top"><span class="st-n">✓</span><span>📋</span></div>
       <div class="st-title">Reconcile a place</div>
@@ -509,6 +525,7 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
       <button :class="{on:focus==='expiring'}" @click="focus='expiring'">Expiring</button>
       <button :class="{on:focus==='open'}" @click="focus='open'">Open</button>
       <button :class="{on:focus==='low'}" @click="focus='low'">Low</button>
+      <button v-if="toPlaceLots.length" :class="{on:focus==='toplace'}" @click="focus='toplace'">To place</button>
     </div>
     <div class="grow"></div>
     <div v-if="filter.view==='all' && focus==='all'" class="seg" role="group" aria-label="Group by">
@@ -583,7 +600,9 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
           <td><strong>{{ s.product?.name }}</strong>
             <span v-if="s.packageState==='opened'" class="chip">open</span>
             <span v-if="s.freshness" class="chip">{{ s.freshness }}</span></td>
-          <td class="muted">{{ s.location?.name || '—' }}</td>
+          <td class="muted"><span :class="{'loc-guess': s.locationEstimated}"
+              :title="s.locationEstimated ? 'Auto-placed — confirm or change' : null">{{ s.location?.name || '—' }}<sup v-if="s.locationEstimated">?</sup></span><button
+              v-if="s.locationEstimated" class="loc-ok" title="Confirm this is where it lives" @click.stop="confirmPlacement(s)">✓</button></td>
           <td>{{ s.quantityKind === 'exact' ? (s.quantity + ' ' + s.unit) : s.quantityText }}</td>
           <td><span class="badge" :class="s.expiryStatus" :title="s.expiryExplain">{{ expLabel(s) }}</span></td>
           <td style="text-align:right;white-space:nowrap">
@@ -631,7 +650,9 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
                 @click.stop="toggleStaple(s.product)">{{ s.product.staple ? '★' : '☆' }}</button>
               <span v-if="s.freshness" class="chip">{{ s.freshness }}</span>
               <span v-if="s.attrs?.cut" class="muted"> · {{ s.attrs.animal }} {{ s.attrs.cut }}</span></td>
-            <td class="muted">{{ s.location?.name || '—' }}<span v-if="s.source" class="muted"> · {{ s.source }}</span><span v-if="s.addedBy" class="muted"> · 👤 {{ s.addedBy }}</span></td>
+            <td class="muted"><span :class="{'loc-guess': s.locationEstimated}"
+                :title="s.locationEstimated ? 'Auto-placed — confirm or change' : null">{{ s.location?.name || '—' }}<sup v-if="s.locationEstimated">?</sup></span><button
+                v-if="s.locationEstimated" class="loc-ok" title="Confirm this is where it lives" @click.stop="confirmPlacement(s)">✓</button><span v-if="s.source" class="muted"> · {{ s.source }}</span><span v-if="s.addedBy" class="muted"> · 👤 {{ s.addedBy }}</span></td>
             <td>{{ s.quantityKind === 'exact' ? (s.quantity + ' ' + s.unit) : s.quantityText }}
               <span class="chip">{{ s.storageMethod.replace('_',' ') }}</span>
               <span v-if="s.packageState === 'opened'" class="chip">open</span></td>
@@ -660,7 +681,9 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
               :title="s.product.staple ? 'Always in stock — tap to unmark' : 'Mark as always in stock'"
               @click="toggleStaple(s.product)">{{ s.product.staple ? '★' : '☆' }}</button>
             <span v-if="s.attrs?.cut" class="muted"> · {{ s.attrs.animal }} {{ s.attrs.cut }}</span></td>
-          <td class="muted">{{ s.location?.name || '—' }}<span v-if="s.addedBy" class="muted"> · 👤 {{ s.addedBy }}</span></td>
+          <td class="muted"><span :class="{'loc-guess': s.locationEstimated}"
+              :title="s.locationEstimated ? 'Auto-placed — confirm or change' : null">{{ s.location?.name || '—' }}<sup v-if="s.locationEstimated">?</sup></span><button
+              v-if="s.locationEstimated" class="loc-ok" title="Confirm this is where it lives" @click.stop="confirmPlacement(s)">✓</button><span v-if="s.addedBy" class="muted"> · 👤 {{ s.addedBy }}</span></td>
           <td>{{ s.quantityKind === 'exact' ? (s.quantity + ' ' + s.unit) : s.quantityText }}</td>
           <td><span class="chip">{{ s.storageMethod.replace('_',' ') }}</span>
             <span v-if="s.packageState === 'opened'" class="chip">open</span></td>
@@ -688,6 +711,7 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
       <template v-if="!sheetMode">
         <button class="opt" @click="sheetStart('correct')"><span class="em">📏</span> Correct amount</button>
         <button class="opt" @click="sheetStart('split')"><span class="em">✂️</span> Split off a portion</button>
+        <button v-if="sheetFor.locationEstimated" class="opt" @click="confirmPlacement(sheetFor);closeSheet()"><span class="em">✅</span> Confirm this place is right</button>
         <button class="opt" @click="sheetStart('move')"><span class="em">📦</span> Move to another place</button>
         <button v-if="sheetFor.storageMethod!=='frozen'" class="opt" @click="freezeLot(sheetFor);closeSheet()"><span class="em">❄️</span> Freeze</button>
         <button v-else class="opt" @click="thawLot(sheetFor);closeSheet()"><span class="em">💧</span> Thaw</button>
@@ -851,6 +875,12 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
   font-size: 1rem; line-height: 1; cursor: pointer; vertical-align: baseline; }
 .star:hover { background: transparent; color: var(--star); }
 .star.on { color: var(--star); }
+/* Low-confidence auto-guessed location — stands out (warning) until confirmed. */
+.loc-guess { color: var(--warning); font-weight: 600; }
+.loc-guess sup { font-size: .7em; margin-left: 1px; font-weight: 700; }
+.loc-ok { background: transparent; color: var(--success); border: none; padding: 0 5px;
+  margin-left: 2px; cursor: pointer; font-size: .9rem; line-height: 1; }
+.loc-ok:hover { background: transparent; filter: brightness(.88); }
 /* freshness distribution bar under a group's on-hand count */
 .freshbar { display: flex; height: 4px; margin-top: 5px; border-radius: 999px;
   overflow: hidden; background: var(--surface-2, rgba(127,127,127,.15)); max-width: 130px; }

@@ -310,7 +310,7 @@ async function resetSettings() {
         <input type="checkbox" style="width:auto" :checked="chatStreamDefault" :disabled="chatSaving"
           @change="saveChatDefault($event.target.checked)" />
         <span>Stream chat responses by default
-          <span class="muted" style="font-size:.8rem">— each browser can override on the chat widget</span></span>
+          <span class="muted" style="font-size:.8rem">— show replies as they're written, instead of all at once</span></span>
       </label>
 
       <label class="field"><span>Provider</span>

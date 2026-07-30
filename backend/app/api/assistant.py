@@ -52,7 +52,7 @@ def _llm_url_ok(url):
 @login_required
 def config():
     """What the chat widget needs: whether an LLM is wired up, and which, plus the
-    household's streaming default (a per-browser toggle can override it)."""
+    household's streaming default (set on the Settings page)."""
     cfg = assistant.config_public()
     cfg["stream"] = get_chat_stream(current_group().id)
     return jsonify(cfg)

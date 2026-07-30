@@ -13,22 +13,9 @@ const busy = ref(false)
 const body = ref(null)
 const inputEl = ref(null)
 
-// Transport: per-browser override (localStorage) wins over the household default
-// (cfg.stream from /assistant/config), which defaults to classic POST.
-const STREAM_KEY = 'edibl_chat_stream'
-const streamOverride = ref(readStreamOverride())
-const streaming = computed(() =>
-  streamOverride.value === null ? !!cfg.value.stream : streamOverride.value)
-function readStreamOverride() {
-  const v = localStorage.getItem(STREAM_KEY)
-  if (v === 'true') return true
-  if (v === 'false') return false
-  return null
-}
-function setStreaming(on) {
-  streamOverride.value = !!on
-  localStorage.setItem(STREAM_KEY, on ? 'true' : 'false')
-}
+// Transport is controlled by the household setting (cfg.stream from /assistant/config,
+// set on the Settings page) — no per-widget toggle.
+const streaming = computed(() => !!cfg.value.stream)
 
 const suggestions = [
   "What's expiring soon?",
@@ -144,9 +131,6 @@ async function undoAction(a) {
       <div class="phead">
         <strong>🥑 Ask Edibl</strong>
         <div class="ph-right">
-          <label class="stream-toggle" title="Stream the reply as it's written (this browser)">
-            <input type="checkbox" :checked="streaming" @change="setStreaming($event.target.checked)" /> Stream
-          </label>
           <span class="tag" :class="cfg.enabled ? 'on' : 'off'">
             {{ cfg.enabled ? cfg.provider : 'not set up' }}</span>
           <button class="pclose" @click="open = false" aria-label="Close chat">✕</button>
@@ -220,8 +204,6 @@ async function undoAction(a) {
   padding: 13px 15px; border-bottom: 1px solid var(--border);
   background: linear-gradient(180deg, var(--accent-soft), transparent); }
 .ph-right { display: flex; align-items: center; gap: 8px; }
-.stream-toggle { display: flex; align-items: center; gap: 4px; font-size: .72rem; color: var(--muted); cursor: pointer; user-select: none; }
-.stream-toggle input { width: auto; margin: 0; }
 .ph-right { display: flex; align-items: center; gap: 8px; }
 .pclose { background: transparent; color: var(--muted); border: none; padding: 4px 8px;
   font-size: 1rem; line-height: 1; border-radius: 8px; cursor: pointer; }

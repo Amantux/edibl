@@ -641,8 +641,9 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
                 {{ g.expired ? '· ' + g.expired + ' expired' : '· ' + g.expiring + ' soon' }}</span></td>
             <td></td>
           </tr>
-          <tr v-for="s in (expanded[g.group] ? g.lots : [])" :key="s.id" class="lot">
-            <td><span class="ind">↳</span> {{ s.product?.name }}
+          <tr v-for="(s, li) in (expanded[g.group] ? g.lots : [])" :key="s.id"
+              class="lot" :class="{ 'lot-last': li === g.lots.length - 1 }">
+            <td class="lot-name">{{ s.product?.name }}
               <button v-if="g.productCount>1 && s.product" class="star" :class="{on:s.product.staple}"
                 :aria-pressed="s.product.staple"
                 :aria-label="(s.product.staple?'Unmark':'Mark')+' '+s.product.name+' as a staple'"
@@ -866,10 +867,20 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
   color: var(--text, #eee); padding: 10px 14px; border-radius: 8px; margin-bottom: 12px; }
 .chip { margin-left: 6px; }
 .grp { cursor: pointer; }
-.grp:hover { background: var(--surface, rgba(255,255,255,.03)); }
-.caret { display: inline-block; width: 1em; color: var(--muted, #999); }
-.lot td { background: var(--surface, rgba(255,255,255,.02)); font-size: .9rem; }
-.ind { color: var(--muted, #999); margin-right: 4px; }
+.caret { display: inline-block; width: 1em; color: var(--muted); }
+/* Nested lot rows read as children of the group above: a subtle tint + a tree rail
+   (a ├ tick into each lot, └ closing the last one) instead of a loose ↳ glyph. */
+.lot td { background: var(--surface-2); font-size: .9rem; }
+.lot td:first-child { padding-left: 34px; position: relative; }
+.lot td:first-child::before {                       /* the vertical connecting rail */
+  content: ''; position: absolute; left: 17px; top: 0; bottom: 0;
+  width: 2px; background: var(--border);
+}
+.lot.lot-last td:first-child::before { bottom: 50%; }   /* stop at the last lot's midline (└) */
+.lot td:first-child::after {                        /* short branch tick into each lot */
+  content: ''; position: absolute; left: 17px; top: 50%;
+  width: 11px; height: 2px; background: var(--border);
+}
 /* ★ staple toggle — quiet by default, accent when active */
 .star { background: transparent; color: var(--muted); border: none; padding: 0 4px;
   font-size: 1rem; line-height: 1; cursor: pointer; vertical-align: baseline; }

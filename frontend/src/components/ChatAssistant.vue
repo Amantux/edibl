@@ -2,6 +2,7 @@
 import { ref, computed, nextTick, onMounted, watch } from 'vue'
 import { api, streamPost } from '../api'
 import { chatOpen, chatPrefill, openBugReport } from '../chat'
+import { hideMarker, finalizeReply } from '../utils/bugMarker'
 import { dataChanged } from '../live'
 
 const open = ref(false)
@@ -61,36 +62,32 @@ async function scrollDown() {
   if (body.value) body.value.scrollTop = body.value.scrollHeight
 }
 
-// The assistant ends a completed bug-report walkthrough with a [[REPORT_BUG]] marker:
-// strip it from what we show and stash the cleaned summary so we can offer to open the
-// bug reporter prefilled with it.
-const BUG_MARKER = '[[REPORT_BUG]]'
-function applyBugMarker(m) {
-  if (m.content && m.content.includes(BUG_MARKER)) {
-    m.content = m.content.replaceAll(BUG_MARKER, '').trim()
-    m.bugReportSummary = m.content
-  }
-}
+// The assistant ends a completed bug-report walkthrough with a [[REPORT_BUG]] marker.
+// hideMarker keeps it (and any streamed partial) off-screen while the reply streams;
+// finalizeReply strips it from the final text and yields the summary to prefill the
+// bug reporter. (Both are pure + unit-tested in utils/bugMarker.js.)
 
 async function sendPost(payload) {
   const res = await api.post('/assistant/chat', { messages: payload })
-  const m = { role: 'assistant', content: res.reply, actions: res.actions || [] }
-  applyBugMarker(m)
+  const { content, summary } = finalizeReply(res.reply)
+  const m = { role: 'assistant', content, actions: res.actions || [] }
+  if (summary) m.bugReportSummary = summary
   msgs.value.push(m)
   if ((res.actions || []).some((a) => a.undoable)) dataChanged()
 }
 
 async function sendStream(payload) {
-  msgs.value.push({ role: 'assistant', content: '', actions: [] })
+  msgs.value.push({ role: 'assistant', content: '', raw: '', actions: [] })
   const idx = msgs.value.length - 1 // mutate via the reactive proxy, not the raw object
   let errored = null
   try {
     await streamPost('/assistant/chat/stream', { messages: payload }, (ev) => {
       const a = msgs.value[idx]
-      if (ev.type === 'delta') { a.content += ev.text; scrollDown() }
+      if (ev.type === 'delta') { a.raw += ev.text; a.content = hideMarker(a.raw); scrollDown() }
       else if (ev.type === 'done') {
-        a.content = ev.reply || a.content
-        applyBugMarker(a)
+        const { content, summary } = finalizeReply(ev.reply || a.raw || a.content)
+        a.content = content
+        if (summary) a.bugReportSummary = summary
         a.actions = ev.actions || []
         if (a.actions.some((x) => x.undoable)) dataChanged()
       } else if (ev.type === 'error') { errored = new Error(ev.error || 'Something went wrong.') }

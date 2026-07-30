@@ -4,12 +4,16 @@ import { api, apiUrl, getToken } from '../api'
 
 // ── Database backend + migrate SQLite → an empty PostgreSQL ───────────────────
 const dbBackend = ref('sqlite')
+// Owner-only DB-target facts (backend + host/db, credentials stripped server-side)
+// for the "run all three apps on one database" helper below. Never carries a password.
+const dbTarget = ref(null)
 const pgUrl = ref('')
 const pgBusy = ref(false)
 const pgResult = ref(null)   // { total, tables, next }
 const pgMsg = ref('')
 async function loadDbBackend() {
   try { dbBackend.value = (await api.get('/meta')).dbBackend || 'sqlite' } catch (e) { /* leave default */ }
+  try { dbTarget.value = await api.get('/db-target') } catch (e) { /* helper card degrades to backend only */ }
 }
 async function migratePg() {
   if (!pgUrl.value.trim()) return
@@ -80,6 +84,28 @@ onMounted(loadDbBackend)
   </div>
 
   <div class="card">
+    <h2>🔗 Run all three apps on one database</h2>
+    <p class="muted" style="margin-top:0">Edibl, HomeHoard and myMeal can share a single PostgreSQL
+      <strong>server</strong> — each app keeps its own database on it. Point every add-on at the same
+      server, then restart. Set each app's URL to its own database name:</p>
+    <div class="envlist">
+      <div><code>EDIBL_DATABASE_URL</code><span class="muted">Edibl</span></div>
+      <div><code>HBOX_DATABASE_URL</code><span class="muted">HomeHoard</span></div>
+      <div><code>MYMEAL_DATABASE_URL</code><span class="muted">myMeal</span></div>
+    </div>
+    <div v-if="dbTarget && dbTarget.backend === 'postgresql'" class="target">
+      <span class="muted">This Edibl is on</span>
+      <strong>PostgreSQL</strong>
+      <span v-if="dbTarget.host" class="muted">at</span>
+      <strong v-if="dbTarget.host">{{ dbTarget.host }}<span v-if="dbTarget.port">:{{ dbTarget.port }}</span></strong>
+      <span v-if="dbTarget.database" class="muted">·</span>
+      <strong v-if="dbTarget.database">{{ dbTarget.database }}</strong>
+    </div>
+    <p v-else class="muted target" style="margin:0">This Edibl is on its built-in <strong>SQLite</strong> database. Migrate to PostgreSQL above first, then point the other apps at that same server.</p>
+    <p class="muted" style="font-size:.8rem;margin-top:8px">The database password is never shown here — set it in each add-on's own config.</p>
+  </div>
+
+  <div class="card">
     <h2>Export</h2>
     <p class="muted" style="margin-top:0">Download a portable snapshot of your inventory — to keep, or to move to another Edibl instance. (Home Assistant already backs up the add-on's storage automatically.)</p>
     <div class="row wrap">
@@ -104,4 +130,11 @@ onMounted(loadDbBackend)
 .card .field input:not([type="checkbox"]):not([type="file"]),
 .card .field select { max-width: 520px; }
 .card label.field > span { color: var(--text); font-size: .84rem; }
+.envlist { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 4px; }
+.envlist > div { display: flex; align-items: baseline; gap: 10px; }
+.envlist code { font-size: .82rem; }
+.envlist .muted { font-size: .8rem; }
+.target { margin-top: 10px; padding: 8px 12px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: var(--surface); display: flex;
+  flex-wrap: wrap; gap: 6px; align-items: baseline; font-size: .88rem; }
 </style>

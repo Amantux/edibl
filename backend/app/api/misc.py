@@ -6,7 +6,7 @@ from flask import Blueprint, jsonify, current_app
 from sqlalchemy import text
 
 from ..extensions import db
-from ..auth import login_required
+from ..auth import login_required, owner_required
 
 bp = Blueprint("misc", __name__)
 
@@ -39,6 +39,29 @@ def diagnostics():
         "mcpEnabled": os.environ.get("EDIBL_MCP_ENABLED", "").lower() == "true",
         "authDisabled": bool(current_app.config.get("DISABLE_AUTH")),
     })
+
+
+@bp.get("/db-target")
+@owner_required
+def db_target():
+    """Owner-only: the DB backend and, for Postgres, the host/port + database name
+    with the credentials stripped — so the Database page can show where data lives
+    and guide pointing all three apps at one Postgres server. Never returns the full
+    URL, the user, or the password."""
+    from urllib.parse import urlparse
+    uri = current_app.config["SQLALCHEMY_DATABASE_URI"]
+    if uri.startswith("sqlite"):
+        return jsonify({"backend": "sqlite"})
+    try:
+        p = urlparse(uri)
+        return jsonify({
+            "backend": "postgresql",
+            "host": p.hostname or "",
+            "port": p.port or 5432,
+            "database": (p.path or "").lstrip("/"),
+        })
+    except Exception:  # noqa: BLE001 - never 500 on a config-display read
+        return jsonify({"backend": "postgresql"})
 
 
 @bp.get("/ready")

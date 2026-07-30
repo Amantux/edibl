@@ -48,6 +48,82 @@ async function saveJobAi() {
 }
 onMounted(loadJobAi)
 
+// ── Cross-app AI settings sync (a copyable, secret-free string) ──────────────
+// Edibl / HomeHoard / myMeal ship together; this lets you configure the AI once
+// and paste the same provider / model / streaming / background-job choices into
+// the others. The API key is NEVER included in the string and NEVER sent on
+// apply — each app keeps its own key. Field names are app-agnostic so the same
+// string pastes into the other two apps' Settings.
+const syncPaste = ref('')
+const syncMsg = ref('')
+const syncApplying = ref(false)
+
+function b64encode(str) {
+  const bytes = new TextEncoder().encode(str)
+  let bin = ''
+  for (const b of bytes) bin += String.fromCharCode(b)
+  return btoa(bin)
+}
+function b64decode(b64) {
+  const bin = atob(b64)
+  return new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)))
+}
+
+function copyAiSettings() {
+  const cfg = {
+    v: 1,
+    provider: form.value.provider || '',
+    baseUrl: form.value.baseUrl || '',
+    model: form.value.model || '',
+    stream: !!chatStreamDefault.value,
+    jobEnrich: { provider: jobAi.value.enrich?.provider || '', model: jobAi.value.enrich?.model || '' },
+    jobOrganize: { provider: jobAi.value.organize?.provider || '', model: jobAi.value.organize?.model || '' },
+  }
+  const str = 'AICFG1:' + b64encode(JSON.stringify(cfg))
+  try {
+    navigator.clipboard.writeText(str)
+    ui.success('Copied — paste into your other apps’ Settings. Your API key is not included.')
+  } catch (e) {
+    // Clipboard unavailable (e.g. insecure context) — surface it to copy by hand.
+    syncPaste.value = str
+    ui.info('Copy the string in the box below into your other apps’ Settings.')
+  }
+}
+
+async function applyAiSettings() {
+  const raw = (syncPaste.value || '').trim()
+  syncMsg.value = ''
+  if (!raw.startsWith('AICFG1:')) {
+    syncMsg.value = '⚠️ That doesn’t look like an AI settings string (it should start with “AICFG1:”).'
+    return
+  }
+  let cfg = null
+  try { cfg = JSON.parse(b64decode(raw.slice('AICFG1:'.length))) } catch (e) { cfg = null }
+  if (!cfg || typeof cfg !== 'object') {
+    syncMsg.value = '⚠️ Couldn’t read that settings string — it may be incomplete or copied wrong.'
+    return
+  }
+  syncApplying.value = true
+  try {
+    // Never send apiKey — the string carries no secret, and each app keeps its own.
+    await api.put('/assistant/settings', {
+      provider: cfg.provider || '', baseUrl: cfg.baseUrl || '', model: cfg.model || '',
+    })
+    await api.put('/assistant/chat-settings', { stream: !!cfg.stream })
+    await api.put('/assistant/job-settings', {
+      enrich: cfg.jobEnrich || { provider: '', model: '' },
+      organize: cfg.jobOrganize || { provider: '', model: '' },
+    })
+    await Promise.all([loadSettings(), loadChatDefault(), loadJobAi()])
+    syncPaste.value = ''
+    ui.success('AI settings applied. Add this provider’s API key above if it needs one.')
+  } catch (e) {
+    syncMsg.value = '⚠️ ' + (e.message || 'Could not apply settings.')
+  } finally {
+    syncApplying.value = false
+  }
+}
+
 // Model picker for the background-task preference: probe the chosen provider
 // (blank = the chat provider) for its models, so you can pick a small/local SLM
 // instead of typing it. Uses that provider's saved config.
@@ -380,6 +456,24 @@ async function resetSettings() {
       </div>
     </div>
     <button :disabled="jobAiSaving" @click="saveJobAi">{{ jobAiSaving ? 'Saving…' : 'Save' }}</button>
+  </div>
+
+  <div class="card">
+    <h2>🔗 Sync AI settings to your other apps</h2>
+    <p class="muted" style="margin-top:0">Running Edibl, HomeHoard and myMeal together? Copy your AI
+      configuration here and paste it into the others so all three use the same provider, model,
+      streaming and background-task choices. <strong>Your API key is never included</strong> — add each
+      app’s key on its own Settings page.</p>
+    <div class="row wrap" style="gap:8px;align-items:center;margin-bottom:12px">
+      <button class="secondary" @click="copyAiSettings">📋 Copy AI settings</button>
+      <span class="muted" style="font-size:.8rem">Copies everything except the API key.</span>
+    </div>
+    <label class="field"><span>Paste settings from another app</span>
+      <input v-model="syncPaste" placeholder="AICFG1:…" @keyup.enter="applyAiSettings" /></label>
+    <div class="row" style="justify-content:flex-end;align-items:center;gap:10px;margin-top:2px">
+      <span v-if="syncMsg" class="muted" style="font-size:.85rem">{{ syncMsg }}</span>
+      <button :disabled="syncApplying || !syncPaste.trim()" @click="applyAiSettings">{{ syncApplying ? 'Applying…' : 'Apply' }}</button>
+    </div>
   </div>
 
   <div class="card">

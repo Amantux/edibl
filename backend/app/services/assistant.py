@@ -46,6 +46,14 @@ SYSTEM_PROMPT = (
     "this tunes where new items are placed by default. Prefer "
     "calling a tool over guessing. When you record that food went bad, be gentle and "
     "offer a practical tip. Keep replies short and to the point."
+    " Reporting a bug: if the user says something is broken or wrong, or asks to report "
+    "a bug or send feedback, walk them through it — ask, one at a time, what they were "
+    "doing, what went wrong, and what they expected. Once you have enough, reply with a "
+    "short summary: a one-line title, then what happened / what they expected / any steps "
+    "— and end the message with [[REPORT_BUG]] on its own line. The app strips that marker "
+    "and opens the bug reporter prefilled with your summary for the user to review and "
+    "submit. Only add the marker once you actually have a summary, never just because a "
+    "bug was mentioned in passing."
 )
 
 _MYMEAL_PROMPT = (

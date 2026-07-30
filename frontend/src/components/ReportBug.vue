@@ -12,13 +12,15 @@ const VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'unkn
 // the ~8 KB browser/GitHub ceiling before falling back to the clipboard.
 const MAX_URL = 6800
 
+const props = defineProps({ initial: { type: Object, default: null } })
 const emit = defineEmits(['close'])
 const route = useRoute()
 function close() { emit('close') }
 
-const type = ref('bug') // 'bug' | 'feature'
+// The chat's bug-report walkthrough can hand us a prefilled description + type.
+const type = ref(props.initial?.type || 'bug') // 'bug' | 'feature'
 const title = ref('')
-const description = ref('')
+const description = ref(props.initial?.description || '')
 const includeDiag = ref(true)
 const diagText = ref('')
 const loading = ref(true)

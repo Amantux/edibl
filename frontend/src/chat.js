@@ -4,6 +4,9 @@ import { ref } from 'vue'
 
 export const chatOpen = ref(false)
 export const chatPrefill = ref('')
+// Set by the assistant's bug-report walkthrough to open ReportBug prefilled.
+export const bugReport = ref(null)   // { description, type? } | null
+export function openBugReport(payload) { bugReport.value = payload }
 
 // Open the assistant, optionally seeding the input with `text`.
 export function askEdibl(text = '') {

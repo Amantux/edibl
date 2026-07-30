@@ -5,6 +5,7 @@ import { me, ensureMe } from './me'
 import ChatAssistant from './components/ChatAssistant.vue'
 import Toaster from './components/Toaster.vue'
 import ReportBug from './components/ReportBug.vue'
+import { bugReport } from './chat'
 const route = useRoute()
 const menuOpen = ref(false)
 const showReport = ref(false)
@@ -65,7 +66,8 @@ watch(() => route.path, () => { menuOpen.value = false })
     </aside>
     <main id="main" class="main"><div class="content"><router-view /></div></main>
     <ChatAssistant />
-    <ReportBug v-if="showReport" @close="showReport = false" />
+    <ReportBug v-if="showReport || bugReport" :initial="bugReport"
+               @close="showReport = false; bugReport = null" />
     <Toaster />
   </div>
 </template>

@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, nextTick, onMounted, watch } from 'vue'
 import { api, streamPost } from '../api'
-import { chatOpen, chatPrefill } from '../chat'
+import { chatOpen, chatPrefill, openBugReport } from '../chat'
 import { dataChanged } from '../live'
 
 const open = ref(false)
@@ -61,9 +61,22 @@ async function scrollDown() {
   if (body.value) body.value.scrollTop = body.value.scrollHeight
 }
 
+// The assistant ends a completed bug-report walkthrough with a [[REPORT_BUG]] marker:
+// strip it from what we show and stash the cleaned summary so we can offer to open the
+// bug reporter prefilled with it.
+const BUG_MARKER = '[[REPORT_BUG]]'
+function applyBugMarker(m) {
+  if (m.content && m.content.includes(BUG_MARKER)) {
+    m.content = m.content.replaceAll(BUG_MARKER, '').trim()
+    m.bugReportSummary = m.content
+  }
+}
+
 async function sendPost(payload) {
   const res = await api.post('/assistant/chat', { messages: payload })
-  msgs.value.push({ role: 'assistant', content: res.reply, actions: res.actions || [] })
+  const m = { role: 'assistant', content: res.reply, actions: res.actions || [] }
+  applyBugMarker(m)
+  msgs.value.push(m)
   if ((res.actions || []).some((a) => a.undoable)) dataChanged()
 }
 
@@ -77,6 +90,7 @@ async function sendStream(payload) {
       if (ev.type === 'delta') { a.content += ev.text; scrollDown() }
       else if (ev.type === 'done') {
         a.content = ev.reply || a.content
+        applyBugMarker(a)
         a.actions = ev.actions || []
         if (a.actions.some((x) => x.undoable)) dataChanged()
       } else if (ev.type === 'error') { errored = new Error(ev.error || 'Something went wrong.') }
@@ -162,6 +176,9 @@ async function undoAction(a) {
           <div class="bubble">
             <template v-if="m.content">{{ m.content }}</template>
             <span v-else class="muted">…</span>
+          </div>
+          <div v-if="m.bugReportSummary" class="acts">
+            <button class="chip-btn" @click="openBugReport({ description: m.bugReportSummary })">📋 Open bug report</button>
           </div>
           <div v-if="m.actions && m.actions.length" class="acts">
             <div v-for="(a, j) in m.actions" :key="j" class="act" :class="{ mut: a.undoable, done: a.undone }">

@@ -65,6 +65,19 @@ open on the internal network — so if you map port `7767` for LAN access, turn 
 one of those first. Minting a *Full* key in open mode does **not** by itself lock
 the MCP port.
 
+**Reaching MCP from outside Home Assistant.** To use the MCP server from another
+machine (a desktop agent, a remote client), do **both**:
+
+1. Mint an **MCP** (or Full) key in *Settings → Access & keys* and keep it safe.
+2. Turn on **`mcp_expose_external`** and map port **`7767`** in the add-on's
+   *Network* tab.
+
+With `mcp_expose_external` on, every request **must** carry that key as a Bearer
+token, and the server **refuses to start** until at least one MCP or Full key
+exists — it will never come up open on a mapped port. Revoke the key to cut a
+client off. TLS is your reverse proxy's job if you expose this to the internet;
+prefer a VPN/tunnel over a raw WAN port.
+
 ## External database (Postgres)
 
 Edibl stores everything in an embedded **SQLite** database in `/data` by default —

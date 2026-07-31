@@ -25,6 +25,7 @@ export EDIBL_BARCODE_LOOKUP="$(getb barcode_lookup)"
 export EDIBL_BARCODE_DB_KEY="$(gets barcode_db_key)"
 export EDIBL_MCP_ENABLED="$(getb mcp_enabled)"
 export EDIBL_MCP_SERVER_TOKEN="$(gets mcp_server_token)"
+export EDIBL_MCP_EXPOSE_EXTERNAL="$(getb mcp_expose_external)"
 # Optional external Postgres; blank keeps the built-in SQLite in /data.
 export EDIBL_DATABASE_URL="$(gets database_url)"
 export EDIBL_MIGRATE_FROM_SQLITE="$(getb migrate_from_sqlite)"

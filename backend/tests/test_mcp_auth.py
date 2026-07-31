@@ -76,3 +76,47 @@ def test_auth_required_fails_closed_on_db_error(monkeypatch):
         raise RuntimeError("db down")
     monkeypatch.setattr(edibl_mcp, "_get_app", boom)
     assert edibl_mcp._auth_required("") is True
+
+
+def test_expose_external_forces_auth_even_in_open_mode(app, monkeypatch):
+    # Open mode + no mcp key would normally serve OPEN; exposing the port outside HA
+    # makes auth mandatory regardless.
+    monkeypatch.setattr(edibl_mcp, "_app", app)
+    app.config["DISABLE_AUTH"] = True
+    monkeypatch.delenv("EDIBL_MCP_EXPOSE_EXTERNAL", raising=False)
+    assert edibl_mcp._auth_required("") is False        # baseline: open
+    monkeypatch.setenv("EDIBL_MCP_EXPOSE_EXTERNAL", "true")
+    assert edibl_mcp._auth_required("") is True          # exposed ⇒ required
+
+
+def test_refuse_to_serve_when_exposed_without_mcp_key(app, monkeypatch):
+    monkeypatch.setattr(edibl_mcp, "_app", app)
+    monkeypatch.setenv("EDIBL_MCP_EXPOSE_EXTERNAL", "true")
+    assert edibl_mcp._should_refuse_to_serve() is True   # exposed + no key → refuse
+    _add_key(app, "mcp")
+    assert edibl_mcp._should_refuse_to_serve() is False  # once a client key exists, serve
+
+
+def test_refuse_to_serve_accepts_a_full_key(app, monkeypatch):
+    # Refuse-to-serve asks "is there a usable credential?" — a Full key authenticates
+    # every request (docs say "mint an MCP or Full key"), so it must let the server
+    # boot, even though it does NOT flip the auto-gate (see test_gate_requires_mcp...).
+    monkeypatch.setattr(edibl_mcp, "_app", app)
+    monkeypatch.setenv("EDIBL_MCP_EXPOSE_EXTERNAL", "true")
+    _add_key(app, "full")
+    assert edibl_mcp._should_refuse_to_serve() is False  # full key is usable → serve
+
+
+def test_refuse_to_serve_off_when_not_exposed(app, monkeypatch):
+    monkeypatch.setattr(edibl_mcp, "_app", app)
+    monkeypatch.delenv("EDIBL_MCP_EXPOSE_EXTERNAL", raising=False)
+    assert edibl_mcp._should_refuse_to_serve() is False  # internal-only never refuses
+
+
+def test_refuse_to_serve_fails_closed_on_db_error(monkeypatch):
+    monkeypatch.setenv("EDIBL_MCP_EXPOSE_EXTERNAL", "true")
+
+    def boom():
+        raise RuntimeError("db down")
+    monkeypatch.setattr(edibl_mcp, "_usable_mcp_key_exists", boom)
+    assert edibl_mcp._should_refuse_to_serve() is True   # can't verify ⇒ refuse

@@ -512,12 +512,55 @@ def _mcp_key_exists() -> bool:
         return exists
 
 
+def _usable_mcp_key_exists() -> bool:
+    """True if ANY key that `_key_ok` would accept exists — scope `mcp` OR `full`.
+    Used by refuse-to-serve: the question there is "is there a usable credential to
+    let a client in?", so a Full key counts (it authenticates every request), matching
+    the docs' "mint an MCP or Full key". (`_auth_required` uses the stricter mcp-only
+    `_mcp_key_exists` — minting a Full key must not silently lock an open endpoint.)
+    Raises on a DB error so the caller can fail closed."""
+    app = _get_app()
+    from app.extensions import db
+    from app.models import ApiToken
+    with app.app_context():
+        exists = (db.session.query(ApiToken.id)
+                  .filter(ApiToken.scope.in_(("mcp", "full"))).first() is not None)
+        db.session.remove()
+        return exists
+
+
+def _expose_external() -> bool:
+    """Operator opted the MCP port out of Home Assistant (`mcp_expose_external`).
+    When on, auth is mandatory regardless of mode and the server refuses to bind
+    without a usable key (see `_should_refuse_to_serve`)."""
+    return os.environ.get("EDIBL_MCP_EXPOSE_EXTERNAL", "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def _should_refuse_to_serve() -> bool:
+    """When the port is exposed outside HA, refuse to bind unless a usable key
+    (scope `mcp` or `full`) exists to authenticate external clients — never open a
+    WAN-reachable MCP with no credential set. Fails CLOSED (any DB error → refuse).
+    A no-op when `mcp_expose_external` is off."""
+    if not _expose_external():
+        return False
+    try:
+        return not _usable_mcp_key_exists()
+    except Exception as exc:  # noqa: BLE001 — can't verify keys ⇒ don't serve
+        print(f"edibl-mcp: could not verify MCP keys, refusing to serve: {exc}",
+              file=sys.stderr)
+        return True
+
+
 def _auth_required(server_token: str) -> bool:
-    """Whether the MCP endpoint requires authentication. Required when: a legacy
-    server token is set, the app runs in hardened mode (`DISABLE_AUTH` off — so a
-    hardened app means a hardened MCP), or an `mcp`-scoped key has been minted.
-    Fails CLOSED — any error resolves to *required* (unlike the key check, here
-    returning False would serve the request unauthenticated)."""
+    """Whether the MCP endpoint requires authentication. Required when: the port is
+    exposed outside HA (`mcp_expose_external`), a legacy server token is set, the app
+    runs in hardened mode (`DISABLE_AUTH` off — so a hardened app means a hardened
+    MCP), or an `mcp`-scoped key has been minted. Fails CLOSED — any error resolves
+    to *required* (unlike the key check, here returning False would serve the request
+    unauthenticated)."""
+    if _expose_external():
+        return True
     if server_token:
         return True
     try:
@@ -560,8 +603,19 @@ if __name__ == "__main__":
     server_token = os.environ.get("EDIBL_MCP_SERVER_TOKEN", "")
     # Always wrap: the guard itself decides per-request whether auth is required, so
     # minting an MCP key later gates the endpoint without a restart.
+    # Fail closed: an externally-exposed endpoint must have a mintable client key.
+    if _should_refuse_to_serve():
+        print("edibl-mcp: mcp_expose_external is ON but no 'mcp'-scoped API key "
+              "exists — mint one in Settings → Access & keys, then restart. Refusing "
+              "to serve an externally-reachable MCP with no client credential.",
+              file=sys.stderr)
+        sys.exit(1)
     app = _guard(mcp.sse_app(), server_token)
-    if not server_token:
+    if _expose_external():
+        print("edibl-mcp: mcp_expose_external ON — every request must carry a Bearer "
+              "MCP/Full API key. Map port 7767 in the add-on Network tab to reach it.",
+              file=sys.stderr)
+    elif not server_token:
         print("edibl-mcp: no EDIBL_MCP_SERVER_TOKEN — MCP is open until you mint an "
               "'mcp'-scoped key in Settings → Access & keys.", file=sys.stderr)
     import uvicorn

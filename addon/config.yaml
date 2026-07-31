@@ -37,7 +37,7 @@ ports:
   7767/tcp: null
 ports_description:
   7746/tcp: Edibl REST API — map only for the HACS integration / LAN access
-  7767/tcp: Edibl MCP server (SSE) — set mcp_server_token before exposing
+  7767/tcp: Edibl MCP server (SSE) — turn on mcp_expose_external + mint a Full/MCP API key before mapping
 options:
   disable_auth: true
   llm_provider: ""
@@ -49,6 +49,7 @@ options:
   barcode_db_key: ""
   mcp_enabled: true
   mcp_server_token: ""
+  mcp_expose_external: false
   database_url: ""
   migrate_from_sqlite: false
   use_shared_postgres: false
@@ -70,6 +71,11 @@ schema:
   barcode_db_key: password?
   mcp_enabled: bool
   mcp_server_token: password
+  # Reach the MCP server from OUTSIDE Home Assistant. When on, the MCP endpoint
+  # requires a Bearer API key (Full or MCP scope) on every request and refuses to
+  # start until you mint one (Settings → Access & keys). You must ALSO map port
+  # 7767 in the Network tab. Leave off for normal in-HA use (Assist voice).
+  mcp_expose_external: bool
   # Optional external Postgres. Blank = the built-in SQLite in /data (recommended
   # for most). Format: postgresql+psycopg://user:pass@host:5432/dbname
   database_url: password?

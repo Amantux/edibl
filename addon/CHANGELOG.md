@@ -3,8 +3,25 @@
 All notable changes to the Edibl add-on. The patch version is **auto-bumped by
 CI** on every release push, so Home Assistant always sees an update.
 
-## Unreleased
+## 1.6.0 — Stable release
 
+A stability milestone bringing this cycle's work together.
+
+- **Groceries land in the right place.** Known items (milk, ice cream, …) are
+  auto-filed to the correct location on intake; low-confidence guesses go to a
+  highlighted **To place** review queue you fix in one tap. Cleaner sub-item
+  nesting in the stock table.
+- **One database, one AI setup across your apps.** Auto-provision Edibl's database
+  on the **Shared PostgreSQL** add-on (opt-in — flip `use_shared_postgres`), copy AI
+  provider settings between Edibl / HomeHoard / myMeal from the Settings page
+  (optionally including the key), and a Database-page helper for pointing all three
+  at one Postgres.
+- **MCP, reachable and safe.** Expose the MCP server outside Home Assistant behind
+  per-client, revocable API keys (`mcp_expose_external`). Every key now has an
+  **access class — Read-Only or Read-Write** — and a scope (Full / REST / MCP),
+  enforced on both the API and the MCP tools.
+- **Report a bug from chat.** The assistant walks you through a short report and
+  opens a prefilled GitHub issue; streaming replies are a Settings toggle.
 - **Smarter barcode scanning (1D + 2D).** The scanner now tells 1D product codes
   (UPC/EAN/Code128…) apart from 2D codes (QR/DataMatrix…), so a QR code is no
   longer mistaken for a food barcode. With `barcode_lookup` on, an unknown 1D

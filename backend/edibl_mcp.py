@@ -19,6 +19,7 @@ Outbound auth (this server → REST API): set EDIBL_MCP_API_TOKEN when app auth 
   (the add-on wires the minted integration key here in hardened mode).
 """
 import hmac
+import json as _json
 import os
 import sys
 
@@ -573,9 +574,94 @@ def _auth_required(server_token: str) -> bool:
         return True
 
 
+# Read-only allowlist: the MCP tools a `read`-access key may invoke. Anything NOT
+# listed (mutating tools + any future/unknown tool) is refused to a read-only key —
+# fail-safe by default. Keep in sync with the @mcp.tool() registrations above.
+READ_TOOLS = frozenset({
+    "do_i_have", "whats_in_stock", "expiring_soon", "runout_forecast",
+    "freezer_inventory", "wine_cellar", "check_recipe", "plan_status",
+    "grouped_stock", "food_insights", "shopping_list", "search_products",
+    "reorder_suggestions",
+})
+
+
+def _key_access(raw: str) -> str:
+    """The access class ('write' | 'read') for a valid MCP key, else '' if the key
+    is unknown/invalid. Fails safe to 'read' on a DB error (deny writes, never open)."""
+    if not raw:
+        return ""
+    try:
+        app = _get_app()
+        from app.extensions import db
+        from app.models import ApiToken, hash_token
+        with app.app_context():
+            rec = db.session.query(ApiToken).filter_by(token_hash=hash_token(raw)).first()
+            if rec is None or (rec.scope or "full") not in ("mcp", "full"):
+                db.session.remove()
+                return ""
+            acc = (rec.access or "write")
+            db.session.remove()
+            return acc
+    except Exception as exc:  # noqa: BLE001 — a broken lookup must not grant write
+        print(f"edibl-mcp: access check failed, treating key as read-only: {exc}",
+              file=sys.stderr)
+        return "read"
+
+
+def _header_access(header_value: str, server_token: str) -> str:
+    """Access class for the presented credential. The static server token is full
+    write; a Bearer API key resolves via _key_access; anything else is ''."""
+    if server_token and hmac.compare_digest(header_value, f"Bearer {server_token}"):
+        return "write"
+    if header_value.startswith("Bearer "):
+        return _key_access(header_value[len("Bearer "):].strip())
+    return ""
+
+
+async def _drain_body(receive):
+    """Buffer the full ASGI request body and return (body_bytes, replay_receive) so
+    the body can be inspected and then passed through to the downstream app intact."""
+    chunks, more = [], True
+    while more:
+        msg = await receive()
+        if msg["type"] == "http.request":
+            chunks.append(msg.get("body", b""))
+            more = msg.get("more_body", False)
+        else:  # http.disconnect
+            break
+    body = b"".join(chunks)
+    sent = False
+
+    async def replay():
+        nonlocal sent
+        if not sent:
+            sent = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        return {"type": "http.disconnect"}
+
+    return body, replay
+
+
+def _body_has_write_toolcall(body: bytes) -> bool:
+    """True if the JSON-RPC body invokes a tool NOT on the READ_TOOLS allowlist.
+    Handles a single message or a batch; an unparseable body is left to the
+    downstream server to reject (not our decision)."""
+    try:
+        msg = _json.loads(body or b"{}")
+    except Exception:  # noqa: BLE001
+        return False
+    items = msg if isinstance(msg, list) else [msg]
+    for it in items:
+        if isinstance(it, dict) and it.get("method") == "tools/call":
+            name = (it.get("params") or {}).get("name")
+            if name not in READ_TOOLS:
+                return True
+    return False
+
+
 def _guard(asgi_app, server_token: str):
-    """ASGI gate. See _auth_required for when auth is enforced; otherwise the
-    endpoint is open (zero-config)."""
+    """ASGI gate. Enforces authentication (see _auth_required) and, for a read-only
+    key, refuses MCP write-tools — a `read` key may only invoke READ_TOOLS."""
     async def wrapper(scope, receive, send):
         if scope["type"] == "http":
             header = dict(scope.get("headers") or []).get(b"authorization", b"").decode()
@@ -584,6 +670,16 @@ def _guard(asgi_app, server_token: str):
                             "headers": [(b"content-type", b"text/plain")]})
                 await send({"type": "http.response.body", "body": b"unauthorized"})
                 return
+            # A read-only key may only call read tools. Inspect the tools/call body;
+            # write keys and non-POST requests pass through untouched.
+            if scope.get("method") == "POST" and _header_access(header, server_token) == "read":
+                body, receive = await _drain_body(receive)
+                if _body_has_write_toolcall(body):
+                    payload = b'{"error":"this API key is read-only"}'
+                    await send({"type": "http.response.start", "status": 403,
+                                "headers": [(b"content-type", b"application/json")]})
+                    await send({"type": "http.response.body", "body": payload})
+                    return
         await asgi_app(scope, receive, send)
 
     return wrapper

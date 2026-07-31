@@ -80,6 +80,11 @@ TOKEN_PREFIX = "edbl_"
 # is REST-API only; `mcp` is the MCP server only. Enforced in auth._user_from_api_token
 # (REST) and edibl_mcp._authorize (MCP).
 TOKEN_SCOPES = ("full", "rest", "mcp")
+# Per-key access class. `write` reaches read+write (default for legacy keys); `read`
+# is read-only — mutating REST methods (POST/PUT/PATCH/DELETE) are 403'd and MCP
+# write-tools are refused. Orthogonal to scope. Enforced in auth (REST) + edibl_mcp
+# (MCP). See TOKEN_ACCESS.
+TOKEN_ACCESS = ("write", "read")
 
 
 def generate_raw_token() -> str:
@@ -96,7 +101,8 @@ class ApiToken(IDMixin, TimestampMixin, db.Model):
     name: Mapped[str] = mapped_column(String(255), default="")
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     hint: Mapped[str] = mapped_column(String(16), default="")
-    scope: Mapped[str] = mapped_column(String(16), default="full")  # full | rest | mcp
+    scope: Mapped[str] = mapped_column(String(16), default="full", server_default="full")  # full | rest | mcp
+    access: Mapped[str] = mapped_column(String(8), default="write", server_default="write")  # write | read
     last_used_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"))
     group_id: Mapped[str] = mapped_column(String(36), ForeignKey("groups.id"), index=True)

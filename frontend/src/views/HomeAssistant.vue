@@ -6,18 +6,21 @@ import { api } from '../api'
 const tokens = ref([])
 const newTokenName = ref('')
 const newTokenScope = ref('full')   // full | rest | mcp — what the key unlocks
+const newTokenAccess = ref('write') // write | read — read-only blocks all mutations
 const minted = ref(null)            // { token, name } — raw token, shown once
 const connectUrl = ref('')          // address other apps use to reach this Edibl
 const keysBusy = ref(false)
 const keysMsg = ref('')
 const SCOPE_LABELS = { full: 'Full access', rest: 'REST API only', mcp: 'MCP only' }
 function scopeLabel(s) { return SCOPE_LABELS[s] || SCOPE_LABELS.full }
+const ACCESS_LABELS = { write: 'Read & write', read: 'Read-only' }
+function accessLabel(a) { return ACCESS_LABELS[a] || ACCESS_LABELS.write }
 async function loadTokens() { try { tokens.value = await api.get('/tokens') } catch (e) { /* auth off / optional */ } }
 async function mintToken() {
   keysBusy.value = true; keysMsg.value = ''
   try {
-    const r = await api.post('/tokens', { name: newTokenName.value || 'Connected app', scope: newTokenScope.value })
-    minted.value = { token: r.token, name: r.name, scope: r.scope }
+    const r = await api.post('/tokens', { name: newTokenName.value || 'Connected app', scope: newTokenScope.value, access: newTokenAccess.value })
+    minted.value = { token: r.token, name: r.name, scope: r.scope, access: r.access }
     newTokenName.value = ''
     await loadTokens()
   } catch (e) { keysMsg.value = '⚠️ ' + (e.message || 'could not create token') } finally { keysBusy.value = false }
@@ -65,11 +68,16 @@ onMounted(() => {
     <div class="row" style="align-items:flex-end;gap:8px">
       <label class="field" style="flex:1"><span>New key name (what's it for?)</span>
         <input v-model="newTokenName" placeholder="e.g. HA MCP, myMeal" @keyup.enter="mintToken" /></label>
-      <label class="field" style="width:220px"><span>Access</span>
+      <label class="field" style="width:200px"><span>Scope</span>
         <select v-model="newTokenScope">
           <option value="full">Full access (API + MCP)</option>
           <option value="rest">REST API only</option>
           <option value="mcp">MCP only</option>
+        </select></label>
+      <label class="field" style="width:160px"><span>Access</span>
+        <select v-model="newTokenAccess">
+          <option value="write">Read &amp; write</option>
+          <option value="read">Read-only</option>
         </select></label>
       <button :disabled="keysBusy" @click="mintToken" style="height:38px">Generate</button>
     </div>
@@ -78,7 +86,7 @@ onMounted(() => {
       otherwise it stays open on the internal network. Minting a Full key alone (in open mode) does <em>not</em> lock it.</p>
 
     <div v-if="minted" style="border:1px solid var(--primary,#2f9e57);border-radius:8px;padding:10px 12px;margin-top:10px;background:rgba(47,158,87,.10)">
-      <p style="margin:0 0 6px"><strong>New key “{{ minted.name }}”</strong> <span class="chip">{{ scopeLabel(minted.scope) }}</span> — copy it now, it won't be shown again.</p>
+      <p style="margin:0 0 6px"><strong>New key “{{ minted.name }}”</strong> <span class="chip">{{ scopeLabel(minted.scope) }}</span> <span class="chip">{{ accessLabel(minted.access) }}</span> — copy it now, it won't be shown again.</p>
       <code style="display:block;word-break:break-all;background:var(--surface-raised,#f6f6f6);padding:6px 8px;border-radius:6px;font-size:.8rem">{{ minted.token }}</code>
       <div class="row wrap" style="gap:8px;margin-top:8px">
         <button class="secondary sm" @click="copyText(minted.token, 'Token')">Copy token</button>
@@ -89,11 +97,12 @@ onMounted(() => {
     </div>
 
     <table v-if="tokens.length" style="width:100%;margin-top:12px;font-size:.9rem">
-      <thead><tr><th style="text-align:left">Name</th><th style="text-align:left">Access</th><th style="text-align:left">Hint</th><th></th></tr></thead>
+      <thead><tr><th style="text-align:left">Name</th><th style="text-align:left">Scope</th><th style="text-align:left">Access</th><th style="text-align:left">Hint</th><th></th></tr></thead>
       <tbody>
         <tr v-for="t in tokens" :key="t.id">
           <td>{{ t.name }}</td>
           <td><span class="chip">{{ scopeLabel(t.scope) }}</span></td>
+          <td><span class="chip">{{ accessLabel(t.access) }}</span></td>
           <td class="muted"><code>{{ t.hint }}…</code></td>
           <td style="text-align:right"><button class="ghost sm" style="color:var(--danger)" @click="revokeToken(t.id)">Revoke</button></td>
         </tr>

@@ -160,11 +160,21 @@ def _user_from_api_token(raw: str):
     # for the MCP server alone). `full`/`rest` (and legacy NULL→"full") pass.
     if (rec.scope or "full") == "mcp":
         return None
+    # Read/write class for this key — read the guards in login_required/owner_required
+    # 403 mutating methods. Only set for API-token auth; JWT/ingress default to write.
+    g.token_access = rec.access or "write"
     now = datetime.utcnow()
     if rec.last_used_at is None or (now - rec.last_used_at).total_seconds() > 60:
         rec.last_used_at = now
         db.session.commit()
     return db.session.get(User, rec.user_id)
+
+
+def _read_only_write_blocked() -> bool:
+    """A read-only API key must not perform a mutating request. Safe methods pass;
+    non-token identities (JWT/ingress) have no token_access → treated as write."""
+    return (getattr(g, "token_access", "write") == "read"
+            and request.method not in ("GET", "HEAD", "OPTIONS"))
 
 
 def load_current_user():
@@ -211,6 +221,8 @@ def login_required(fn):
             _LOGGER.warning("unauthorized %s %s from %s",
                             request.method, request.path, request.remote_addr)
             return jsonify({"error": "unauthorized"}), 401
+        if _read_only_write_blocked():
+            return jsonify({"error": "this API key is read-only"}), 403
         g.current_user = user
         g.current_group = user.group
         return fn(*args, **kwargs)
@@ -227,6 +239,8 @@ def owner_required(fn):
             return jsonify({"error": "unauthorized"}), 401
         if not user.is_owner:
             return jsonify({"error": "owner privileges required"}), 403
+        if _read_only_write_blocked():
+            return jsonify({"error": "this API key is read-only"}), 403
         g.current_user = user
         g.current_group = user.group
         return fn(*args, **kwargs)
@@ -249,6 +263,8 @@ def instance_admin_required(fn):
         primary = db.session.query(Group).order_by(Group.created_at.asc()).first()
         if not user.is_owner or primary is None or user.group_id != primary.id:
             return jsonify({"error": "instance administrator privileges required"}), 403
+        if _read_only_write_blocked():
+            return jsonify({"error": "this API key is read-only"}), 403
         g.current_user = user
         g.current_group = user.group
         return fn(*args, **kwargs)

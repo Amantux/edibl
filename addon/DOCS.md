@@ -48,6 +48,13 @@ You control all other machine access from the UI at **Settings → Access & keys
 - **REST API only** — the HTTP API (sensors, integrations, exports).
 - **MCP only** — the MCP tool server (`/sse`) and nothing else.
 
+…and an **access** class, independent of scope:
+
+- **Read & write** (default) — full use of whatever the scope allows.
+- **Read-only** — can only *read*: mutating REST calls (POST/PUT/PATCH/DELETE) get
+  `403`, and MCP write-tools (add/update/delete/move/consume/…) are refused; query
+  tools still work. Ideal for an external MCP client that should look but not touch.
+
 Revoking a key cuts that access immediately.
 
 **Hardened mode** (`disable_auth: false`): unauthenticated internal callers get

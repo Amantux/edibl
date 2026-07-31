@@ -57,6 +57,10 @@ onMounted(loadJobAi)
 const syncPaste = ref('')
 const syncMsg = ref('')
 const syncApplying = ref(false)
+// Opt-in: include the provider API key in the copied string. Its own field —
+// the main provider form's apiKey is write-only and cleared after save.
+const syncIncludeKey = ref(false)
+const syncKey = ref('')
 
 function b64encode(str) {
   const bytes = new TextEncoder().encode(str)
@@ -79,44 +83,58 @@ function copyAiSettings() {
     jobEnrich: { provider: jobAi.value.enrich?.provider || '', model: jobAi.value.enrich?.model || '' },
     jobOrganize: { provider: jobAi.value.organize?.provider || '', model: jobAi.value.organize?.model || '' },
   }
-  const str = 'AICFG1:' + b64encode(JSON.stringify(cfg))
+  // Only carry the key when the operator opts in AND typed one — and only then
+  // bump to the AICFG2 marker so a keyless copy is byte-for-byte the old AICFG1.
+  const withKey = syncIncludeKey.value && !!syncKey.value.trim()
+  if (withKey) cfg.apiKey = syncKey.value.trim()
+  const str = (withKey ? 'AICFG2:' : 'AICFG1:') + b64encode(JSON.stringify(cfg))
+  const done = () => { syncKey.value = ''; syncIncludeKey.value = false }
   try {
     navigator.clipboard.writeText(str)
-    ui.success('Copied — paste into your other apps’ Settings. Your API key is not included.')
+    ui.success(withKey
+      ? 'Copied, including your API key — paste into your other apps’ Settings, then clear your clipboard.'
+      : 'Copied — paste into your other apps’ Settings. Your API key is not included.')
+    done()
   } catch (e) {
     // Clipboard unavailable (e.g. insecure context) — surface it to copy by hand.
     syncPaste.value = str
     ui.info('Copy the string in the box below into your other apps’ Settings.')
+    done()
   }
 }
 
 async function applyAiSettings() {
   const raw = (syncPaste.value || '').trim()
   syncMsg.value = ''
-  if (!raw.startsWith('AICFG1:')) {
+  const prefix = ['AICFG1:', 'AICFG2:'].find((p) => raw.startsWith(p))
+  if (!prefix) {
     syncMsg.value = '⚠️ That doesn’t look like an AI settings string (it should start with “AICFG1:”).'
     return
   }
   let cfg = null
-  try { cfg = JSON.parse(b64decode(raw.slice('AICFG1:'.length))) } catch (e) { cfg = null }
+  try { cfg = JSON.parse(b64decode(raw.slice(prefix.length))) } catch (e) { cfg = null }
   if (!cfg || typeof cfg !== 'object') {
     syncMsg.value = '⚠️ Couldn’t read that settings string — it may be incomplete or copied wrong.'
     return
   }
   syncApplying.value = true
   try {
-    // Never send apiKey — the string carries no secret, and each app keeps its own.
-    await api.put('/assistant/settings', {
-      provider: cfg.provider || '', baseUrl: cfg.baseUrl || '', model: cfg.model || '',
-    })
+    // Carry the key only when the string included one (AICFG2); a blank/absent
+    // apiKey is omitted so the endpoint leaves the stored key unchanged.
+    const settings = { provider: cfg.provider || '', baseUrl: cfg.baseUrl || '', model: cfg.model || '' }
+    if (typeof cfg.apiKey === 'string' && cfg.apiKey) settings.apiKey = cfg.apiKey
+    await api.put('/assistant/settings', settings)
     await api.put('/assistant/chat-settings', { stream: !!cfg.stream })
     await api.put('/assistant/job-settings', {
       enrich: cfg.jobEnrich || { provider: '', model: '' },
       organize: cfg.jobOrganize || { provider: '', model: '' },
     })
     await Promise.all([loadSettings(), loadChatDefault(), loadJobAi()])
-    syncPaste.value = ''
-    ui.success('AI settings applied. Add this provider’s API key above if it needs one.')
+    const hadKey = typeof cfg.apiKey === 'string' && !!cfg.apiKey
+    syncPaste.value = ''  // don't leave the secret in the DOM
+    ui.success(hadKey
+      ? 'AI settings and API key applied.'
+      : 'AI settings applied. Add this provider’s API key above if it needs one.')
   } catch (e) {
     syncMsg.value = '⚠️ ' + (e.message || 'Could not apply settings.')
   } finally {
@@ -462,11 +480,21 @@ async function resetSettings() {
     <h2>🔗 Sync AI settings to your other apps</h2>
     <p class="muted" style="margin-top:0">Running Edibl, HomeHoard and myMeal together? Copy your AI
       configuration here and paste it into the others so all three use the same provider, model,
-      streaming and background-task choices. <strong>Your API key is never included</strong> — add each
-      app’s key on its own Settings page.</p>
+      streaming and background-task choices. <strong>Your API key is left out by default</strong> — tick the
+      box below to include it, or add each app’s key on its own Settings page.</p>
+    <label class="row" style="gap:8px;align-items:center;margin-bottom:6px;font-size:.9rem">
+      <input type="checkbox" v-model="syncIncludeKey" />
+      <span>Also include my API key in the copied text</span>
+    </label>
+    <label v-if="syncIncludeKey" class="field" style="margin-bottom:6px">
+      <span>API key to include</span>
+      <input type="password" v-model="syncKey" autocomplete="off" placeholder="Paste the provider key to copy" /></label>
+    <p v-if="syncIncludeKey" class="muted" style="font-size:.8rem;margin:0 0 10px">⚠️ Your API key will be
+      embedded in the copied text — treat it like a password and only paste it into your own apps, then
+      clear your clipboard.</p>
     <div class="row wrap" style="gap:8px;align-items:center;margin-bottom:12px">
       <button class="secondary" @click="copyAiSettings">📋 Copy AI settings</button>
-      <span class="muted" style="font-size:.8rem">Copies everything except the API key.</span>
+      <span class="muted" style="font-size:.8rem">{{ syncIncludeKey ? 'Copies your settings and the key above.' : 'Copies everything except the API key.' }}</span>
     </div>
     <label class="field"><span>Paste settings from another app</span>
       <input v-model="syncPaste" placeholder="AICFG1:…" @keyup.enter="applyAiSettings" /></label>

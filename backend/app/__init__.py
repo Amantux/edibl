@@ -106,6 +106,24 @@ def _init_schema(app):
             seed_all_households()
 
 
+def _warn_stranded_sqlite(app, db_filename):
+    """Loudly warn when the app is about to serve a Postgres database (external or
+    shared-add-on provisioned) while a populated local SQLite still sits in
+    DATA_DIR and migrate_from_sqlite is OFF — i.e. the inventory would look empty
+    and the existing data is stranded (recoverable, not deleted). Silent in the
+    normal cases (SQLite target, or no local DB to strand)."""
+    if app.config["SQLALCHEMY_DATABASE_URI"].startswith("sqlite"):
+        return
+    src_file = os.path.join(app.config["DATA_DIR"], db_filename)
+    if not os.path.exists(src_file):
+        return
+    _LOGGER.warning(
+        "A Postgres database is configured but migrate_from_sqlite is off, and a "
+        "local %s still holds data. The app is serving Postgres, which may be "
+        "empty — your SQLite data is intact but not shown. To copy it over, enable "
+        "migrate_from_sqlite and restart once.", src_file)
+
+
 def _maybe_boot_migrate(app):
     """HA add-on convenience: when EDIBL_MIGRATE_FROM_SQLITE is on and the app is
     configured for an external (Postgres) DB, copy the local SQLite database into
@@ -116,6 +134,7 @@ def _maybe_boot_migrate(app):
     real data is stranded in SQLite — the operator sees the failure, the SQLite
     source is untouched, and a fixed retry (or reverting database_url) recovers."""
     if not app.config.get("MIGRATE_FROM_SQLITE"):
+        _warn_stranded_sqlite(app, "edibl.db")
         return
     target = app.config["SQLALCHEMY_DATABASE_URI"]
     if target.startswith("sqlite"):

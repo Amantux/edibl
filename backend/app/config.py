@@ -18,6 +18,14 @@ class Config:
     # One-shot: when DATABASE_URL points at an EMPTY Postgres and a local SQLite DB
     # exists, copy the SQLite data into Postgres on startup before serving.
     MIGRATE_FROM_SQLITE = _bool("EDIBL_MIGRATE_FROM_SQLITE", False)
+    # Home Assistant only: discover the "Shared PostgreSQL" add-on and use a
+    # database it provisions for Edibl. The entrypoint's pg_provision step writes
+    # the discovered DSN to <DATA_DIR>/.database_url, which sqlalchemy_uri reads.
+    # Ignored when DATABASE_URL is set. Off by default (built-in SQLite).
+    USE_SHARED_POSTGRES = _bool("EDIBL_USE_SHARED_POSTGRES", False)
+    # Token for the Shared PostgreSQL add-on's provisioning API. Blank = auto-obtain
+    # it via Supervisor discovery; set it if discovery can't supply it.
+    POSTGRES_PROVISION_TOKEN = os.environ.get("EDIBL_POSTGRES_PROVISION_TOKEN", "")
 
     # --- Security --------------------------------------------------------
     SECRET_KEY = os.environ.get("EDIBL_SECRET_KEY", "change-me-in-production")
@@ -101,22 +109,38 @@ class Config:
         return url
 
     @classmethod
+    def _validate_db_url(cls, raw: str) -> str:
+        """Normalize + scheme-check a database URL (env value or provisioned DSN).
+        Only SQLite and Postgres-via-psycopg are supported."""
+        url = cls._normalize_db_url(raw)
+        scheme = url.split(":", 1)[0]
+        if not (scheme.startswith("sqlite") or scheme.startswith("postgresql")):
+            raise RuntimeError(
+                f"database URL scheme {scheme!r} is unsupported. Only SQLite "
+                "(default) and Postgres (postgresql+psycopg://user:pass@host/db) "
+                "are supported."
+            )
+        if scheme.startswith("postgresql+") and scheme != "postgresql+psycopg":
+            raise RuntimeError(
+                f"database URL driver {scheme!r} isn't bundled — use "
+                "postgresql+psycopg:// (the sync psycopg 3 driver Edibl ships)."
+            )
+        return url
+
+    @classmethod
     def sqlalchemy_uri(cls) -> str:
         raw = (cls.DATABASE_URL or "").strip()
-        if raw:  # a blank / whitespace-only value falls through to SQLite
-            url = cls._normalize_db_url(raw)
-            scheme = url.split(":", 1)[0]
-            if not (scheme.startswith("sqlite") or scheme.startswith("postgresql")):
-                raise RuntimeError(
-                    f"EDIBL_DATABASE_URL scheme {scheme!r} is unsupported. Only SQLite "
-                    "(default) and Postgres (postgresql+psycopg://user:pass@host/db) "
-                    "are supported."
-                )
-            if scheme.startswith("postgresql+") and scheme != "postgresql+psycopg":
-                raise RuntimeError(
-                    f"EDIBL_DATABASE_URL driver {scheme!r} isn't bundled — use "
-                    "postgresql+psycopg:// (the sync psycopg 3 driver Edibl ships)."
-                )
-            return url
+        if raw:  # a blank / whitespace-only value falls through
+            return cls._validate_db_url(raw)
+        # Shared PostgreSQL: pg_provision wrote the discovered DSN here at boot.
+        # Read it rather than routing a runtime value through env precedence.
+        if getattr(cls, "USE_SHARED_POSTGRES", False):
+            try:
+                with open(os.path.join(cls.DATA_DIR, ".database_url")) as fh:
+                    dsn = fh.read().strip()
+            except OSError:
+                dsn = ""
+            if dsn:
+                return cls._validate_db_url(dsn)
         os.makedirs(cls.DATA_DIR, exist_ok=True)
         return f"sqlite:///{os.path.join(cls.DATA_DIR, 'edibl.db')}"

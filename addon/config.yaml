@@ -51,6 +51,8 @@ options:
   mcp_server_token: ""
   database_url: ""
   migrate_from_sqlite: false
+  use_shared_postgres: false
+  postgres_provision_token: ""
   ollama_search_key: ""
 schema:
   disable_auth: bool
@@ -75,6 +77,14 @@ schema:
   # once to copy your existing SQLite data into it, then leave it on (it's a no-op
   # once the target has data). See DOCS → External database.
   migrate_from_sqlite: bool
+  # Turn on to use the separate "Shared PostgreSQL" add-on (auto-discovered) — it
+  # provisions a private database for Edibl, so you don't set database_url by hand.
+  # Ignored if database_url is set. Leave the token blank to auto-obtain it.
+  # If you ALREADY have data in the built-in SQLite, also turn on migrate_from_sqlite
+  # so it's copied over — otherwise Edibl starts on an empty Postgres (your SQLite
+  # data stays intact on disk, just not shown).
+  use_shared_postgres: bool
+  postgres_provision_token: password?
   # Optional Ollama API key (ollama.com) for AI product descriptions — look items
   # up online for a short searchable description. Blank = feature off.
   ollama_search_key: password?

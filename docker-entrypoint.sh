@@ -27,6 +27,14 @@ if [ -n "${SUPERVISOR_TOKEN:-}" ]; then MINT_TOKEN=true; fi
 if [ "${EDIBL_DISABLE_AUTH}" != "true" ] && [ "${EDIBL_MCP_ENABLED}" = "true" ]; then
   MINT_TOKEN=true
 fi
+# Shared PostgreSQL: when enabled, discover the add-on and provision our own
+# database (writes the DSN to $EDIBL_DATA_DIR/.database_url, which the app reads).
+# Runs as the app user (so it owns the 0600 DSN file) and BEFORE schema init, so
+# create_app builds the engine against the right database. Best-effort — it
+# self-selects SQLite if anything is missing, so it never blocks startup.
+$RUN_AS python3 -m app.pg_provision \
+  || echo "Edibl: shared-PostgreSQL provisioning skipped."
+
 echo "Initializing database schema…"
 $RUN_AS env MINT_TOKEN="$MINT_TOKEN" python3 -c "import os
 from app import create_app

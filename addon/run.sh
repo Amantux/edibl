@@ -28,6 +28,9 @@ export EDIBL_MCP_SERVER_TOKEN="$(gets mcp_server_token)"
 # Optional external Postgres; blank keeps the built-in SQLite in /data.
 export EDIBL_DATABASE_URL="$(gets database_url)"
 export EDIBL_MIGRATE_FROM_SQLITE="$(getb migrate_from_sqlite)"
+# Or let the "Shared PostgreSQL" add-on provision a database for us (auto-discovered).
+export EDIBL_USE_SHARED_POSTGRES="$(getb use_shared_postgres)"
+export EDIBL_POSTGRES_PROVISION_TOKEN="$(gets postgres_provision_token)"
 # Optional Ollama web-search key for AI product descriptions.
 export EDIBL_OLLAMA_SEARCH_KEY="$(gets ollama_search_key)"
 

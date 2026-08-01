@@ -5,6 +5,7 @@ import os
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.security import safe_join
 
 from .config import Config
 from .extensions import db, limiter
@@ -75,7 +76,7 @@ def _enable_sqlite_pragmas():
         return
 
     @event.listens_for(db.engine, "connect")
-    def _set_pragmas(dbapi_connection, _record):  # noqa: ANN001
+    def _set_pragmas(dbapi_connection, _record):
         cur = dbapi_connection.cursor()
         cur.execute("PRAGMA journal_mode=WAL")
         cur.execute("PRAGMA busy_timeout=5000")
@@ -282,7 +283,7 @@ def _backfill_food_concepts():
     distinct family (else per product name), and link products. Preserves the
     original label as the concept's canonical name. Once-per-product, self-quiescing:
     products that already have a concept are skipped."""
-    from .models import Product, FoodConcept
+    from .models import FoodConcept, Product
     unlinked = (db.session.query(Product)
                 .filter(Product.concept_id.is_(None)).all())
     if not unlinked:
@@ -316,7 +317,7 @@ def _backfill_acquisition_lots():
     Runs once per position (skips lots that already link one), and self-quiesces:
     when no unlinked lots remain it does nothing. New command-path adds link their
     own acquisition lot, so this mainly catches legacy + bulk/import lots."""
-    from .models import StockLot, AcquisitionLot
+    from .models import AcquisitionLot, StockLot
     unlinked = (db.session.query(StockLot)
                 .filter(StockLot.acquisition_lot_id.is_(None)).all())
     if not unlinked:
@@ -340,7 +341,7 @@ def _backfill_inventory_events():
     adds nothing AND won't re-derive package_state (which would clobber a lot the
     user later explicitly re-sealed). Both the derivation and the opening event
     happen exactly once per lot — the first time it's seen."""
-    from .models import StockLot, InventoryEvent
+    from .models import InventoryEvent, StockLot
 
     already = {e.dst_position_id for e in
                db.session.query(InventoryEvent.dst_position_id).filter_by(type="import")}
@@ -377,21 +378,21 @@ def _seed_reference_data():
 
 
 def _register_blueprints(app):
-    from .api.users import bp as users_bp
-    from .api.tokens import bp as tokens_bp
-    from .api.locations import bp as locations_bp
-    from .api.products import bp as products_bp
-    from .api.stock import bp as stock_bp
-    from .api.shopping import bp as shopping_bp
-    from .api.dashboard import bp as dashboard_bp
-    from .api.integrations import bp as integrations_bp
     from .api.assistant import bp as assistant_bp
+    from .api.dashboard import bp as dashboard_bp
     from .api.data import bp as data_bp
-    from .api.misc import bp as misc_bp
     from .api.ha import bp as ha_bp
-    from .api.units import bp as units_bp
+    from .api.integrations import bp as integrations_bp
     from .api.jobs import bp as jobs_bp
+    from .api.locations import bp as locations_bp
+    from .api.misc import bp as misc_bp
+    from .api.products import bp as products_bp
+    from .api.shopping import bp as shopping_bp
+    from .api.stock import bp as stock_bp
     from .api.suggestions import bp as suggestions_bp
+    from .api.tokens import bp as tokens_bp
+    from .api.units import bp as units_bp
+    from .api.users import bp as users_bp
 
     for bp in (users_bp, tokens_bp, locations_bp, products_bp, stock_bp,
                shopping_bp, dashboard_bp, integrations_bp, assistant_bp,
@@ -440,8 +441,12 @@ _FRONTEND_DIST = os.environ.get(
 
 
 def _serve_spa(path):
-    full = os.path.join(_FRONTEND_DIST, path)
-    if path and os.path.isfile(full):
+    # safe_join, not os.path.join: it rejects traversal ("../") and absolute
+    # segments, returning None. os.path.join would happily build a path outside
+    # the dist dir, letting the isfile() check probe for arbitrary files.
+    # Nested asset paths ("assets/index-abc.js") are still served normally.
+    full = safe_join(_FRONTEND_DIST, path) if path else None
+    if full and os.path.isfile(full):
         return send_from_directory(_FRONTEND_DIST, path)
     index = os.path.join(_FRONTEND_DIST, "index.html")
     if os.path.isfile(index):

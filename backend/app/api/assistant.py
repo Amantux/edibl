@@ -1,51 +1,25 @@
 """Chat assistant endpoints — a conversational surface over the same inventory
 actions the MCP server exposes, available from a widget on every screen."""
-import ipaddress
 import json
-import socket
-from urllib.parse import urlparse
 
-from flask import Blueprint, request, jsonify, Response, stream_with_context
+from flask import Blueprint, Response, jsonify, request, stream_with_context
 
-from ..auth import login_required, owner_required, current_group
-from ..extensions import limiter, db
+from ..auth import current_group, login_required, owner_required
+from ..extensions import db, limiter
 from ..services import assistant
 from ..services.settings import (
-    get_chat_stream, set_chat_stream, get_job_settings, set_job_settings,
+    get_chat_stream,
+    get_job_settings,
+    set_chat_stream,
+    set_job_settings,
 )
 
+# The guard now lives in services/ so the point of USE (_fetch_models) shares the
+# one implementation with this save path — a base URL from env/add-on options
+# never passes through here, so validating only on save left it unchecked.
+from ..services.url_guard import llm_url_ok as _llm_url_ok
+
 bp = Blueprint("assistant", __name__)
-
-
-def _llm_url_ok(url):
-    """Guard the user-supplied LLM base URL against SSRF to link-local services
-    (notably the cloud metadata endpoint 169.254.169.254 / fe80::) while still
-    allowing loopback and private LAN, where Ollama legitimately runs. Blank → ok
-    (falls back to the configured default). Returns (ok, error). Note: this checks
-    the resolved address now; it is not hardened against DNS-rebinding, which is an
-    acceptable residual for a semi-trusted owner configuring their own endpoint."""
-    if not url:
-        return True, None
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https"):
-        return False, "base URL must be http or https"
-    host = parsed.hostname
-    if not host:
-        return False, "base URL has no host"
-    try:
-        infos = socket.getaddrinfo(host, None)
-    except (OSError, UnicodeError):
-        # Unresolvable / malformed host: let the real request fail rather than 500.
-        return True, None
-    for info in infos:
-        addr = ipaddress.ip_address(info[4][0])
-        # An IPv4-mapped IPv6 address (::ffff:169.254.169.254) connects to the real
-        # IPv4 on a dual-stack host, so test the mapped v4, not the v6 wrapper.
-        if addr.version == 6 and addr.ipv4_mapped is not None:
-            addr = addr.ipv4_mapped
-        if addr.is_link_local:
-            return False, "base URL host is not allowed"
-    return True, None
 
 
 @bp.get("/assistant/config")
@@ -84,9 +58,9 @@ def put_job_settings_endpoint():
     data = request.get_json(force=True) or {}
     for area in ("enrich", "organize"):
         blk = data.get(area)
-        if isinstance(blk, dict) and blk.get("provider"):
-            if str(blk["provider"]) not in assistant.PROVIDER_CHOICES:
-                return jsonify({"error": f"unknown provider {blk['provider']!r}"}), 422
+        if (isinstance(blk, dict) and blk.get("provider")
+                and str(blk["provider"]) not in assistant.PROVIDER_CHOICES):
+            return jsonify({"error": f"unknown provider {blk['provider']!r}"}), 422
     set_job_settings(current_group().id, enrich=data.get("enrich"), organize=data.get("organize"))
     return jsonify(get_job_settings(current_group().id))
 

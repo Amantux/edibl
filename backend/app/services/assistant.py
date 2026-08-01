@@ -25,12 +25,30 @@ from datetime import datetime
 from flask import current_app
 
 from ..extensions import db
-from ..models import (StockLot, Product, ShoppingItem, ConsumptionEvent,
-                      InventoryEvent, utcnow, STORAGE_METHODS, OUTCOMES)
-from ..services.estimation import estimate_expiry, product_insights, waste_insights
-from ..services.inventory import (add_lot, consume_lot, open_lot, reverse_event,
-                                  adjust_lot, move_lot, split_lot, freeze_lot, thaw_lot)
+from ..models import (
+    OUTCOMES,
+    STORAGE_METHODS,
+    ConsumptionEvent,
+    InventoryEvent,
+    Product,
+    ShoppingItem,
+    StockLot,
+    utcnow,
+)
 from ..schemas.serializers import iso
+from ..services.estimation import estimate_expiry, product_insights, waste_insights
+from ..services.inventory import (
+    add_lot,
+    adjust_lot,
+    consume_lot,
+    freeze_lot,
+    move_lot,
+    open_lot,
+    reverse_event,
+    split_lot,
+    thaw_lot,
+)
+from .sanitize import safe_upstream_detail
 
 _LOGGER = logging.getLogger("edibl.assistant")
 
@@ -121,7 +139,7 @@ def h_whats_in_stock(gid, query=""):
 
 
 def h_expiring_soon(gid, days=5):
-    from ..schemas.serializers import expiry_status, _days_to_expiry
+    from ..schemas.serializers import _days_to_expiry, expiry_status
     out = []
     for s in _active(gid):
         st = expiry_status(s.expiry_date)
@@ -506,18 +524,18 @@ TOOLS = {
                          "source": {"type": "string"},
                          "notes": {"type": "string"}},
                       "required": ["name"]},
-                     "Edit the soonest-to-expire lot matching a name (qty, location, "
-                     "expiry, freshness, etc.)."),
+                     ("Edit the soonest-to-expire lot matching a name (qty, location, "
+                     "expiry, freshness, etc.).")),
     "delete_stock": (h_delete_stock,
                      {"type": "object", "properties": {
                          "name": {"type": "string"}}, "required": ["name"]},
-                     "Remove the soonest-to-expire lot matching a name (discard, "
-                     "no consumption history — use record_consumption to log why)."),
+                     ("Remove the soonest-to-expire lot matching a name (discard, "
+                     "no consumption history — use record_consumption to log why).")),
     "grouped_stock": (h_grouped_stock,
                       {"type": "object", "properties": {
                           "query": {"type": "string"}}},
-                      "Stock grouped by product family (e.g. organic + filtered "
-                      "milk shown together under 'Milk')."),
+                      ("Stock grouped by product family (e.g. organic + filtered "
+                      "milk shown together under 'Milk').")),
     "record_consumption": (h_record_consumption,
                            {"type": "object", "properties": {
                                "name": {"type": "string"},
@@ -529,16 +547,16 @@ TOOLS = {
     "open_stock": (h_open_stock,
                    {"type": "object", "properties": {
                        "name": {"type": "string"}}, "required": ["name"]},
-                   "Mark a package opened (e.g. an opened carton) — separate from "
-                   "using it up. Affects freshness, not quantity."),
+                   ("Mark a package opened (e.g. an opened carton) — separate from "
+                   "using it up. Affects freshness, not quantity.")),
     "adjust_stock": (h_adjust_stock,
                      {"type": "object", "properties": {
                          "name": {"type": "string"},
                          "quantity": {"type": "number",
                                       "description": "the measured/known amount"}},
                       "required": ["name", "quantity"]},
-                     "Correct a lot to a measured amount (e.g. after weighing a bin). "
-                     "Sets an exact quantity; reversible."),
+                     ("Correct a lot to a measured amount (e.g. after weighing a bin). "
+                     "Sets an exact quantity; reversible.")),
     "move_stock": (h_move_stock,
                    {"type": "object", "properties": {
                        "name": {"type": "string"}, "location": {"type": "string"}},
@@ -549,8 +567,8 @@ TOOLS = {
                         "name": {"type": "string"}, "quantity": {"type": "number"},
                         "location": {"type": "string"}},
                      "required": ["name", "quantity"]},
-                    "Split an amount off a lot into a new position (e.g. portioning). "
-                    "Conserves the total; reversible."),
+                    ("Split an amount off a lot into a new position (e.g. portioning). "
+                    "Conserves the total; reversible.")),
     "freeze_stock": (h_freeze_stock,
                      {"type": "object", "properties": {"name": {"type": "string"}},
                       "required": ["name"]},
@@ -580,8 +598,8 @@ TOOLS = {
                            "products": {"type": "array", "items": {"type": "string"},
                                         "description": "product names to put in this group"}},
                         "required": ["family", "products"]},
-                       "Group several products under one display family (e.g. put whole + "
-                       "oat milk together under 'Milk'). Reversible."),
+                       ("Group several products under one display family (e.g. put whole + "
+                       "oat milk together under 'Milk'). Reversible.")),
     "set_staple": (h_set_staple,
                    {"type": "object", "properties": {
                        "product": {"type": "string"},
@@ -592,8 +610,8 @@ TOOLS = {
                                      "description": "low-stock level that triggers an "
                                                     "auto shopping-list add (default 1)"}},
                     "required": ["product"]},
-                   "Mark a product as a core 'always in stock' staple (or unmark it), so "
-                   "it's auto-added to the shopping list when it runs low. Reversible."),
+                   ("Mark a product as a core 'always in stock' staple (or unmark it), so "
+                   "it's auto-added to the shopping list when it runs low. Reversible.")),
     "describe_area": (h_describe_area,
                       {"type": "object", "properties": {
                           "area": {"type": "string", "description": "storage area name, "
@@ -603,9 +621,9 @@ TOOLS = {
                           "generate": {"type": "boolean", "description": "true to generate "
                                        "the description from the area's contents"}},
                        "required": ["area"]},
-                      "Set or generate a storage area's description of what it normally "
+                      ("Set or generate a storage area's description of what it normally "
                       "stores. This tunes smart default placement (e.g. 'ice cream goes in "
-                      "the freezer'). Reversible."),
+                      "the freezer'). Reversible.")),
 }
 
 
@@ -695,7 +713,8 @@ def h_mymeal_whats_for_dinner(gid, date=""):
     from datetime import date as _date
 
     from .integrations import mymeal_get
-    day = (date or "").strip() or _date.today().isoformat()
+    # Local date on purpose: a meal plan is keyed to the household's day, not UTC.
+    day = (date or "").strip() or _date.today().isoformat()  # noqa: DTZ011
     res = mymeal_get("/api/v1/mealplans", {"start": day, "end": day})
     if not res.get("reachable"):
         return _mm_unavailable(res)
@@ -713,7 +732,8 @@ def h_mymeal_plan_meal(gid, recipe, date="", meal_type="dinner"):
     from datetime import date as _date
 
     from .integrations import mymeal_get, mymeal_post
-    day = (date or "").strip() or _date.today().isoformat()
+    # Local date on purpose: a meal plan is keyed to the household's day, not UTC.
+    day = (date or "").strip() or _date.today().isoformat()  # noqa: DTZ011
     body = {"date": day, "mealType": meal_type or "dinner"}
     items = _mm_items(mymeal_get("/api/v1/recipes", {"q": recipe}))
     if items:
@@ -1066,7 +1086,7 @@ def job_cfg(gid, kind, opts=None):
         # app context but NO request, so current_group() would raise and the
         # preference (per-group, no env fallback) would be silently dropped.
         pref_provider, pref_model = job_preference(gid, kind)
-    except Exception:  # noqa: BLE001 — best-effort; fall back to the chat cfg
+    except Exception:  # noqa: BLE001 — no app/request context
         pref_provider, pref_model = None, None
     provider = (opts.get("provider") or pref_provider or "").strip()
     model = (opts.get("model") or pref_model or "").strip()
@@ -1174,7 +1194,18 @@ def _fetch_models(cfg):
     """Query the provider for its available models. Best-effort; raises on error."""
     import httpx
 
+    from .url_guard import llm_url_ok
+
     p = cfg["provider"]
+    # Validate at the point of USE, before any HTTP client exists: the /assistant
+    # settings endpoint guards what it saves, but a base URL supplied through the
+    # environment or the add-on options never passes through there. Loopback and
+    # private LAN stay allowed (a self-hosted Ollama is the common case); only
+    # link-local — the cloud metadata endpoint — is refused.
+    ok, err = llm_url_ok(cfg["base_url"])
+    if not ok:
+        raise ValueError(f"refusing to reach that base URL: {err}")
+
     with httpx.Client(timeout=min(cfg["timeout"], 15)) as client:
         if p == "ollama":
             r = client.get(cfg["base_url"] + "/api/tags", headers=_ollama_headers(cfg))
@@ -1216,8 +1247,9 @@ def list_models(provider=None, base_url=None, api_key=None):
                 "error": "Models are managed in Home Assistant's Ollama integration."}
     try:
         return {"models": _fetch_models(cfg), "provider": provider}
-    except Exception as exc:  # noqa: BLE001
-        return {"models": [], "provider": provider, "error": str(exc)}
+    except Exception as exc:  # noqa: BLE001 — surface tool errors to the model
+        return {"models": [], "provider": provider,
+                "error": safe_upstream_detail(exc)}
 
 
 def run_chat(gid, messages):
@@ -1237,9 +1269,10 @@ def run_chat(gid, messages):
             reply = _loop_anthropic(gid, messages, cfg, actions)
         else:
             reply = _loop_openai_style(gid, messages, cfg, actions)
-    except Exception as exc:  # noqa: BLE001 — never 500 the chat box
+    except Exception as exc:  # noqa: BLE001 — surface tool errors to the model
         _LOGGER.warning("assistant provider '%s' failed: %s", provider, exc)
-        return {"reply": f"The '{provider}' assistant is unreachable ({exc}). "
+        return {"reply": f"The '{provider}' assistant is unreachable "
+                f"({safe_upstream_detail(exc)}). "
                 "Check the base URL and model in the add-on options.",
                 "actions": actions, "provider": f"{provider}:error",
                 "model": cfg["model"], "enabled": True}
@@ -1274,10 +1307,11 @@ def run_chat_stream(gid, messages):
             reply = _loop_anthropic(gid, messages, cfg, actions)
             if reply:
                 yield {"type": "delta", "text": reply}
-    except Exception as exc:  # noqa: BLE001 — never 500 the chat box
+    except Exception as exc:  # noqa: BLE001 — surface tool errors to the model
         _LOGGER.warning("assistant stream provider '%s' failed: %s", provider, exc)
         yield {"type": "done",
-               "reply": f"The '{provider}' assistant is unreachable ({exc}). "
+               "reply": f"The '{provider}' assistant is unreachable "
+                        f"({safe_upstream_detail(exc)}). "
                         "Check the base URL and model in the add-on options.",
                "actions": actions, "provider": f"{provider}:error",
                "model": cfg["model"], "enabled": True}
@@ -1304,8 +1338,7 @@ def _stream_turn(client, url, headers, body, is_ollama):
                 if piece:
                     content += piece
                     yield {"type": "delta", "text": piece}
-                for tc in msg.get("tool_calls") or []:
-                    tool_calls.append(tc)
+                tool_calls.extend(msg.get("tool_calls") or [])
                 if obj.get("done"):
                     break
             assistant_msg = {"role": "assistant", "content": content}
@@ -1486,8 +1519,8 @@ def _parse_items(text):
             qty = float(d.get("quantity") or d.get("qty") or 1)
         except (TypeError, ValueError):
             qty = 1
-        from .units import canonical_unit
         from .families import generic_family
+        from .units import canonical_unit
         item = {"name": name, "quantity": qty,
                 "unit": canonical_unit(d.get("unit"))}
         cat = str(d.get("category") or "").strip()
@@ -1574,10 +1607,10 @@ def extract_items(text=None, image=None, media_type="image/jpeg"):
                 return {"items": [], "enabled": True, "provider": cfg["provider"],
                         "error": "empty text"}
             reply = _complete(cfg, _EXTRACT_SYSTEM, t)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — surface tool errors to the model
         _LOGGER.warning("extract via '%s' failed: %s", cfg["provider"], exc)
         return {"items": [], "enabled": True, "provider": cfg["provider"],
-                "error": f"provider unreachable: {exc}"}
+                "error": f"provider unreachable: {safe_upstream_detail(exc)}"}
     return {"items": _parse_items(reply), "enabled": True, "provider": cfg["provider"]}
 
 
@@ -1644,7 +1677,7 @@ def _heuristic_classify(name):
 def _normalize_classification(name, raw):
     """Coerce a (possibly LLM) classification onto Edibl's known values, filling
     any gaps from the heuristic + category-based defaults."""
-    from ..models import (CATEGORIES, STORAGE_METHODS, ITEM_TYPES, TRACKING_MODES)
+    from ..models import CATEGORIES, ITEM_TYPES, STORAGE_METHODS, TRACKING_MODES
     from .tracking import default_tracking_mode
 
     h = _heuristic_classify(name)
@@ -1700,10 +1733,10 @@ def reconcile_units(edibl_units, mymeal_units):
                 if isinstance(data, dict):
                     # Keep only well-formed {name, …} objects — models sometimes emit
                     # bare strings or a stray shape despite the prompt.
-                    dicts = lambda key: [u for u in (data.get(key) or [])  # noqa: E731
+                    dicts = lambda key: [u for u in (data.get(key) or [])
                                          if isinstance(u, dict) and u.get("name")]
                     return {"toEdibl": dicts("toEdibl"), "toMyMeal": dicts("toMyMeal")}
-    except Exception as exc:  # noqa: BLE001 — caller falls back to deterministic union
+    except Exception as exc:  # noqa: BLE001 — surface tool errors to the model
         _LOGGER.info("unit reconcile via '%s' failed: %s", cfg["provider"], exc)
     return None
 

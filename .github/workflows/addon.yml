@@ -26,7 +26,7 @@ jobs:
     outputs:
       version: ${{ steps.bump.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: master
           fetch-depth: 0
@@ -61,12 +61,12 @@ jobs:
         arch: [aarch64, amd64]
     steps:
       # Check out the branch head so we get the just-bumped config.yaml.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: master
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}

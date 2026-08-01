@@ -1,0 +1,13 @@
+# Trivy findings accepted with a documented reason. Keep this list short and
+# justified — an unexplained entry here is how a real finding gets buried.
+
+# DS-0002 — "Image user should not be 'root'".
+# Both Dockerfile and addon/Dockerfile intentionally have no final USER
+# instruction: the container must start as root to chown the Home
+# Assistant-managed /data volume (whose ownership we don't control), then
+# docker-entrypoint.sh drops to the unprivileged `app` user via gosu for every
+# process — `exec $RUN_AS gunicorn`, so even PID 1 ends up as uid 1000. The CI
+# smoke job asserts exactly that (`test "$uid" = "1000"` against
+# /proc/1/status), so this is enforced, not merely intended.
+# Same model as the HomeHoard/myMeal add-ons.
+DS-0002

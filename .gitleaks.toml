@@ -1,0 +1,20 @@
+# gitleaks configuration.
+#
+# Extends the default rule set — we only ADD allowlist entries, never disable a
+# rule, so a real credential anywhere in production code still fails the scan.
+[extend]
+useDefault = true
+
+# Test fixtures are not credentials. The backend test-suite deliberately
+# contains realistic-looking values: throwaway Flask `SECRET_KEY`s so tests are
+# deterministic, and fake API keys used to exercise the auth/ingress paths.
+# None of them grants anything outside the test process.
+# Same reasoning as the CodeQL `paths-ignore` for tests: not production attack
+# surface. A real credential still must never be committed here.
+#
+# NOTE: the table is SINGULAR (`[allowlist]`). The plural `[[allowlists]]` form
+# is silently ignored by gitleaks 8.21.2 — the version the workflow installs —
+# so it would look configured while scanning everything. Verified locally.
+[allowlist]
+description = "Backend test fixtures (throwaway signing keys, fake auth keys)"
+paths = ['''backend/tests/.*''']

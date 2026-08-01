@@ -1,24 +1,49 @@
 name: Security scan
 
-# Advisory only — surfaces dependency, secret, and config issues without blocking.
+# Advisory quality/security gates. Kept separate from CI so an upstream CVE or a
+# scanner hiccup never blocks the release pipeline; results surface in the repo's
+# Security tab (SARIF) and as job status on PRs.
 on:
   push:
     branches: [master]
   pull_request:
   schedule:
-    - cron: "0 6 * * 1"   # weekly, Monday 06:00 UTC
+    - cron: "0 6 * * 1"   # weekly, Monday 06:00 UTC — catch newly-disclosed CVEs
   workflow_dispatch:
 
+# Least privilege. `security-events: write` is required to upload SARIF (CodeQL
+# and Trivy); `actions: read` lets CodeQL read workflow metadata.
 permissions:
   contents: read
+  security-events: write
+  actions: read
 
 jobs:
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, javascript-typescript]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: github/codeql-action/init@a2983b8bed1923f44751c5c43237f479442827b3 # v3.37.4
+        with:
+          language: ${{ matrix.language }}
+          # Query suite + path exclusions live in the config file, with the
+          # reasoning for each narrowing recorded alongside them.
+          config-file: ./.github/codeql/codeql-config.yml
+      - uses: github/codeql-action/analyze@a2983b8bed1923f44751c5c43237f479442827b3 # v3.37.4
+        with:
+          category: "/language:${{ matrix.language }}"
+
   python-audit:
     name: pip-audit (backend)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"
       - name: pip-audit
@@ -31,8 +56,8 @@ jobs:
     name: npm audit (frontend)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
       - name: npm audit
@@ -45,12 +70,14 @@ jobs:
     name: gitleaks (secret scan)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
       - name: gitleaks
         continue-on-error: true
-        uses: gitleaks/gitleaks-action@v2
+        # Reads .gitleaks.toml from the repo root: default rules + an allowlist
+        # for backend test fixtures (throwaway keys), documented in that file.
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -58,12 +85,13 @@ jobs:
     name: Trivy (filesystem)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Trivy filesystem scan
         continue-on-error: true
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@c07df6fec6fa692e6fd1200d50aaa1fdd66f03c8 # master @ 2026-07-02
         with:
           scan-type: fs
           scanners: vuln,secret,misconfig
           severity: HIGH,CRITICAL
           ignore-unfixed: true
+          trivyignores: .trivyignore

@@ -13,9 +13,11 @@ on:
       - ".github/workflows/addon.yml"
   workflow_dispatch:
 
+# Least privilege by default: the build job installs/executes third-party
+# tooling and must not inherit a token that can push commits. Only `version`
+# (which commits the bump) elevates to contents: write.
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 jobs:
   # Bump addon/config.yaml's patch version and commit it back, so Supervisor sees
@@ -23,10 +25,12 @@ jobs:
   # commit message carries [skip bump]) to avoid loops.
   version:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # commits + pushes the auto-bumped add-on version
     outputs:
       version: ${{ steps.bump.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: master
           fetch-depth: 0
@@ -61,19 +65,19 @@ jobs:
         arch: [aarch64, amd64]
     steps:
       # Check out the branch head so we get the just-bumped config.yaml.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: master
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push ${{ matrix.arch }}
-        uses: home-assistant/builder@master
+        uses: home-assistant/builder@6aa51d57cae748bf94c85a154c1602c941cc36dd # master @ 2026-07-30
         with:
           args: |
             --${{ matrix.arch }} \

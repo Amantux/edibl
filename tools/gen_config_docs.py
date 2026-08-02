@@ -36,6 +36,7 @@ GROUPS = [
                                      "MCP_API_TOKEN", "MCP_SERVER_TOKEN",
                                      "MCP_EXPOSE_EXTERNAL"]),
     ("Serving & misc", ["MAX_UPLOAD_MB", "CURRENCY", "FRONTEND_DIST", "DEBUG"]),
+    ("Logging", ["LOG_LEVEL", "SLOW_REQUEST_MS"]),
 ]
 
 

@@ -55,6 +55,7 @@ options:
   use_shared_postgres: false
   postgres_provision_token: ""
   ollama_search_key: ""
+  log_level: INFO
 schema:
   disable_auth: bool
   llm_provider: "list(|ollama|openai|anthropic|homeassistant)"
@@ -93,4 +94,7 @@ schema:
   postgres_provision_token: password?
   # Optional Ollama API key (ollama.com) for AI product descriptions — look items
   # up online for a short searchable description. Blank = feature off.
+  # How much detail goes into this add-on's log. Leave at INFO unless you are
+  # chasing a problem: DEBUG is noisy and can include request paths.
+  log_level: list(DEBUG|INFO|WARNING|ERROR)?
   ollama_search_key: password?

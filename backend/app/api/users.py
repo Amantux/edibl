@@ -6,7 +6,7 @@ from ..extensions import db, limiter
 from ..models import User, Group
 from ..auth import (login_required, current_user, hash_password, verify_password,
                     create_token)
-from ..logsafe import scrub
+from ..logsafe import mask_email, scrub
 
 bp = Blueprint("users", __name__)
 _LOGGER = logging.getLogger("edibl.auth")
@@ -76,9 +76,10 @@ def login():
     user = db.session.query(User).filter_by(email=email).first()
     valid = verify_password(password, user.password_hash if user else _DUMMY_HASH)
     if not user or not valid:
-        _LOGGER.warning("login failed for %r from %s", email, scrub(request.remote_addr))
+        _LOGGER.warning("login failed for %s from %s", mask_email(email),
+                        scrub(request.remote_addr))
         return jsonify({"error": "invalid credentials"}), 401
-    _LOGGER.info("login ok for %r", email)
+    _LOGGER.info("login ok for %s", mask_email(email))
     return jsonify({"token": f"Bearer {create_token(user)}"})
 
 

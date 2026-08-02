@@ -8,7 +8,7 @@ from ..extensions import db
 from ..models import (StockLot, Product, Location, ConsumptionEvent, InventoryEvent,
                       Detection, utcnow, STORAGE_METHODS, PACKAGE_STATES, QUANTITY_KINDS)
 from ..auth import login_required, current_group, current_user
-from ..schemas.serializers import stock_out, expiry_status, to_money
+from ..schemas.serializers import stock_out, expiry_status, to_money, iso
 from ..services.estimation import estimate_expiry, product_insights
 from ..services.settings import get_currency
 from ..services import inventory
@@ -349,6 +349,91 @@ def create():
         provenance=data.get("provenance") or "manual", confidence=data.get("confidence"),
         idempotency_key=data.get("idempotencyKey"))
     return jsonify({**stock_out(res.lot), "eventId": res.event.id if res.event else None}), 201
+
+
+# Registered before /stock/<lot_id> for readability; Werkzeug prefers the static
+# rule regardless of order, and a test pins that so "resolve" can never be
+# swallowed as a lot id.
+@bp.get("/stock/resolve")
+@login_required
+def resolve_stock():
+    """Resolve a name/id to ONE lot to act on, or to the candidates worth asking about.
+
+    The single source of truth for "did the user mean this food?", shared by the
+    MCP server (a separate process, so it consumes this over HTTP rather than
+    importing `matching`). Ranking uses the product's name, aliases, family,
+    brand, category and description — see `services.matching`.
+
+    Disambiguation is by PRODUCT, never by lot: several lots of the same product
+    is not a question, it is a queue. A confident match returns that product's
+    soonest-to-expire open lot, preserving the FEFO behaviour every stock tool
+    relies on.
+
+    ``{"confidence": "high", "lot": {...}, "matchedOn": [...]}``  — safe to act.
+    ``{"confidence": "low", "candidates": [...]}``  — ask which; do NOT act.
+    ``{"confidence": "none"}`` — nothing matched.
+    """
+    from ..services import matching
+    q = (request.args.get("q") or "").strip()
+    if not q:
+        return jsonify({"confidence": "none", "candidates": [],
+                        "error": "No name or id given."}), 400
+    gid = current_group().id
+
+    # A lot id is an unambiguous handle — never a fuzzy match.
+    direct = db.session.get(StockLot, q)
+    if direct and direct.group_id == gid:
+        return jsonify({"confidence": "high", "matchedOn": ["id"],
+                        "lot": stock_out(direct)})
+
+    res = matching.resolve_for_mutation(gid, q)
+    if res.product is not None:
+        lot = _soonest_lot(res.product)
+        if lot is None:
+            return jsonify({"confidence": "none", "candidates": [],
+                            "error": f"'{res.product.name}' has no stock on hand."})
+        top = next((c for c in res.candidates if c.product.id == res.product.id), None)
+        return jsonify({"confidence": "high",
+                        "matchedOn": top.reasons if top else [],
+                        "lot": stock_out(lot)})
+    if not res.candidates:
+        return jsonify({"confidence": "none", "candidates": []})
+    return jsonify({"confidence": "low",
+                    "candidates": [_candidate_out(c) for c in res.candidates[:5]]})
+
+
+def _soonest_lot(product):
+    """The lot a mutation should act on: soonest-to-expire, unfinished (FEFO)."""
+    lots = [s for s in product.stock if not s.finished]
+    if not lots:
+        return None
+    # NULL expiry sorts last, matching GET /stock.
+    lots.sort(key=lambda s: (s.expiry_date is None, s.expiry_date))
+    return lots[0]
+
+
+def _candidate_out(cand):
+    """One product a user can actually choose between: what it is, and where.
+
+    Brand/category/location are what make "Milk (Organic Valley, dairy, in
+    Fridge)" distinguishable from "Almond Milk (Califia, dairy-alt, in Pantry)".
+    """
+    p = cand.product
+    lots = [s for s in p.stock if not s.finished]
+    lot = _soonest_lot(p)
+    return {
+        "productId": p.id,
+        "name": p.name,
+        "brand": p.brand or "",
+        "category": p.category or "",
+        "family": p.family or "",
+        "location": (lot.location.name if lot and lot.location else ""),
+        "lots": len(lots),
+        "lotId": lot.id if lot else None,
+        "nextExpiry": iso(lot.expiry_date) if lot and lot.expiry_date else None,
+        "matchedOn": cand.reasons,
+        "score": cand.score,
+    }
 
 
 @bp.get("/stock/<lot_id>")

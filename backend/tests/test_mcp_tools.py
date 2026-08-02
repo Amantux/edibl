@@ -23,8 +23,8 @@ def test_move_stock_unknown_location_does_not_silently_unassign(monkeypatch):
     # Regression: a typo'd location used to move the lot to NO location and report
     # success. It must now error and perform no move.
     import edibl_mcp as m
-    monkeypatch.setattr(m, "_find_lot",
-                        lambda name: {"id": "1", "product": {"name": "Milk"}, "unit": "l"})
+    monkeypatch.setattr(m, "_resolve_lot",
+                        lambda name: ({"id": "1", "product": {"name": "Milk"}, "unit": "l"}, []))
     monkeypatch.setattr(m, "_location_id", lambda loc: None)  # not found
     calls = []
     monkeypatch.setattr(m, "_post", lambda *a, **k: calls.append(a) or {})
@@ -46,5 +46,8 @@ def test_use_stock_unknown_name_returns_friendly_message(monkeypatch):
         raise httpx.HTTPStatusError("not found", request=None,
                                     response=SimpleNamespace(status_code=404))
     monkeypatch.setattr(m, "_post", boom)
+    # Resolution runs first now; an unknown name resolves to nothing at all,
+    # which is the "no candidates" case rather than an ambiguity question.
+    monkeypatch.setattr(m, "_resolve_lot", lambda name: (None, []))
 
     assert "No stock matching" in m.use_stock("Nope", 1)

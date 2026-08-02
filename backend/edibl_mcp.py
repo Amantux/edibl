@@ -171,12 +171,56 @@ def _location_id(location):
     return match["id"] if match else None
 
 
-def _find_lot(name):
-    """Soonest-to-expire active lot whose product name contains `name`."""
-    items = _get("/stock").get("items", [])
-    q = name.lower()
-    matches = [i for i in items if i.get("product") and q in i["product"]["name"].lower()]
-    return matches[0] if matches else None
+def _resolve_lot(name):
+    """``(lot, candidates)`` — resolve a name/id to one lot, never guessing.
+
+    Delegates to ``/stock/resolve``, which ranks a household's PRODUCTS by name,
+    aliases, family, brand, category and description and returns a confidence.
+    A confident hit comes back as ``(lot, [])`` — that product's
+    soonest-to-expire lot, so FEFO is unchanged. Anything ambiguous comes back as
+    ``(None, candidates)`` so the caller asks which food was meant instead of
+    acting on a coin-flip.
+
+    Ambiguity is judged across PRODUCTS, not lots: two cartons of the same milk
+    is a queue, not a question — only "Milk" vs "Almond Milk" is.
+    """
+    try:
+        data = _get("/stock/resolve", {"q": name})
+    except httpx.HTTPStatusError:
+        return None, []
+    if data.get("confidence") == "high":
+        return data.get("lot"), []
+    return None, data.get("candidates") or []
+
+
+def _describe_candidate(c):
+    """One candidate as a line a user can actually choose between."""
+    bits = [str(c.get("name") or "")]
+    detail = [c.get("brand") or "", c.get("category") or ""]
+    where = c.get("location")
+    if where:
+        detail.append(f"in {where}")
+    detail = [d for d in detail if d]
+    if detail:
+        bits.append(f"({', '.join(detail)})")
+    if (c.get("lots") or 0) > 1:
+        bits.append(f"{c['lots']} lots")
+    if c.get("nextExpiry"):
+        bits.append(f"next expiry {str(c['nextExpiry'])[:10]}")
+    reasons = [r for r in (c.get("matchedOn") or []) if r and r != "exact name"]
+    if reasons:
+        bits.append(f"matched on {', '.join(reasons)}")
+    return " ".join(bits)
+
+
+def _clarify(name, candidates):
+    """Ask which food was meant. Returned INSTEAD of acting, so nothing changes."""
+    if not candidates:
+        return f"No stock matching '{name}'."
+    listed = "; ".join(_describe_candidate(c) for c in candidates)
+    return (f"'{name}' matches several things: {listed}. Nothing was changed — "
+            "show these to the user, ask which they mean, then call again with "
+            "that product's exact name.")
 
 
 @mcp.tool()
@@ -204,10 +248,12 @@ def update_stock(name: str, quantity: float = None, unit: str = "",
                  expiry: str = "", source: str = "", notes: str = "") -> str:
     """Edit the soonest-to-expire lot matching `name`. Only the fields you pass
     change (quantity, unit, location, storageMethod, freshness, expiry ISO date,
-    source, notes)."""
-    lot = _find_lot(name)
+    source, notes).
+    If the name matches several different products this asks which you meant and changes NOTHING — show the options, then call again with the exact name.
+    """
+    lot, candidates = _resolve_lot(name)
     if not lot:
-        return f"No stock matching '{name}'."
+        return _clarify(name, candidates)
     body = {}
     if quantity is not None:
         body["quantity"] = quantity
@@ -235,10 +281,12 @@ def update_stock(name: str, quantity: float = None, unit: str = "",
 @mcp.tool()
 def delete_stock(name: str) -> str:
     """Remove the soonest-to-expire lot matching `name` (discard, no history — use
-    record_consumption instead to log that it was eaten/spoiled)."""
-    lot = _find_lot(name)
+    record_consumption instead to log that it was eaten/spoiled).
+    If the name matches several different products this asks which you meant and changes NOTHING — show the options, then call again with the exact name.
+    """
+    lot, candidates = _resolve_lot(name)
     if not lot:
-        return f"No stock matching '{name}'."
+        return _clarify(name, candidates)
     _delete(f"/stock/{lot['id']}")
     return f"Removed {lot['quantity']} {lot['unit']} of {lot['product']['name']}."
 
@@ -262,13 +310,12 @@ def record_consumption(name: str, quantity: float = 1, outcome: str = "eaten") -
     """Record how some of an ingredient left inventory. `outcome` = eaten (default),
     spoiled, expired, or discarded. Feeds runout prediction AND personalized
     shelf-life learning (losses teach Edibl the item goes bad sooner). Consumes
-    from the soonest-to-expire matching lot."""
-    items = _get("/stock").get("items", [])
-    q = name.lower()
-    matches = [i for i in items if i.get("product") and q in i["product"]["name"].lower()]
-    if not matches:
-        return f"No stock matching '{name}'."
-    lot = matches[0]  # already sorted soonest-expiry first
+    from the soonest-to-expire matching lot.
+    If the name matches several different products this asks which you meant and changes NOTHING — show the options, then call again with the exact name.
+    """
+    lot, candidates = _resolve_lot(name)
+    if not lot:
+        return _clarify(name, candidates)
     res = _post(f"/stock/{lot['id']}/consume", {"quantity": quantity, "outcome": outcome})
     msg = f"Recorded {quantity} {lot['unit']} of {lot['product']['name']} ({outcome})."
     if res.get("insight"):
@@ -279,10 +326,12 @@ def record_consumption(name: str, quantity: float = 1, outcome: str = "eaten") -
 @mcp.tool()
 def open_stock(name: str) -> str:
     """Mark a package opened (e.g. an opened carton) — an orthogonal facet, separate
-    from using it up. Affects freshness/shelf-life, not quantity."""
-    lot = _find_lot(name)
+    from using it up. Affects freshness/shelf-life, not quantity.
+    If the name matches several different products this asks which you meant and changes NOTHING — show the options, then call again with the exact name.
+    """
+    lot, candidates = _resolve_lot(name)
     if not lot:
-        return f"No stock matching '{name}'."
+        return _clarify(name, candidates)
     res = _post(f"/stock/{lot['id']}/open", {})
     return res.get("summary", f"Opened {lot['product']['name']}.")
 
@@ -290,20 +339,24 @@ def open_stock(name: str) -> str:
 @mcp.tool()
 def adjust_stock(name: str, quantity: float) -> str:
     """Correct a lot to a measured amount (e.g. an estimated bin you just weighed).
-    Sets the exact quantity on the soonest-to-expire matching lot; reversible."""
-    lot = _find_lot(name)
+    Sets the exact quantity on the soonest-to-expire matching lot; reversible.
+    If the name matches several different products this asks which you meant and changes NOTHING — show the options, then call again with the exact name.
+    """
+    lot, candidates = _resolve_lot(name)
     if not lot:
-        return f"No stock matching '{name}'."
+        return _clarify(name, candidates)
     _post(f"/stock/{lot['id']}/adjust", {"quantity": quantity, "quantityKind": "exact"})
     return f"Corrected {lot['product']['name']} to {quantity} {lot['unit']}."
 
 
 @mcp.tool()
 def move_stock(name: str, location: str) -> str:
-    """Move the soonest-to-expire lot matching `name` to another location."""
-    lot = _find_lot(name)
+    """Move the soonest-to-expire lot matching `name` to another location.
+    If the name matches several different products this asks which you meant and changes NOTHING — show the options, then call again with the exact name.
+    """
+    lot, candidates = _resolve_lot(name)
     if not lot:
-        return f"No stock matching '{name}'."
+        return _clarify(name, candidates)
     loc_id = _location_id(location)
     if not loc_id:
         return f"No location named '{location}'. Add it first, or use an existing one."
@@ -314,10 +367,12 @@ def move_stock(name: str, location: str) -> str:
 @mcp.tool()
 def split_stock(name: str, quantity: float, location: str = "") -> str:
     """Split `quantity` off the soonest-to-expire lot matching `name` into a new
-    position (e.g. portioning). Conserves the total; reversible."""
-    lot = _find_lot(name)
+    position (e.g. portioning). Conserves the total; reversible.
+    If the name matches several different products this asks which you meant and changes NOTHING — show the options, then call again with the exact name.
+    """
+    lot, candidates = _resolve_lot(name)
     if not lot:
-        return f"No stock matching '{name}'."
+        return _clarify(name, candidates)
     body = {"quantity": quantity}
     if location:
         loc_id = _location_id(location)
@@ -332,16 +387,26 @@ def split_stock(name: str, quantity: float, location: str = "") -> str:
 def use_stock(name: str, quantity: float, outcome: str = "eaten") -> str:
     """Use an amount of a product, drawing across its lots by policy (prefer-open,
     then first-expiring-first-out) and spilling to the next lot as needed — the safe
-    way to 'use the milk' without picking a specific lot."""
+    way to 'use the milk' without picking a specific lot.
+    If the name matches several different products this asks which you meant and changes NOTHING — show the options, then call again with the exact name.
+    """
+    # Resolve to ONE product first (so a partial name works and an ambiguous one
+    # asks), then let the server draw across that product's lots by policy.
+    lot, candidates = _resolve_lot(name)
+    if not lot:
+        return _clarify(name, candidates)
+    product = lot.get("product") or {}
     try:
-        res = _post("/stock/consume", {"name": name, "quantity": quantity, "outcome": outcome})
+        res = _post("/stock/consume", {"productId": product.get("id"),
+                                       "quantity": quantity, "outcome": outcome})
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 404:
             return f"No stock matching '{name}'."
         raise
     if res.get("consumed", 0) == 0:
         return f"No stock matching '{name}'."
-    msg = f"Used {res['consumed']} of {name} across {len(res.get('draws', []))} lot(s)."
+    label = product.get("name") or name
+    msg = f"Used {res['consumed']} of {label} across {len(res.get('draws', []))} lot(s)."
     if res.get("shortfall"):
         msg += f" Short by {res['shortfall']}."
     return msg
@@ -350,10 +415,12 @@ def use_stock(name: str, quantity: float, outcome: str = "eaten") -> str:
 @mcp.tool()
 def freeze_stock(name: str) -> str:
     """Freeze the soonest-to-expire lot matching `name` — extends its shelf life and
-    records the freeze date. Reversible."""
-    lot = _find_lot(name)
+    records the freeze date. Reversible.
+    If the name matches several different products this asks which you meant and changes NOTHING — show the options, then call again with the exact name.
+    """
+    lot, candidates = _resolve_lot(name)
     if not lot:
-        return f"No stock matching '{name}'."
+        return _clarify(name, candidates)
     _post(f"/stock/{lot['id']}/freeze", {})
     return f"Froze {lot['product']['name']}."
 
@@ -361,10 +428,12 @@ def freeze_stock(name: str) -> str:
 @mcp.tool()
 def thaw_stock(name: str) -> str:
     """Thaw the soonest-to-expire frozen lot matching `name` — shortens shelf life
-    and records the thaw date. Reversible."""
-    lot = _find_lot(name)
+    and records the thaw date. Reversible.
+    If the name matches several different products this asks which you meant and changes NOTHING — show the options, then call again with the exact name.
+    """
+    lot, candidates = _resolve_lot(name)
     if not lot:
-        return f"No stock matching '{name}'."
+        return _clarify(name, candidates)
     _post(f"/stock/{lot['id']}/thaw", {})
     return f"Thawed {lot['product']['name']}."
 
@@ -375,10 +444,12 @@ def make_from(source_name: str, source_quantity: float, product_name: str,
               category: str = "other") -> str:
     """Turn stock into other stock, preserving lineage (e.g. 'made chicken stock
     from the carcass', 'cooked 2 lb chicken into 4 servings'). Consumes
-    `source_quantity` of `source_name` and creates the product."""
-    src = _find_lot(source_name)
+    `source_quantity` of `source_name` and creates the product.
+    If the name matches several different products this asks which you meant and changes NOTHING — show the options, then call again with the exact name.
+    """
+    src, candidates = _resolve_lot(source_name)
     if not src:
-        return f"No stock matching '{source_name}'."
+        return _clarify(source_name, candidates)
     res = _post("/stock/transform", {
         "sources": [{"lotId": src["id"], "quantity": source_quantity}],
         "products": [{"name": product_name, "quantity": product_quantity,

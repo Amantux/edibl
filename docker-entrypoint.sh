@@ -47,14 +47,23 @@ fi
 # database (writes the DSN to $EDIBL_DATA_DIR/.database_url, which the app reads).
 # Runs as the app user (so it owns the 0600 DSN file) and BEFORE schema init, so
 # create_app builds the engine against the right database. Best-effort — it
-# self-selects SQLite if anything is missing, so it never blocks startup.
+# self-selects SQLite if anything is missing, so it never blocks startup. It
+# logs its own reason on every fall-back-to-SQLite path, so this `||` fires only
+# when the module itself crashed — say that, rather than the misleading
+# "skipped" (which would read as a normal outcome).
 $RUN_AS python3 -m app.pg_provision \
-  || echo "Edibl: shared-PostgreSQL provisioning skipped."
+  || echo "Edibl: pg_provision failed unexpectedly; continuing on SQLite." >&2
 
 echo "Initializing database schema…"
+# Also report which backend the app actually booted against. Every "why is my
+# data missing / why didn't the migration take" question starts here, and until
+# now the log never said. /api/v1/diagnostics reports it too, but that needs a
+# login — the log is what an operator pastes into an issue.
 $RUN_AS env MINT_TOKEN="$MINT_TOKEN" python3 -c "import os
 from app import create_app
 app = create_app()
+uri = app.config['SQLALCHEMY_DATABASE_URI']
+print('Edibl: database backend =', 'sqlite' if uri.startswith('sqlite') else 'postgresql')
 if os.environ.get('MINT_TOKEN') == 'true':
     from app.integration_token import ensure_integration_token
     ensure_integration_token(app)"
@@ -62,8 +71,15 @@ if os.environ.get('MINT_TOKEN') == 'true':
 # Register HA Supervisor discovery AFTER init, so the minted token file already
 # exists when the publisher reads it. Add-on only (script present + under the
 # Supervisor); the standalone image ships neither and skips this.
+# Skipping is normal standalone, but it must not be SILENT: "the HA integration
+# can't find Edibl" is otherwise unanswerable from the log. Name which of the two
+# preconditions failed.
 if [ -f /register-discovery.py ] && [ -n "${SUPERVISOR_TOKEN:-}" ]; then
   $RUN_AS python3 /register-discovery.py &
+elif [ ! -f /register-discovery.py ]; then
+  echo "Edibl: HA discovery skipped (standalone image — no register-discovery.py)."
+else
+  echo "Edibl: HA discovery skipped (no SUPERVISOR_TOKEN — not running as an HA add-on)."
 fi
 
 # MCP server (AI tooling for myMeal / Home Assistant), same container. In hardened

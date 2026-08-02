@@ -11,7 +11,7 @@ const minted = ref(null)            // { token, name } — raw token, shown once
 const connectUrl = ref('')          // address other apps use to reach this Edibl
 const keysBusy = ref(false)
 const keysMsg = ref('')
-const SCOPE_LABELS = { full: 'Full access', rest: 'REST API only', mcp: 'MCP only' }
+const SCOPE_LABELS = { full: 'Full access', rest: 'REST API only', mcp: 'MCP only', debug: 'Debug only' }
 function scopeLabel(s) { return SCOPE_LABELS[s] || SCOPE_LABELS.full }
 const ACCESS_LABELS = { write: 'Read & write', read: 'Read-only' }
 function accessLabel(a) { return ACCESS_LABELS[a] || ACCESS_LABELS.write }
@@ -19,7 +19,9 @@ async function loadTokens() { try { tokens.value = await api.get('/tokens') } ca
 async function mintToken() {
   keysBusy.value = true; keysMsg.value = ''
   try {
-    const r = await api.post('/tokens', { name: newTokenName.value || 'Connected app', scope: newTokenScope.value, access: newTokenAccess.value })
+    const r = await api.post('/tokens', { name: newTokenName.value || 'Connected app', scope: newTokenScope.value,
+      // A debug key only ever reads.
+      access: newTokenScope.value === 'debug' ? 'read' : newTokenAccess.value })
     minted.value = { token: r.token, name: r.name, scope: r.scope, access: r.access }
     newTokenName.value = ''
     await loadTokens()
@@ -73,14 +75,20 @@ onMounted(() => {
           <option value="full">Full access (API + MCP)</option>
           <option value="rest">REST API only</option>
           <option value="mcp">MCP only</option>
+          <option value="debug">Debug only (reads logs)</option>
         </select></label>
       <label class="field" style="width:160px"><span>Access</span>
-        <select v-model="newTokenAccess">
+        <select v-model="newTokenAccess" :disabled="newTokenScope === 'debug'">
           <option value="write">Read &amp; write</option>
           <option value="read">Read-only</option>
         </select></label>
       <button :disabled="keysBusy" @click="mintToken" style="height:38px">Generate</button>
     </div>
+    <p v-if="newTokenScope === 'debug'" class="muted" style="font-size:.78rem;margin:6px 0 0">
+      A debug key reads this add-on’s own logs, recent errors and timings — and nothing else. It can’t
+      reach the API or the voice-assistant tools. Logs can include sign-in email addresses and error
+      details, so treat it like a password and delete it when you’re done. Turn on
+      <code>mcp_debug_tools</code> in the add-on configuration for it to do anything.</p>
     <p class="muted" style="font-size:.78rem;margin:6px 0 0">The MCP endpoint requires a key when Edibl runs with auth on
       (<code>disable_auth: false</code>), when a server token is set, or once you mint an <strong>MCP</strong>-scoped key —
       otherwise it stays open on the internal network. Minting a Full key alone (in open mode) does <em>not</em> lock it.</p>

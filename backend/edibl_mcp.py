@@ -668,6 +668,40 @@ READ_TOOLS = frozenset({
 })
 
 
+def _key_scope(raw: str):
+    """Scope of a live ApiToken ('full'|'rest'|'mcp'|'debug'), or None.
+
+    Separate from _key_access because the debug tools gate on scope, not on the
+    read/write class. Fail-closed (None) on any DB error.
+    """
+    if not raw:
+        return None
+    try:
+        app = _get_app()
+        from app.extensions import db
+        from app.models import ApiToken, hash_token
+        with app.app_context():
+            rec = db.session.query(ApiToken).filter_by(token_hash=hash_token(raw)).first()
+            scope = (rec.scope or "full") if rec is not None else None
+            db.session.remove()
+            return scope
+    except Exception as exc:  # noqa: BLE001 — fail closed
+        print(f"edibl-mcp: scope check failed: {exc}", file=sys.stderr)
+        return None
+
+
+def _debug_key_exists() -> bool:
+    """True if a 'debug'-scoped key exists. Raises on a DB error (fail closed)."""
+    app = _get_app()
+    from app.extensions import db
+    from app.models import ApiToken
+    with app.app_context():
+        exists = (db.session.query(ApiToken.id)
+                  .filter(ApiToken.scope == "debug").first() is not None)
+        db.session.remove()
+        return exists
+
+
 def _key_access(raw: str) -> str:
     """The access class ('write' | 'read') for a valid MCP key, else '' if the key
     is unknown/invalid. Fails safe to 'read' on a DB error (deny writes, never open)."""
@@ -725,6 +759,75 @@ async def _drain_body(receive):
     return body, replay
 
 
+# ---------------------------------------------------------------------------
+# Debug tools. Registered only when MCP_DEBUG_TOOLS is on, and callable only by
+# a `debug`-scoped key — see _guard. They read this instance's own logs and
+# metrics so an AI client can investigate a problem without an operator having
+# to copy log text around by hand.
+# ---------------------------------------------------------------------------
+DEBUG_TOOLS = frozenset({
+    "debug_recent_logs", "debug_error_summary", "debug_metrics",
+    "debug_diagnostics",
+})
+
+
+def _register_debug_tools() -> None:
+    from app.services import debug_logs, metrics
+
+    data_dir = _SETTINGS.data_dir
+
+    @mcp.tool()
+    def debug_recent_logs(level: str = "INFO", contains: str = "",
+                          request_id: str = "", since: str = "",
+                          limit: int = 100) -> dict:
+        """Recent log lines from this Edibl instance, newest last.
+
+        level: minimum severity (DEBUG|INFO|WARNING|ERROR). contains: plain
+        substring filter, not a regex. request_id: show one request's lines,
+        using the id from an error response or the X-Request-Id header. since:
+        an ISO-8601 UTC timestamp; only later lines are returned. Credentials
+        are redacted; timestamps are UTC.
+        """
+        return debug_logs.read_recent(data_dir, level=level, contains=contains,
+                                      request_id=request_id, since=since, limit=limit)
+
+    @mcp.tool()
+    def debug_error_summary(limit: int = 20) -> dict:
+        """Recent warnings and errors grouped by message shape, most frequent
+        first — "what is going wrong repeatedly", rather than a raw line dump.
+        Each group carries the last request id, to look that request up."""
+        return debug_logs.error_summary(data_dir, limit=limit)
+
+    @mcp.tool()
+    def debug_metrics(kind: str = "") -> dict:
+        """Recent timing samples (background jobs, MCP tool calls) from THIS
+        process. The MCP server and each web worker keep separate rings, so
+        treat these as a sample; the log lines (kind=metric) are the complete
+        record and are visible via debug_recent_logs."""
+        kinds = [kind] if kind else ["job", "mcp_tool"]
+        return {"summaries": [metrics.summary(k) for k in kinds],
+                "recent": metrics.recent(kind or None, limit=50)}
+
+    @mcp.tool()
+    def debug_diagnostics() -> dict:
+        """Coarse runtime facts: database backend, configured providers, which
+        settings are non-default and where each came from. Secrets are
+        redacted — this is the same information the config check prints."""
+        settings = _SETTINGS
+        uri = settings.sqlalchemy_uri
+        redacted = settings.redacted()
+        return {
+            "app": "Edibl",
+            "dbBackend": "sqlite" if uri.startswith("sqlite") else "postgresql",
+            "aiProvider": settings.AI_PROVIDER or "none",
+            "authDisabled": bool(settings.DISABLE_AUTH),
+            "nonDefault": {name: redacted.get(name)
+                           for name, src in sorted(settings.sources.items())
+                           if src != "default"},
+            "sources": {k: v for k, v in sorted(settings.sources.items()) if v != "default"},
+        }
+
+
 def _body_has_write_toolcall(body: bytes) -> bool:
     """True if the JSON-RPC body invokes a tool NOT on the READ_TOOLS allowlist.
     Handles a single message or a batch; an unparseable body is left to the
@@ -742,27 +845,93 @@ def _body_has_write_toolcall(body: bytes) -> bool:
     return False
 
 
+def _tool_names(scope, body: bytes) -> list:
+    """Tool names in a JSON-RPC body, or [] if this is not a tools/call POST."""
+    if scope.get("method") != "POST":
+        return []
+    try:
+        msg = _json.loads(body or b"{}")
+    except Exception:  # noqa: BLE001
+        return []
+    items = msg if isinstance(msg, list) else [msg]
+    return [(it.get("params") or {}).get("name") or ""
+            for it in items
+            if isinstance(it, dict) and it.get("method") == "tools/call"]
+
+
+def _audit(names, raw: str, outcome: str) -> None:
+    """One line per tool call: which tool, which key, allowed or denied.
+
+    There was no record at all of what ran over MCP — the surface most likely to
+    need an audit trail. Arguments are deliberately NOT logged: they carry
+    inventory contents and personal data.
+    """
+    try:
+        from app.services.metrics import record
+        # NOT `key=`: the log redactor treats `key=<value>` as a credential and
+        # would replace the whole field, erasing which client made the call.
+        hint = f"{raw[:7]}~" if raw else "none"
+        for name in names or ["-"]:
+            record("mcp_tool", name=name or "-", client=hint, outcome=outcome)
+    except Exception as exc:  # noqa: BLE001 - auditing must never break a request
+        print(f"edibl-mcp: audit logging failed: {exc}", file=sys.stderr)
+
+
 def _guard(asgi_app, server_token: str):
-    """ASGI gate. Enforces authentication (see _auth_required) and, for a read-only
-    key, refuses MCP write-tools — a `read` key may only invoke READ_TOOLS."""
+    """ASGI gate. Always installed; what it requires depends on the tool.
+
+    * **debug tools** — always require a `debug`-scoped key, on every network.
+      Logs contain login emails and tracebacks that can carry a database
+      password, a different sensitivity class from inventory data.
+    * **domain tools** — unchanged: auth per _auth_required (open on the Home
+      Assistant network, required once exposed externally or a server token is
+      set), with read-only keys held to the READ_TOOLS allowlist.
+    """
     async def wrapper(scope, receive, send):
-        if scope["type"] == "http":
-            header = dict(scope.get("headers") or []).get(b"authorization", b"").decode()
+        if scope["type"] != "http":
+            return await asgi_app(scope, receive, send)
+
+        header = dict(scope.get("headers") or []).get(b"authorization", b"").decode()
+        raw = header[len("Bearer "):].strip() if header.startswith("Bearer ") else ""
+
+        body = b""
+        if scope.get("method") == "POST":
+            body, receive = await _drain_body(receive)
+        names = _tool_names(scope, body)
+        wants_debug = any(n in DEBUG_TOOLS for n in names)
+        wants_domain = any(n and n not in DEBUG_TOOLS for n in names)
+
+        async def deny(status, payload):
+            await send({"type": "http.response.start", "status": status,
+                        "headers": [(b"content-type", b"application/json")]})
+            await send({"type": "http.response.body", "body": payload})
+
+        if wants_debug:
+            if _key_scope(raw) != "debug":
+                _audit(names, raw, "denied")
+                return await deny(
+                    403, b'{"error":"the debug tools require a debug-scoped API key"}')
+            if wants_domain:
+                # A batch mixing both would otherwise let a debug key reach a
+                # domain tool by pairing it with a debug one.
+                _audit(names, raw, "denied")
+                return await deny(
+                    403, b'{"error":"a debug key may not call the domain tools"}')
+        else:
+            if names and _key_scope(raw) == "debug":
+                _audit(names, raw, "denied")
+                return await deny(
+                    403, b'{"error":"a debug key may only call the debug tools"}')
             if _auth_required(server_token) and not _authorized(header, server_token):
-                await send({"type": "http.response.start", "status": 401,
-                            "headers": [(b"content-type", b"text/plain")]})
-                await send({"type": "http.response.body", "body": b"unauthorized"})
-                return
-            # A read-only key may only call read tools. Inspect the tools/call body;
-            # write keys and non-POST requests pass through untouched.
-            if scope.get("method") == "POST" and _header_access(header, server_token) == "read":
-                body, receive = await _drain_body(receive)
-                if _body_has_write_toolcall(body):
-                    payload = b'{"error":"this API key is read-only"}'
-                    await send({"type": "http.response.start", "status": 403,
-                                "headers": [(b"content-type", b"application/json")]})
-                    await send({"type": "http.response.body", "body": payload})
-                    return
+                return await deny(401, b'{"error":"unauthorized"}')
+            if (scope.get("method") == "POST"
+                    and _header_access(header, server_token) == "read"
+                    and _body_has_write_toolcall(body)):
+                _audit(names, raw, "denied")
+                return await deny(403, b'{"error":"this API key is read-only"}')
+
+        if names:
+            _audit(names, raw, "allowed")
         await asgi_app(scope, receive, send)
 
     return wrapper
@@ -787,6 +956,25 @@ if __name__ == "__main__":
     host = _SETTINGS.MCP_HOST
     port = _SETTINGS.MCP_PORT
     server_token = _SETTINGS.MCP_SERVER_TOKEN
+    if _SETTINGS.MCP_DEBUG_TOOLS:
+        # Fail-closed, mirroring the external-exposure check: serving log-reading
+        # tools that nobody can authenticate to would be worse than not serving
+        # them.
+        try:
+            has_debug_key = _debug_key_exists()
+        except Exception as exc:  # noqa: BLE001
+            print(f"ERROR: edibl-mcp: could not verify a debug key exists: {exc}. "
+                  "Not registering the debug tools.", file=sys.stderr)
+            has_debug_key = False
+        if has_debug_key:
+            _register_debug_tools()
+            print("edibl-mcp: debug tools ON — they require an API key with the "
+                  "'debug' scope, on every network.", file=sys.stderr)
+        else:
+            print("WARNING: mcp_debug_tools is on but no 'debug'-scoped API key "
+                  "exists. Mint one in Settings -> Access & keys (scope 'Debug'), "
+                  "then restart. Not serving the debug tools.", file=sys.stderr)
+
     # Always wrap: the guard itself decides per-request whether auth is required, so
     # minting an MCP key later gates the endpoint without a restart.
     # Fail closed: an externally-exposed endpoint must have a mintable client key.

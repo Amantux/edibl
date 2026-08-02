@@ -55,6 +55,7 @@ options:
   use_shared_postgres: false
   postgres_provision_token: ""
   ollama_search_key: ""
+  mcp_debug_tools: false
   log_level: INFO
 schema:
   disable_auth: bool
@@ -94,6 +95,11 @@ schema:
   postgres_provision_token: password?
   # Optional Ollama API key (ollama.com) for AI product descriptions — look items
   # up online for a short searchable description. Blank = feature off.
+  # Let an AI client read this add-on's own logs over MCP to help debug a
+  # problem. Requires an API key with the 'debug' scope even inside Home
+  # Assistant: logs contain sign-in emails and errors that can include database
+  # credentials. Turn it off again when you are done.
+  mcp_debug_tools: bool
   # How much detail goes into this add-on's log. Leave at INFO unless you are
   # chasing a problem: DEBUG is noisy and can include request paths.
   log_level: list(DEBUG|INFO|WARNING|ERROR)?

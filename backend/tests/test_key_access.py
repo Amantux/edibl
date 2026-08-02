@@ -6,6 +6,8 @@ A `write` key (and non-token JWT/ingress identities) is unaffected.
 import asyncio
 import json
 
+import pytest
+
 import edibl_mcp
 from app.auth import _default_user
 from app.extensions import db
@@ -138,3 +140,70 @@ def test_mcp_read_key_denies_unknown_tool(app, monkeypatch):
 
 def test_access_choices():
     assert TOKEN_ACCESS == ("write", "read")
+
+
+# ---- The debug scope --------------------------------------------------------
+#
+# A debug key reads this instance's own logs, which carry sign-in emails and
+# tracebacks that can include a database password. It is therefore a separate
+# key class: denied at REST, denied on the domain tools, and the debug tools are
+# denied to every other key on every network.
+
+def test_debug_key_may_call_a_debug_tool(app, monkeypatch):
+    raw = _key(app, "debug", "read")
+
+    status, called = _run_guard(app, monkeypatch, raw,
+                                {"method": "tools/call",
+                                 "params": {"name": "debug_recent_logs"}})
+
+    assert status == 200 and called is True
+
+
+def test_debug_key_may_not_call_a_domain_tool(app, monkeypatch):
+    raw = _key(app, "debug", "read")
+
+    status, called = _run_guard(app, monkeypatch, raw,
+                                {"method": "tools/call", "params": {"name": "add_stock"}})
+
+    assert status == 403 and called is False
+
+
+@pytest.mark.parametrize("scope", ["full", "mcp"])
+def test_a_normal_key_may_not_call_a_debug_tool(app, monkeypatch, scope):
+    """Least privilege in both directions — otherwise any Assist key could read
+    the logs and 'debug only' would be a lie."""
+    raw = _key(app, scope, "write")
+
+    status, called = _run_guard(app, monkeypatch, raw,
+                                {"method": "tools/call",
+                                 "params": {"name": "debug_recent_logs"}})
+
+    assert status == 403 and called is False
+
+
+def test_an_unauthenticated_caller_may_not_call_a_debug_tool(app, monkeypatch):
+    status, called = _run_guard(app, monkeypatch, "",
+                                {"method": "tools/call",
+                                 "params": {"name": "debug_recent_logs"}})
+
+    assert status == 403 and called is False
+
+
+def test_a_batch_cannot_smuggle_a_domain_tool_past_a_debug_key(app, monkeypatch):
+    """JSON-RPC batches are checked element-wise."""
+    raw = _key(app, "debug", "read")
+
+    status, called = _run_guard(app, monkeypatch, raw, [
+        {"method": "tools/call", "params": {"name": "debug_recent_logs"}},
+        {"method": "tools/call", "params": {"name": "add_stock"}},
+    ])
+
+    assert status == 403 and called is False
+
+
+def test_a_debug_key_is_rejected_at_the_rest_api(app, client):
+    raw = _key(app, "debug", "read")
+
+    client.environ_base["HTTP_AUTHORIZATION"] = f"Bearer {raw}"
+
+    assert client.get("/api/v1/products").status_code == 401

@@ -79,7 +79,16 @@ TOKEN_PREFIX = "edbl_"
 # Per-key access scope. `full` reaches everything (default for legacy keys); `rest`
 # is REST-API only; `mcp` is the MCP server only. Enforced in auth._user_from_api_token
 # (REST) and edibl_mcp._authorize (MCP).
-TOKEN_SCOPES = ("full", "rest", "mcp")
+# scope = WHERE a key works, access = WHAT it may do (two orthogonal dimensions).
+#   full  — REST + MCP domain tools
+#   rest  — REST only
+#   mcp   — MCP domain tools only
+#   debug — the MCP debug tools ONLY: reads this instance's own logs, metrics and
+#           diagnostics, and nothing else. Rejected at REST and on the domain
+#           tools. Logs carry login emails and tracebacks that can contain a
+#           database password, so this is a separate class rather than an extra
+#           power granted to a full key.
+TOKEN_SCOPES = ("full", "rest", "mcp", "debug")
 # Per-key access class. `write` reaches read+write (default for legacy keys); `read`
 # is read-only — mutating REST methods (POST/PUT/PATCH/DELETE) are 403'd and MCP
 # write-tools are refused. Orthogonal to scope. Enforced in auth (REST) + edibl_mcp

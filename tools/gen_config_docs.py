@@ -34,7 +34,7 @@ GROUPS = [
     ("Companion apps", ["MYMEAL_URL", "MYMEAL_TOKEN", "HOMEHOARD_URL", "HOMEHOARD_TOKEN"]),
     ("MCP (Home Assistant Assist)", ["MCP_ENABLED", "MCP_HOST", "MCP_PORT", "MCP_API",
                                      "MCP_API_TOKEN", "MCP_SERVER_TOKEN",
-                                     "MCP_EXPOSE_EXTERNAL"]),
+                                     "MCP_EXPOSE_EXTERNAL", "MCP_DEBUG_TOOLS"]),
     ("Serving & misc", ["MAX_UPLOAD_MB", "CURRENCY", "FRONTEND_DIST", "DEBUG"]),
     ("Logging", ["LOG_LEVEL", "SLOW_REQUEST_MS"]),
 ]

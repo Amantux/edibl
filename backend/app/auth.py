@@ -159,7 +159,11 @@ def _user_from_api_token(raw: str):
         return None
     # Scope gate: an MCP-only key must not authenticate the REST API (it's issued
     # for the MCP server alone). `full`/`rest` (and legacy NULL→"full") pass.
-    if (rec.scope or "full") == "mcp":
+    # `mcp` keys are for the MCP transport alone and `debug` keys for the MCP
+    # debug tools alone — neither authenticates the REST API. This is the one
+    # place the scope is checked for REST, so a new scope is denied here or
+    # nowhere.
+    if (rec.scope or "full") in ("mcp", "debug"):
         return None
     # Read/write class for this key — read the guards in login_required/owner_required
     # 403 mutating methods. Only set for API-token auth; JWT/ingress default to write.

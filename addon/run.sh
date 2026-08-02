@@ -1,47 +1,31 @@
 #!/usr/bin/env sh
-# Home Assistant add-on entrypoint: map add-on options → Edibl env, then hand off
-# to the app's standard entrypoint (preboot DB init, MCP server, gunicorn).
+# Home Assistant add-on entrypoint: hand off to the app's standard entrypoint
+# (config validation, preboot DB init, MCP server, gunicorn).
+#
+# /data/options.json is deliberately NOT parsed here. The application reads it
+# via one tested adapter (app.settings.load_ha_options), so the shell and Python
+# cannot disagree about what the configuration is. This file used to translate
+# sixteen options into env vars with one `python3 -c` each, via helpers that
+# carried two real defects:
+#
+#   getb() { python3 -c "...print(str(bool(v)).lower())"; }
+#
+#   * ANY string was truthy, so `disable_auth: "false"` resolved to TRUE and
+#     silently disabled authentication.
+#   * A MISSING key became false (bool(None)), while config.yaml ships
+#     `disable_auth: true` and `mcp_enabled: true` — so a partial options.json
+#     put a login screen in front of every HA user behind ingress and turned
+#     voice control off.
+#
+# parse_bool in the registry accepts 1/true/yes/on and 0/false/no/off and
+# REJECTS anything else instead of coercing it.
 set -e
 
-CONFIG=/data/options.json
-
-# Read a string option ("" when unset/null).
-gets() {
-  python3 -c "import json;v=json.load(open('$CONFIG')).get('$1');print('' if v is None else v)" 2>/dev/null || true
-}
-# Read a boolean option as lowercase true/false (docker-entrypoint.sh compares literally).
-getb() {
-  python3 -c "import json;v=json.load(open('$CONFIG')).get('$1');print(str(bool(v)).lower())" 2>/dev/null || echo false
-}
-
+# The data dir is the one value the shell needs before Python runs.
 export EDIBL_DATA_DIR=/data
-export EDIBL_DISABLE_AUTH="$(getb disable_auth)"
-export EDIBL_LLM_PROVIDER="$(gets llm_provider)"
-export EDIBL_LLM_BASE_URL="$(gets llm_base_url)"
-export EDIBL_LLM_API_KEY="$(gets llm_api_key)"
-export EDIBL_LLM_MODEL="$(gets llm_model)"
-export EDIBL_LLM_AGENT_ID="$(gets llm_agent_id)"
-export EDIBL_BARCODE_LOOKUP="$(getb barcode_lookup)"
-export EDIBL_BARCODE_DB_KEY="$(gets barcode_db_key)"
-export EDIBL_MCP_ENABLED="$(getb mcp_enabled)"
-export EDIBL_MCP_SERVER_TOKEN="$(gets mcp_server_token)"
-export EDIBL_MCP_EXPOSE_EXTERNAL="$(getb mcp_expose_external)"
-# Optional external Postgres; blank keeps the built-in SQLite in /data.
-export EDIBL_DATABASE_URL="$(gets database_url)"
-export EDIBL_MIGRATE_FROM_SQLITE="$(getb migrate_from_sqlite)"
-# Or let the "Shared PostgreSQL" add-on provision a database for us (auto-discovered).
-export EDIBL_USE_SHARED_POSTGRES="$(getb use_shared_postgres)"
-export EDIBL_POSTGRES_PROVISION_TOKEN="$(gets postgres_provision_token)"
-# Optional Ollama web-search key for AI product descriptions.
-export EDIBL_OLLAMA_SEARCH_KEY="$(gets ollama_search_key)"
 
-# Behind HA ingress the requests come from the trusted supervisor proxy.
+# Behind HA ingress the requests come from the trusted Supervisor proxy. Not an
+# add-on option: it is a fact about the deployment, not a preference.
 export EDIBL_PROXY_HOPS="1"
 
-# HA Supervisor auto-discovery (and the integration API-key mint it depends on)
-# is handled by docker-entrypoint.sh AFTER DB init, so the token file exists when
-# the publisher reads it. Keeping it there also makes it race-free with the
-# one-shot schema init (no second create_all).
-
-echo "Starting Edibl (auth_disabled=${EDIBL_DISABLE_AUTH}, llm=${EDIBL_LLM_PROVIDER:-rules}, mcp=${EDIBL_MCP_ENABLED})"
 exec /app/docker-entrypoint.sh

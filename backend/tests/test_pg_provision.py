@@ -102,9 +102,22 @@ def no_network(monkeypatch):
 
 
 def _patch_config(monkeypatch, tmp_path, **attrs):
-    for k, v in {"DATA_DIR": str(tmp_path), "DATABASE_URL": "",
-                 "USE_SHARED_POSTGRES": True, "POSTGRES_PROVISION_TOKEN": "", **attrs}.items():
-        monkeypatch.setattr(Config, k, v, raising=False)
+    """Configure through the ENVIRONMENT, not by setting Config attributes.
+
+    pg_provision resolves via app.settings.load_settings(), which is what the
+    entrypoint relies on now that addon/run.sh no longer translates options.json
+    into env vars. Patching Config would test nothing.
+    """
+    values = {"DATA_DIR": str(tmp_path), "DATABASE_URL": "",
+              "USE_SHARED_POSTGRES": True, "POSTGRES_PROVISION_TOKEN": "", **attrs}
+    for k, v in values.items():
+        name = f"EDIBL_{k}"
+        if v == "" or v is None:
+            monkeypatch.delenv(name, raising=False)
+        elif isinstance(v, bool):
+            monkeypatch.setenv(name, "true" if v else "false")
+        else:
+            monkeypatch.setenv(name, str(v))
 
 
 def test_main_noop_when_explicit_url_set(monkeypatch, tmp_path, no_network):
@@ -204,7 +217,7 @@ def test_main_provisions_over_existing_data_when_migrate_on(monkeypatch, tmp_pat
     (tmp_path / "edibl.db").write_bytes(b"SQLite format 3\x00 with data")
     dsn = "postgresql+psycopg://edibl:secret@shared-postgres:5432/edibl"
     _arm(monkeypatch, tmp_path, dsn)
-    monkeypatch.setattr(Config, "MIGRATE_FROM_SQLITE", True, raising=False)
+    monkeypatch.setenv("EDIBL_MIGRATE_FROM_SQLITE", "true")
     assert pg_provision.main() == 0
     assert (tmp_path / ".database_url").read_text() == dsn
 

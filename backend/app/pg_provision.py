@@ -2,7 +2,7 @@
 
 When ``EDIBL_USE_SHARED_POSTGRES`` is enabled and we're running under Home
 Assistant, discover the ``shared_postgres`` add-on, provision Edibl's OWN database,
-and persist the resulting DSN to ``<DATA_DIR>/.database_url``. ``Config.sqlalchemy_uri``
+and persist the resulting DSN to ``<DATA_DIR>/.database_url``. ``Settings.sqlalchemy_uri``
 reads that file (gated on the same flag), so the app comes up on Postgres.
 
 Best-effort: any failure logs to stderr and leaves Edibl on SQLite — this must
@@ -21,8 +21,6 @@ import json
 import os
 import sys
 import urllib.request
-
-from app.config import Config
 
 DSN_FILENAME = ".database_url"
 API_PORT = 8087
@@ -102,7 +100,8 @@ def _existing_sqlite_has_data() -> bool:
     """True if the built-in SQLite DB exists and is non-empty — provisioning a fresh
     (empty) Postgres now would strand it. On a first-ever boot the file does not
     exist yet, so a clean install still provisions normally."""
-    path = os.path.join(Config.DATA_DIR, f"{APP_NAME}.db")
+    from .settings import load_settings
+    path = os.path.join(load_settings().data_dir, f"{APP_NAME}.db")
     try:
         return os.path.getsize(path) > 0
     except OSError:
@@ -120,12 +119,21 @@ def _provision(url: str, token: str):
 
 
 def main() -> int:
-    if (Config.DATABASE_URL or "").strip():
+    # Resolve through the registry, not Config: this runs as its own process
+    # BEFORE the app, and the entrypoint no longer translates options.json into
+    # the environment. Reading env alone would silently disable shared
+    # PostgreSQL for every add-on user.
+    from .settings import load_settings
+
+    settings = load_settings()
+    data_dir = settings.data_dir
+
+    if (settings.DATABASE_URL or "").strip():
         return 0  # explicit URL wins; nothing to provision
-    if not getattr(Config, "USE_SHARED_POSTGRES", False):
+    if not settings.USE_SHARED_POSTGRES:
         return 0
 
-    dsn_path = os.path.join(Config.DATA_DIR, DSN_FILENAME)
+    dsn_path = os.path.join(data_dir, DSN_FILENAME)
     if os.path.isfile(dsn_path):
         with open(dsn_path) as fh:
             if fh.read().strip():
@@ -141,7 +149,7 @@ def main() -> int:
     # Postgres would silently serve a blank app. Stay on SQLite and tell them how
     # to move the data over. (With migrate_from_sqlite on we DO provision, and
     # _maybe_boot_migrate copies SQLite into the new database before serving.)
-    if _existing_sqlite_has_data() and not getattr(Config, "MIGRATE_FROM_SQLITE", False):
+    if _existing_sqlite_has_data() and not settings.MIGRATE_FROM_SQLITE:
         _log("use_shared_postgres is on but a local SQLite database already holds data; "
              "staying on SQLite so nothing is stranded. Set migrate_from_sqlite: true as "
              "well to copy it into the shared PostgreSQL on the next start")
@@ -152,7 +160,7 @@ def main() -> int:
         return 0
 
     cfg = _discovery_config()
-    token = ((Config.POSTGRES_PROVISION_TOKEN or "") or (cfg or {}).get("token") or "").strip()
+    token = ((settings.POSTGRES_PROVISION_TOKEN or "") or (cfg or {}).get("token") or "").strip()
     if not token:
         _log("no provisioning token available — set 'postgres_provision_token' to the "
              "Shared PostgreSQL add-on's token (Settings shows it). Staying on SQLite")
@@ -162,7 +170,7 @@ def main() -> int:
     # Supervisor-/addons-identified hosts, then fixed add-on DNS names). HA
     # add-ons share a semi-trusted internal network; the DSN-scheme check below
     # is the backstop against a bad/foreign response being persisted.
-    os.makedirs(Config.DATA_DIR, exist_ok=True)
+    os.makedirs(data_dir, exist_ok=True)
     for url in _candidate_provision_urls(cfg):
         try:
             dsn = _provision(url, token)

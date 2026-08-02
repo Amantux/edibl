@@ -2,24 +2,65 @@
 import logging
 import os
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, current_app, jsonify, request, send_from_directory
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import safe_join
 
 from .config import Config, ensure_secret_key
 from .extensions import db, limiter
+from .settings import FIELDS_BY_NAME, PLACEHOLDER_SECRETS, load_settings
 
 _LOGGER = logging.getLogger("edibl")
 
 
+def _settings_from(config_object):
+    """Build Settings, honouring a legacy config object as a bag of overrides.
+
+    Tests (and any caller passing a Config subclass) fully specify their
+    configuration, so every attribute matching a declared field becomes an
+    explicit override — which is also what lets several differently-configured
+    apps exist in one process. Passing the bare Config class means "resolve
+    normally" (env + /data/options.json).
+    """
+    if config_object is None or config_object is Config:
+        return load_settings()
+
+    overrides = {}
+    for name in FIELDS_BY_NAME:
+        if hasattr(config_object, name):
+            overrides[name] = getattr(config_object, name)
+    # Legacy derived attributes: the old Config exposed the computed value, the
+    # registry declares the input.
+    if hasattr(config_object, "MAX_UPLOAD_BYTES") and "MAX_UPLOAD_MB" not in overrides:
+        overrides["MAX_UPLOAD_MB"] = max(1, int(config_object.MAX_UPLOAD_BYTES) // (1024 * 1024))
+    if hasattr(config_object, "JWT_EXPIRES") and "JWT_HOURS" not in overrides:
+        overrides["JWT_HOURS"] = max(1, int(config_object.JWT_EXPIRES.total_seconds() // 3600))
+    return load_settings(overrides=overrides, ha_options={})
+
+
 def create_app(config_object=Config):
     app = Flask(__name__, static_folder=None)
-    app.config.from_object(config_object)
-    app.config["SQLALCHEMY_DATABASE_URI"] = config_object.sqlalchemy_uri()
+    settings = _settings_from(config_object)
+
+    # Every declared field is exposed under its own name, exactly as
+    # `from_object(Config)` used to expose the class attributes — so existing
+    # `app.config["LLM_PROVIDER"]`-style reads keep working.
+    app.config.update(settings.values)
+    app.config["SETTINGS"] = settings
+    # Absolute, matching the old `Config.DATA_DIR = os.path.abspath(...)`.
+    app.config["DATA_DIR"] = settings.data_dir
+    app.config["KNOWN_DEFAULT_SECRETS"] = PLACEHOLDER_SECRETS
+    app.config["JWT_EXPIRES"] = settings.jwt_expires
+    app.config["MAX_UPLOAD_BYTES"] = settings.max_upload_bytes
+    app.config["MAX_CONTENT_LENGTH"] = settings.max_upload_bytes
+    app.config["JSON_SORT_KEYS"] = False
+    app.config["SQLALCHEMY_DATABASE_URI"] = settings.sqlalchemy_uri
     # pool_pre_ping recycles connections a remote Postgres dropped (idle timeout,
     # restart). Harmless for SQLite. Enables the optional Postgres backend.
     app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"pool_pre_ping": True}
+    for warning in settings.warnings:
+        _LOGGER.warning("Configuration: %s", warning)
     _db_uri = app.config["SQLALCHEMY_DATABASE_URI"]
     _LOGGER.info("Edibl storage backend: %s",
                  "sqlite" if _db_uri.startswith("sqlite") else _db_uri.split("://", 1)[0])
@@ -28,13 +69,13 @@ def create_app(config_object=Config):
     # otherwise we reuse (or generate once and persist) one under DATA_DIR. This
     # replaces the entrypoint's old /dev/urandom default, which minted a new key
     # every boot and silently logged everyone out.
-    secret, generated = ensure_secret_key(config_object)
+    secret, generated = ensure_secret_key(app.config)
     app.config["SECRET_KEY"] = secret
     if generated:
         _LOGGER.warning(
             "No EDIBL_SECRET_KEY was supplied; generated one and persisted it to "
             "%s so sessions survive restarts. Back this file up with your data.",
-            os.path.join(config_object.DATA_DIR, ".secret_key"),
+            os.path.join(app.config["DATA_DIR"], ".secret_key"),
         )
 
     if not app.config["DISABLE_AUTH"]:
@@ -446,13 +487,22 @@ def _register_security_headers(app):
         return resp
 
 
-_FRONTEND_DIST = os.environ.get(
-    "EDIBL_FRONTEND_DIST",
-    os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "dist")),
-)
+_DEFAULT_FRONTEND_DIST = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "dist"))
+
+
+def _frontend_dist() -> str:
+    """Where the built SPA lives — read per request from the app's resolved
+    settings (FRONTEND_DIST, blank = the location baked into the image).
+
+    Deliberately NOT a module-level constant: resolving config at import time is
+    the pattern this refactor removed, and it makes `python3 -m app.config_check`
+    die with a traceback on a bad config instead of reporting it cleanly.
+    """
+    return current_app.config.get("FRONTEND_DIST") or _DEFAULT_FRONTEND_DIST
 
 
 def _serve_spa(path):
+    _FRONTEND_DIST = _frontend_dist()
     # safe_join, not os.path.join: it rejects traversal ("../") and absolute
     # segments, returning None. os.path.join would happily build a path outside
     # the dist dir, letting the isfile() check probe for arbitrary files.

@@ -1,11 +1,11 @@
 #!/usr/bin/env sh
 set -e
+# The data dir is the one value the shell needs BEFORE Python can run (mkdir +
+# chown happen as root, before the privilege drop). Everything else — port, MCP
+# settings, auth — is resolved from the registry below, so there is no second
+# set of defaults here to drift from the declared ones.
 : "${EDIBL_DATA_DIR:=/data}"
-: "${EDIBL_DISABLE_AUTH:=false}"
-: "${EDIBL_PORT:=7746}"
-: "${EDIBL_MCP_ENABLED:=true}"
-: "${EDIBL_MCP_PORT:=7767}"
-export EDIBL_DATA_DIR EDIBL_DISABLE_AUTH EDIBL_PORT EDIBL_MCP_PORT
+export EDIBL_DATA_DIR
 
 # NOTE: EDIBL_SECRET_KEY is intentionally NOT defaulted here. It used to be
 # `head -c 32 /dev/urandom`, which minted a NEW signing key on every container
@@ -34,13 +34,44 @@ fi
 
 cd /app/backend
 
+# Validate the configuration before anything starts, so a bad options.json or
+# env var fails immediately with EVERY problem listed, rather than booting into
+# a confusing 500 on some later request.
+if ! $RUN_AS python3 -m app.config_check; then
+  echo "Edibl: refusing to start with invalid configuration (see above)." >&2
+  exit 1
+fi
+
+# Read back the handful of values the shell itself needs, from the SAME source
+# of truth the app uses. One process, one parse. Only structural values go
+# through this eval; a secret must never be eval'd.
+#
+# Two guards: the output is filtered to RESOLVED_* lines, so a stray print() on
+# an import path cannot become shell code; and the result is captured and
+# checked, because `eval "$(cmd)"` swallows cmd's exit status.
+#
+# Written as `python3 -c '...'` rather than a heredoc inside $( ): the image's
+# /bin/sh is dash, which does not parse the heredoc form with a trailing pipe,
+# and `sh -n` on a bash-as-sh host accepts it — only a container run catches it.
+RESOLVED=$($RUN_AS python3 -c 'from app.settings import load_settings
+s = load_settings()
+print(f"RESOLVED_PORT={s.PORT}")
+print("RESOLVED_MCP_ENABLED=" + ("true" if s.MCP_ENABLED else "false"))
+print("RESOLVED_DISABLE_AUTH=" + ("true" if s.DISABLE_AUTH else "false"))
+print(f"RESOLVED_MCP_PORT={s.MCP_PORT}")' | grep "^RESOLVED_[A-Z_]*=")
+eval "$RESOLVED"
+if [ -z "${RESOLVED_PORT:-}" ] || [ -z "${RESOLVED_MCP_PORT:-}" ]; then
+  echo "Edibl: could not resolve settings for startup; refusing to start." >&2
+  exit 1
+fi
+
 # Initialize/migrate the DB once before workers (avoids a create_all race). Mint the
 # stable integration API key in the SAME process (race-free — no second create_all)
 # whenever a machine client needs it: under the HA Supervisor (the integration), or
 # in hardened mode with the MCP server on (its outbound calls need a REST key).
 MINT_TOKEN=false
 if [ -n "${SUPERVISOR_TOKEN:-}" ]; then MINT_TOKEN=true; fi
-if [ "${EDIBL_DISABLE_AUTH}" != "true" ] && [ "${EDIBL_MCP_ENABLED}" = "true" ]; then
+if [ "${RESOLVED_DISABLE_AUTH}" != "true" ] && [ "${RESOLVED_MCP_ENABLED}" = "true" ]; then
   MINT_TOKEN=true
 fi
 # Shared PostgreSQL: when enabled, discover the add-on and provision our own
@@ -86,16 +117,15 @@ fi
 # mode its outbound calls to the REST API need a key — hand it the minted
 # integration token (full scope). Open mode reaches the API without one.
 MCP_PID=""
-if [ "${EDIBL_MCP_ENABLED}" = "true" ]; then
+if [ "${RESOLVED_MCP_ENABLED}" = "true" ]; then
   MCP_API_TOKEN=""
-  if [ "${EDIBL_DISABLE_AUTH}" != "true" ] && [ -f "${EDIBL_DATA_DIR}/.integration_token" ]; then
+  if [ "${RESOLVED_DISABLE_AUTH}" != "true" ] && [ -f "${EDIBL_DATA_DIR}/.integration_token" ]; then
     MCP_API_TOKEN="$(cat "${EDIBL_DATA_DIR}/.integration_token" 2>/dev/null || true)"
   fi
-  EDIBL_MCP_API="http://127.0.0.1:${EDIBL_PORT}/api/v1" \
   EDIBL_MCP_API_TOKEN="$MCP_API_TOKEN" \
     $RUN_AS python3 /app/backend/edibl_mcp.py &
   MCP_PID=$!
-  echo "Edibl MCP server started (pid $MCP_PID) on :${EDIBL_MCP_PORT}/sse"
+  echo "Edibl MCP server started (pid $MCP_PID) on :${RESOLVED_MCP_PORT}/sse"
 fi
 
 # The MCP server was previously backgrounded and then orphaned by `exec gunicorn`,
@@ -110,9 +140,9 @@ shutdown() {
 }
 trap shutdown TERM INT
 
-$RUN_AS gunicorn -b "0.0.0.0:${EDIBL_PORT}" -w 2 --timeout 120 "app:create_app()" &
+$RUN_AS gunicorn -b "0.0.0.0:${RESOLVED_PORT}" -w 2 --timeout 120 "app:create_app()" &
 GUNICORN_PID=$!
-echo "Edibl gunicorn on :${EDIBL_PORT}"
+echo "Edibl gunicorn on :${RESOLVED_PORT}"
 
 # Supervise. A dead MCP is reported rather than silently absent; a dead gunicorn
 # takes the container down with its real exit status.

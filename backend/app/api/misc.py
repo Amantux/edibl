@@ -36,7 +36,7 @@ def diagnostics():
         "app": "Edibl",
         "dbBackend": "sqlite" if uri.startswith("sqlite") else "postgresql",
         "aiProvider": provider,
-        "mcpEnabled": os.environ.get("EDIBL_MCP_ENABLED", "").lower() == "true",
+        "mcpEnabled": bool(current_app.config["MCP_ENABLED"]),
         "authDisabled": bool(current_app.config.get("DISABLE_AUTH")),
     })
 

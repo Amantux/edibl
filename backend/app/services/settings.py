@@ -4,7 +4,7 @@ Used for the chat LLM provider: values set here override the add-on / env
 defaults, so a provider can be configured in Home Assistant *or* in the Edibl UI
 and is remembered either way.
 """
-import os
+from flask import current_app
 
 from ..extensions import db
 from ..models import Setting
@@ -67,7 +67,7 @@ def get_currency(gid):
         stored = (_all(gid).get(CURRENCY_KEY) or "").strip()
     except Exception:  # noqa: BLE001 — best-effort read, never break pricing
         stored = ""
-    code = stored or os.environ.get("EDIBL_CURRENCY", "") or "USD"
+    code = stored or (current_app.config.get("CURRENCY") or "") or "USD"
     return code.strip().upper()[:8]
 
 

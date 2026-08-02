@@ -20,14 +20,21 @@ Outbound auth (this server → REST API): set EDIBL_MCP_API_TOKEN when app auth 
 """
 import hmac
 import json as _json
-import os
 import sys
 
 import httpx
 from mcp.server.fastmcp import FastMCP
 
-API = os.environ.get("EDIBL_MCP_API", "http://127.0.0.1:7746/api/v1")
-TOKEN = os.environ.get("EDIBL_MCP_API_TOKEN")
+from app.settings import load_settings
+
+# Resolved through the one registry, not raw os.environ: this is a separate
+# process, and the entrypoint no longer translates options.json into the
+# environment. Reading env directly is also how this file grew its own boolean
+# parser for MCP_EXPOSE_EXTERNAL, a third implementation of the same rule.
+_SETTINGS = load_settings()
+
+API = _SETTINGS.mcp_api
+TOKEN = _SETTINGS.MCP_API_TOKEN or None
 _HEADERS = {"Authorization": f"Bearer {TOKEN}"} if TOKEN else {}
 _HTTP = httpx.Client(base_url=API, headers=_HEADERS, timeout=10)
 
@@ -604,9 +611,14 @@ def _usable_mcp_key_exists() -> bool:
 def _expose_external() -> bool:
     """Operator opted the MCP port out of Home Assistant (`mcp_expose_external`).
     When on, auth is mandatory regardless of mode and the server refuses to bind
-    without a usable key (see `_should_refuse_to_serve`)."""
-    return os.environ.get("EDIBL_MCP_EXPOSE_EXTERNAL", "").strip().lower() in (
-        "1", "true", "yes", "on")
+    without a usable key (see `_should_refuse_to_serve`).
+
+    Resolved per call, not captured at import: this gates whether the endpoint
+    demands a key, so it must reflect the configuration as it is now. Resolution
+    is a small JSON read plus a field loop — at household request volumes that is
+    not worth caching, and caching it is exactly what made the value untestable.
+    """
+    return bool(load_settings().MCP_EXPOSE_EXTERNAL)
 
 
 def _should_refuse_to_serve() -> bool:
@@ -765,9 +777,9 @@ def _authorized(header_value: str, server_token: str) -> bool:
 
 
 if __name__ == "__main__":
-    host = os.environ.get("EDIBL_MCP_HOST", "0.0.0.0")
-    port = int(os.environ.get("EDIBL_MCP_PORT", "7767"))
-    server_token = os.environ.get("EDIBL_MCP_SERVER_TOKEN", "")
+    host = _SETTINGS.MCP_HOST
+    port = _SETTINGS.MCP_PORT
+    server_token = _SETTINGS.MCP_SERVER_TOKEN
     # Always wrap: the guard itself decides per-request whether auth is required, so
     # minting an MCP key later gates the endpoint without a restart.
     # Fail closed: an externally-exposed endpoint must have a mintable client key.

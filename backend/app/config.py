@@ -1,8 +1,6 @@
 """Edibl configuration — env-driven so it runs standalone, in Docker, or as a
 Home Assistant add-on. Mirrors HomeHoard's hardened config patterns."""
 import os
-import secrets
-import stat
 from datetime import timedelta
 
 
@@ -30,7 +28,7 @@ class Config:
     POSTGRES_PROVISION_TOKEN = os.environ.get("EDIBL_POSTGRES_PROVISION_TOKEN", "")
 
     # --- Security --------------------------------------------------------
-    SECRET_KEY = os.environ.get("EDIBL_SECRET_KEY", "change-me-in-production")
+    SECRET_KEY = os.environ.get("EDIBL_SECRET_KEY", "")
     JWT_EXPIRES = timedelta(hours=int(os.environ.get("EDIBL_JWT_HOURS", "72")))
     KNOWN_DEFAULT_SECRETS = frozenset({
         "change-me-in-production",
@@ -99,88 +97,57 @@ class Config:
     MAX_UPLOAD_BYTES = int(os.environ.get("EDIBL_MAX_UPLOAD_MB", "25")) * 1024 * 1024
     JSON_SORT_KEYS = False
 
+    # --- delegation to the configuration registry -------------------------
+    # These used to hold a SECOND implementation of DB-URL normalization, the
+    # SQLite fallback and secret persistence. They now forward to app.settings so
+    # there is exactly one, per the one-adapter rule. Kept by name because
+    # migrations/env.py, services/db_copy and the tests call them.
+
     @staticmethod
     def _normalize_db_url(url: str) -> str:
-        """Pin the psycopg (v3) driver for Postgres URLs. `postgres://` (Heroku
-        style) and bare `postgresql://` both resolve to psycopg2 in SQLAlchemy,
-        which we don't ship — rewrite them to `postgresql+psycopg://`."""
-        if url.startswith("postgres://"):
-            url = "postgresql://" + url[len("postgres://"):]
-        if url.startswith("postgresql://"):
-            url = "postgresql+psycopg://" + url[len("postgresql://"):]
-        return url
-
-    @classmethod
-    def _validate_db_url(cls, raw: str) -> str:
-        """Normalize + scheme-check a database URL (env value or provisioned DSN).
-        Only SQLite and Postgres-via-psycopg are supported."""
-        url = cls._normalize_db_url(raw)
-        scheme = url.split(":", 1)[0]
-        if not (scheme.startswith("sqlite") or scheme.startswith("postgresql")):
-            raise RuntimeError(
-                f"database URL scheme {scheme!r} is unsupported. Only SQLite "
-                "(default) and Postgres (postgresql+psycopg://user:pass@host/db) "
-                "are supported."
-            )
-        if scheme.startswith("postgresql+") and scheme != "postgresql+psycopg":
-            raise RuntimeError(
-                f"database URL driver {scheme!r} isn't bundled — use "
-                "postgresql+psycopg:// (the sync psycopg 3 driver Edibl ships)."
-            )
-        return url
+        from .settings import normalize_db_scheme
+        return normalize_db_scheme(url)
 
     @classmethod
     def sqlalchemy_uri(cls) -> str:
-        raw = (cls.DATABASE_URL or "").strip()
-        if raw:  # a blank / whitespace-only value falls through
-            return cls._validate_db_url(raw)
-        # Shared PostgreSQL: pg_provision wrote the discovered DSN here at boot.
-        # Read it rather than routing a runtime value through env precedence.
-        if getattr(cls, "USE_SHARED_POSTGRES", False):
-            try:
-                with open(os.path.join(cls.DATA_DIR, ".database_url")) as fh:
-                    dsn = fh.read().strip()
-            except OSError:
-                dsn = ""
-            if dsn:
-                return cls._validate_db_url(dsn)
-        os.makedirs(cls.DATA_DIR, exist_ok=True)
-        return f"sqlite:///{os.path.join(cls.DATA_DIR, 'edibl.db')}"
+        """Resolve the database URL, honouring attributes set on a subclass.
+
+        validate=False: this also answers "which database?" for the bare
+        `alembic` CLI, a recovery path that must not abort because an unrelated
+        setting is wrong.
+        """
+        from .settings import FIELDS_BY_NAME, load_settings
+        if cls is Config:
+            return load_settings(validate=False).sqlalchemy_uri
+        overrides = {n: getattr(cls, n) for n in FIELDS_BY_NAME if hasattr(cls, n)}
+        return load_settings(overrides=overrides, ha_options={},
+                             validate=False).sqlalchemy_uri
 
 
 def ensure_secret_key(config_object) -> tuple[str, bool]:
-    """Return ``(secret, was_generated)``, persisting a generated one.
+    """Adapter over :func:`app.settings.ensure_secret_key`.
 
-    A signing key regenerated on every restart logs every user out and voids
-    every issued API token — a silent, confusing failure. The entrypoint used to
-    default EDIBL_SECRET_KEY from /dev/urandom, which did exactly that on each
-    container start. If the operator does not supply a real key we generate one
-    ONCE and persist it beside the database, so restarts are non-events.
-
-    A placeholder (the shipped ``change-me-in-production`` and friends) counts as
-    UNSET, not as a key — otherwise every install would share one public secret.
+    Accepts either a config OBJECT (tests, legacy callers) or a MAPPING such as
+    ``app.config`` — create_app has no config object once settings are resolved.
+    Getting this wrong is silent and severe: reading no key would generate a new
+    one on every boot, which is the exact bug the persisted key exists to fix.
     """
-    configured = (getattr(config_object, "SECRET_KEY", "") or "").strip()
-    placeholders = getattr(config_object, "KNOWN_DEFAULT_SECRETS", frozenset())
-    if configured and configured not in placeholders:
-        return configured, False
+    def _get(obj, name):
+        if hasattr(obj, "get") and not isinstance(obj, type):
+            return obj.get(name) or ""
+        return getattr(obj, name, "") or ""
 
-    data_dir = config_object.DATA_DIR
-    path = os.path.join(data_dir, ".secret_key")
-    try:
-        with open(path) as fh:
-            existing = fh.read().strip()
-    except OSError:
-        existing = ""
-    if existing:
-        return existing, False
+    from .settings import _is_placeholder, ensure_secret_key as _ensure
 
-    generated = secrets.token_urlsafe(48)
-    os.makedirs(data_dir, exist_ok=True)
-    # 0600 at CREATE, not after: a world-readable window, however brief, is a
-    # window in which the signing key can be read.
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
-                 stat.S_IRUSR | stat.S_IWUSR)
-    with os.fdopen(fd, "w") as fh:
-        fh.write(generated)
-    return generated, True
+    supplied = _get(config_object, "SECRET_KEY")
+    # Edibl treats a KNOWN PLACEHOLDER as "not supplied" and generates a real
+    # key. This predates the registry and is deliberate: the placeholder used to
+    # be Config's own default, so without it every install would have shared one
+    # public signing key (tests/test_secret_key.py documents exactly that).
+    # An operator who sets a placeholder explicitly WITH auth enabled is still
+    # refused earlier, by _validate_semantics — they get told, not silently
+    # patched. HomeHoard passes placeholders through instead, which is why this
+    # lives in the adapter and not in the shared implementation.
+    if _is_placeholder(supplied):
+        supplied = ""
+    return _ensure(supplied, _get(config_object, "DATA_DIR"))

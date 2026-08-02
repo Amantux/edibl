@@ -845,18 +845,37 @@ def _body_has_write_toolcall(body: bytes) -> bool:
     return False
 
 
+def _is_message_path(scope) -> bool:
+    """Whether this request targets the JSON-RPC message endpoint.
+
+    Deliberately NOT also checking the HTTP method. FastMCP mounts the endpoint
+    with Starlette's Mount, which matches on path alone, and
+    SseServerTransport.handle_post_message never checks the method either — so
+    PUT/GET/DELETE are processed exactly like POST. Gating on method == "POST"
+    meant every rule below saw an empty tool list and applied nothing.
+    """
+    return "/messages" in scope.get("path", "")
+
+
 def _tool_names(scope, body: bytes) -> list:
-    """Tool names in a JSON-RPC body, or [] if this is not a tools/call POST."""
-    if scope.get("method") != "POST":
+    """Tool names in a JSON-RPC body, or [] if this is not a message request."""
+    if not _is_message_path(scope):
         return []
     try:
         msg = _json.loads(body or b"{}")
     except Exception:  # noqa: BLE001
         return []
     items = msg if isinstance(msg, list) else [msg]
-    return [(it.get("params") or {}).get("name") or ""
-            for it in items
-            if isinstance(it, dict) and it.get("method") == "tools/call"]
+    out = []
+    for it in items:
+        if not isinstance(it, dict) or it.get("method") != "tools/call":
+            continue
+        params = it.get("params")
+        # params may legitimately be a list; .get on it raised, turning an
+        # unauthenticated request into a 500.
+        name = params.get("name") if isinstance(params, dict) else None
+        out.append(name if isinstance(name, str) else "")
+    return out
 
 
 def _audit(names, raw: str, outcome: str) -> None:
@@ -895,7 +914,7 @@ def _guard(asgi_app, server_token: str):
         raw = header[len("Bearer "):].strip() if header.startswith("Bearer ") else ""
 
         body = b""
-        if scope.get("method") == "POST":
+        if _is_message_path(scope):
             body, receive = await _drain_body(receive)
         names = _tool_names(scope, body)
         wants_debug = any(n in DEBUG_TOOLS for n in names)
@@ -924,8 +943,7 @@ def _guard(asgi_app, server_token: str):
                     403, b'{"error":"a debug key may only call the debug tools"}')
             if _auth_required(server_token) and not _authorized(header, server_token):
                 return await deny(401, b'{"error":"unauthorized"}')
-            if (scope.get("method") == "POST"
-                    and _header_access(header, server_token) == "read"
+            if (_header_access(header, server_token) == "read"
                     and _body_has_write_toolcall(body)):
                 _audit(names, raw, "denied")
                 return await deny(403, b'{"error":"this API key is read-only"}')

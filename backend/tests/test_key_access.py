@@ -96,8 +96,11 @@ def _run_guard(app, monkeypatch, raw, body_obj, method="POST"):
     async def send(msg):
         sent.append(msg)
 
-    scope = {"type": "http", "method": method,
-             "headers": [(b"authorization", f"Bearer {raw}".encode())]}
+    # A real request carries the mounted message path; the guard keys off it
+    # (deliberately not off the HTTP method — Starlette's Mount does not filter
+    # by method, so a PUT reaches the tool just like a POST).
+    scope = {"type": "http", "method": method, "path": "/messages/",
+             "headers": ([(b"authorization", f"Bearer {raw}".encode())] if raw else [])}
     asyncio.run(guard(scope, receive, send))
     status = next((m["status"] for m in sent if m["type"] == "http.response.start"), None)
     return status, called["v"]
@@ -207,3 +210,38 @@ def test_a_debug_key_is_rejected_at_the_rest_api(app, client):
     client.environ_base["HTTP_AUTHORIZATION"] = f"Bearer {raw}"
 
     assert client.get("/api/v1/products").status_code == 401
+
+
+# ---- The method-bypass blocker ---------------------------------------------
+#
+# FastMCP mounts the message endpoint with Starlette's Mount, which matches on
+# PATH ONLY, and handle_post_message never checks the method — so PUT/GET/DELETE
+# are processed exactly like POST. Gating the guard on method == "POST" meant it
+# saw no tool names and applied no rule at all.
+
+@pytest.mark.parametrize("method", ["PUT", "GET", "DELETE"])
+def test_a_debug_tool_cannot_be_reached_with_a_non_post_method(app, monkeypatch, method):
+    status, called = _run_guard(app, monkeypatch, "",
+                                {"method": "tools/call",
+                                 "params": {"name": "debug_recent_logs"}},
+                                method=method)
+
+    assert status == 403 and called is False
+
+
+def test_a_debug_key_cannot_reach_a_domain_tool_with_a_non_post_method(app, monkeypatch):
+    raw = _key(app, "debug", "read")
+
+    status, called = _run_guard(app, monkeypatch, raw,
+                                {"method": "tools/call", "params": {"name": "add_stock"}},
+                                method="PUT")
+
+    assert status == 403 and called is False
+
+
+def test_a_malformed_params_list_does_not_500(app, monkeypatch):
+    """`params` may legitimately be a list; .get on it raised."""
+    status, called = _run_guard(app, monkeypatch, "",
+                                {"method": "tools/call", "params": []})
+
+    assert status in (200, 401, 403)

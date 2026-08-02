@@ -263,18 +263,33 @@ def instance_admin_required(fn):
     cannot exfiltrate everyone's data."""
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
-        user = load_current_user()
-        if user is None:
-            return jsonify({"error": "unauthorized"}), 401
-        primary = db.session.query(Group).order_by(Group.created_at.asc()).first()
-        if not user.is_owner or primary is None or user.group_id != primary.id:
-            return jsonify({"error": "instance administrator privileges required"}), 403
-        if _read_only_write_blocked():
-            return jsonify({"error": "this API key is read-only"}), 403
-        g.current_user = user
-        g.current_group = user.group
+        denied = instance_admin_or_403()
+        if denied:
+            return denied
         return fn(*args, **kwargs)
     return wrapper
+
+
+def instance_admin_or_403():
+    """The instance-admin check as a callable, for routes that need it
+    conditionally (minting a debug-scoped key) rather than for the whole
+    endpoint. Returns a response tuple when denied, else None — and sets
+    g.current_user/g.current_group on success, as the decorator did.
+
+    One implementation, two callers: a second copy of an authorization check is
+    how one of them ends up missing a rule.
+    """
+    user = load_current_user()
+    if user is None:
+        return jsonify({"error": "unauthorized"}), 401
+    primary = db.session.query(Group).order_by(Group.created_at.asc()).first()
+    if not user.is_owner or primary is None or user.group_id != primary.id:
+        return jsonify({"error": "instance administrator privileges required"}), 403
+    if _read_only_write_blocked():
+        return jsonify({"error": "this API key is read-only"}), 403
+    g.current_user = user
+    g.current_group = user.group
+    return None
 
 
 def current_user() -> User:

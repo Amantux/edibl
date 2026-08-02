@@ -134,9 +134,28 @@ jobs:
           done
           if [ -z "$ok" ]; then docker logs edibl-ci; exit 1; fi
           curl -fsS http://127.0.0.1:7746/api/v1/ready
-          uid=$(docker exec edibl-ci sh -c "awk '/^Uid:/{print \$2}' /proc/1/status")
-          test "$uid" = "1000"
+          # Every SERVER process must be non-root (uid 1000). pid 1 is now the
+          # supervising shell, which stays root on purpose so it can chown the
+          # Supervisor-managed /data and forward signals — so assert on the
+          # children (gunicorn, edibl_mcp), not on pid 1.
+          # Gate on /proc/*/comm, not the cmdline: a cmdline match would also
+          # match this very scanning shell (its own command text contains the
+          # pattern) and report a spurious root process.
+          servers=$(docker exec edibl-ci sh -c 'for d in /proc/[0-9]*; do
+              comm=$(cat $d/comm 2>/dev/null)
+              case "$comm" in
+                gunicorn) ;;
+                python3) tr "\0" " " < $d/cmdline 2>/dev/null | grep -q edibl_mcp || continue ;;
+                *) continue ;;
+              esac
+              awk "/^Uid:/{print \$2}" $d/status 2>/dev/null
+            done' | sort -u)
+          echo "server uids: $servers"
+          test -n "$servers"           # something must be running
+          test "$servers" = "1000"     # sort -u collapses to exactly one value
           docker stop -t 15 edibl-ci
+          # gunicorn exits 0 on a graceful SIGTERM; 137 = SIGKILL after the grace
+          # period (ignored SIGTERM). Fail the gate on a non-graceful shutdown.
           test "$(docker inspect -f '{{.State.ExitCode}}' edibl-ci)" = "0"
       - name: Logs on failure
         if: failure()

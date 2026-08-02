@@ -123,7 +123,7 @@ if [ "${RESOLVED_MCP_ENABLED}" = "true" ]; then
   if [ "${RESOLVED_DISABLE_AUTH}" != "true" ] && [ -f "${EDIBL_DATA_DIR}/.integration_token" ]; then
     MCP_API_TOKEN="$(cat "${EDIBL_DATA_DIR}/.integration_token" 2>/dev/null || true)"
   fi
-  EDIBL_MCP_API_TOKEN="$MCP_API_TOKEN" EDIBL_PROC=mcp \
+  EDIBL_MCP_API_TOKEN="$MCP_API_TOKEN" \
     $RUN_AS python3 /app/backend/edibl_mcp.py &
   MCP_PID=$!
   echo "Edibl MCP server started (pid $MCP_PID) on :${RESOLVED_MCP_PORT}/sse"

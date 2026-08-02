@@ -7,7 +7,7 @@ from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import safe_join
 
-from .config import Config
+from .config import Config, ensure_secret_key
 from .extensions import db, limiter
 
 _LOGGER = logging.getLogger("edibl")
@@ -24,11 +24,23 @@ def create_app(config_object=Config):
     _LOGGER.info("Edibl storage backend: %s",
                  "sqlite" if _db_uri.startswith("sqlite") else _db_uri.split("://", 1)[0])
 
+    # Resolve the signing key BEFORE validating it: an operator-supplied key wins,
+    # otherwise we reuse (or generate once and persist) one under DATA_DIR. This
+    # replaces the entrypoint's old /dev/urandom default, which minted a new key
+    # every boot and silently logged everyone out.
+    secret, generated = ensure_secret_key(config_object)
+    app.config["SECRET_KEY"] = secret
+    if generated:
+        _LOGGER.warning(
+            "No EDIBL_SECRET_KEY was supplied; generated one and persisted it to "
+            "%s so sessions survive restarts. Back this file up with your data.",
+            os.path.join(config_object.DATA_DIR, ".secret_key"),
+        )
+
     if not app.config["DISABLE_AUTH"]:
-        secret = app.config["SECRET_KEY"] or ""
         if secret in app.config["KNOWN_DEFAULT_SECRETS"] or len(secret) < 32:
             raise RuntimeError(
-                "EDIBL_SECRET_KEY is unset, a known default, or < 32 chars. Set a "
+                "EDIBL_SECRET_KEY is a known default or < 32 chars. Set a "
                 "strong random secret before enabling authentication."
             )
     if app.config["DISABLE_AUTH"]:

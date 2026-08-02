@@ -2,11 +2,17 @@
 set -e
 : "${EDIBL_DATA_DIR:=/data}"
 : "${EDIBL_DISABLE_AUTH:=false}"
-: "${EDIBL_SECRET_KEY:=$(head -c 32 /dev/urandom | base64)}"
 : "${EDIBL_PORT:=7746}"
 : "${EDIBL_MCP_ENABLED:=true}"
 : "${EDIBL_MCP_PORT:=7767}"
-export EDIBL_DATA_DIR EDIBL_DISABLE_AUTH EDIBL_SECRET_KEY EDIBL_PORT EDIBL_MCP_PORT
+export EDIBL_DATA_DIR EDIBL_DISABLE_AUTH EDIBL_PORT EDIBL_MCP_PORT
+
+# NOTE: EDIBL_SECRET_KEY is intentionally NOT defaulted here. It used to be
+# `head -c 32 /dev/urandom`, which minted a NEW signing key on every container
+# start — silently logging every user out and voiding every issued API token
+# (including scoped MCP keys) on each restart. The application now generates one
+# once and persists it under EDIBL_DATA_DIR instead. An explicitly-set
+# EDIBL_SECRET_KEY still wins.
 
 mkdir -p "$EDIBL_DATA_DIR"
 
@@ -53,6 +59,7 @@ fi
 # MCP server (AI tooling for myMeal / Home Assistant), same container. In hardened
 # mode its outbound calls to the REST API need a key — hand it the minted
 # integration token (full scope). Open mode reaches the API without one.
+MCP_PID=""
 if [ "${EDIBL_MCP_ENABLED}" = "true" ]; then
   MCP_API_TOKEN=""
   if [ "${EDIBL_DISABLE_AUTH}" != "true" ] && [ -f "${EDIBL_DATA_DIR}/.integration_token" ]; then
@@ -61,7 +68,40 @@ if [ "${EDIBL_MCP_ENABLED}" = "true" ]; then
   EDIBL_MCP_API="http://127.0.0.1:${EDIBL_PORT}/api/v1" \
   EDIBL_MCP_API_TOKEN="$MCP_API_TOKEN" \
     $RUN_AS python3 /app/backend/edibl_mcp.py &
-  echo "Edibl MCP server on :${EDIBL_MCP_PORT}/sse"
+  MCP_PID=$!
+  echo "Edibl MCP server started (pid $MCP_PID) on :${EDIBL_MCP_PORT}/sse"
 fi
 
-exec $RUN_AS gunicorn -b "0.0.0.0:${EDIBL_PORT}" -w 2 --timeout 120 "app:create_app()"
+# The MCP server was previously backgrounded and then orphaned by `exec gunicorn`,
+# so a crashed MCP was invisible and SIGTERM never reached it. Keep a supervising
+# shell that forwards signals and reports an MCP exit.
+GUNICORN_PID=""
+shutdown() {
+  [ -n "$GUNICORN_PID" ] && kill -TERM "$GUNICORN_PID" 2>/dev/null || true
+  [ -n "$MCP_PID" ] && kill -TERM "$MCP_PID" 2>/dev/null || true
+  wait
+  exit 0
+}
+trap shutdown TERM INT
+
+$RUN_AS gunicorn -b "0.0.0.0:${EDIBL_PORT}" -w 2 --timeout 120 "app:create_app()" &
+GUNICORN_PID=$!
+echo "Edibl gunicorn on :${EDIBL_PORT}"
+
+# Supervise. A dead MCP is reported rather than silently absent; a dead gunicorn
+# takes the container down with its real exit status.
+while true; do
+  if [ -n "$MCP_PID" ] && ! kill -0 "$MCP_PID" 2>/dev/null; then
+    echo "Edibl: WARNING - MCP server (pid $MCP_PID) exited. Assist voice control" \
+         "is unavailable; the web app is unaffected." >&2
+    MCP_PID=""
+  fi
+  if ! kill -0 "$GUNICORN_PID" 2>/dev/null; then
+    wait "$GUNICORN_PID"
+    status=$?
+    echo "Edibl: gunicorn exited with status $status; shutting down." >&2
+    [ -n "$MCP_PID" ] && kill -TERM "$MCP_PID" 2>/dev/null || true
+    exit "$status"
+  fi
+  sleep 5
+done

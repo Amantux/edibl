@@ -13,7 +13,10 @@ WORKDIR /app
 ENV PYTHONUNBUFFERED=1 \
     EDIBL_DATA_DIR=/data \
     EDIBL_FRONTEND_DIST=/app/frontend/dist \
-    EDIBL_PORT=7746
+    EDIBL_PORT=7746 \
+    # gosu does not reset HOME; without this it stays /root and anything
+    # writing ~/.cache (pip, httpx trust_env, tokenizers) hits EACCES as uid 1000.
+    HOME=/home/app
 
 # gosu: privileged setup runs as root, servers drop to a non-root user.
 RUN apt-get update \

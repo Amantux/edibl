@@ -114,6 +114,17 @@ jobs:
           if man.get("domain") != "edibl":
               errors.append(f"manifest.json: domain must be 'edibl', got {man.get('domain')}")
 
+          # The add-on version (Supervisor) and the integration version (HACS) must
+          # stay in lockstep, or users report a version that means two different
+          # builds. They drifted to 1.6.1 vs 1.0.0 once because the bump script
+          # only wrote config.yaml; addon/bump-version.py now writes both.
+          addon_cfg = yaml.safe_load(open("addon/config.yaml"))
+          if str(addon_cfg.get("version")) != str(man.get("version")):
+              errors.append(
+                  f"version mismatch: addon/config.yaml={addon_cfg.get('version')} "
+                  f"manifest.json={man.get('version')}"
+              )
+
           # hassfest enforces key order: domain, name, then strict alphabetical.
           keys = list(man)
           expected_order = ["domain", "name"] + sorted(k for k in keys

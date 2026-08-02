@@ -1,6 +1,8 @@
 """Edibl configuration — env-driven so it runs standalone, in Docker, or as a
 Home Assistant add-on. Mirrors HomeHoard's hardened config patterns."""
 import os
+import secrets
+import stat
 from datetime import timedelta
 
 
@@ -144,3 +146,41 @@ class Config:
                 return cls._validate_db_url(dsn)
         os.makedirs(cls.DATA_DIR, exist_ok=True)
         return f"sqlite:///{os.path.join(cls.DATA_DIR, 'edibl.db')}"
+
+
+def ensure_secret_key(config_object) -> tuple[str, bool]:
+    """Return ``(secret, was_generated)``, persisting a generated one.
+
+    A signing key regenerated on every restart logs every user out and voids
+    every issued API token — a silent, confusing failure. The entrypoint used to
+    default EDIBL_SECRET_KEY from /dev/urandom, which did exactly that on each
+    container start. If the operator does not supply a real key we generate one
+    ONCE and persist it beside the database, so restarts are non-events.
+
+    A placeholder (the shipped ``change-me-in-production`` and friends) counts as
+    UNSET, not as a key — otherwise every install would share one public secret.
+    """
+    configured = (getattr(config_object, "SECRET_KEY", "") or "").strip()
+    placeholders = getattr(config_object, "KNOWN_DEFAULT_SECRETS", frozenset())
+    if configured and configured not in placeholders:
+        return configured, False
+
+    data_dir = config_object.DATA_DIR
+    path = os.path.join(data_dir, ".secret_key")
+    try:
+        with open(path) as fh:
+            existing = fh.read().strip()
+    except OSError:
+        existing = ""
+    if existing:
+        return existing, False
+
+    generated = secrets.token_urlsafe(48)
+    os.makedirs(data_dir, exist_ok=True)
+    # 0600 at CREATE, not after: a world-readable window, however brief, is a
+    # window in which the signing key can be read.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+                 stat.S_IRUSR | stat.S_IWUSR)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(generated)
+    return generated, True

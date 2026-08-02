@@ -11,9 +11,17 @@ Standardizes data that predates unit canonicalization / generic grouping:
 Data-only and re-runnable: a second pass finds everything already canonical and
 changes nothing. Imports the same pure helpers the app uses at write time.
 
-Revision ID: 0003_normalize_units_and_families
+Revision ID: 0003_normalize_units_families
 Revises: 0002_add_product_search_text
 Create Date: 2026-07-26
+
+NOTE: the revision id is deliberately shorter than this file's name. Alembic's
+`alembic_version.version_num` column is VARCHAR(32) (hardcoded in alembic's
+ddl/impl.py — there is no length option), and the original id
+"0003_normalize_units_and_families" is 33 characters. SQLite does not enforce
+VARCHAR lengths, so this only ever failed on PostgreSQL, where the upgrade died
+with StringDataRightTruncation and no database could be created at all. Keep
+every revision id at 32 characters or fewer.
 """
 import sqlalchemy as sa
 from alembic import op
@@ -21,7 +29,7 @@ from alembic import op
 from app.services.units import canonical_unit
 from app.services.families import generic_family
 
-revision = "0003_normalize_units_and_families"
+revision = "0003_normalize_units_families"
 down_revision = "0002_add_product_search_text"
 branch_labels = None
 depends_on = None

@@ -5,14 +5,14 @@ table on fresh/newly-adopted databases, so this delta only adds it to databases
 stamped before the model existed. Dialect-safe (SQLite + Postgres).
 
 Revision ID: 0004_add_units_table
-Revises: 0003_normalize_units_and_families
+Revises: 0003_normalize_units_families
 Create Date: 2026-07-26
 """
 import sqlalchemy as sa
 from alembic import op
 
 revision = "0004_add_units_table"
-down_revision = "0003_normalize_units_and_families"
+down_revision = "0003_normalize_units_families"
 branch_labels = None
 depends_on = None
 

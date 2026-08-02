@@ -214,7 +214,10 @@ def migrate_postgres():
     except DbCopyError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:  # noqa: BLE001 — surface connection/other failures to the user
-        return jsonify({"error": f"Migration failed: {e}"}), 400
+        # Sanitize: a psycopg connection error echoes the DSN back, which carries
+        # the target Postgres PASSWORD. Redact before it reaches the response.
+        from ..services.sanitize import safe_upstream_detail
+        return jsonify({"error": f"Migration failed: {safe_upstream_detail(e)}"}), 400
     report["next"] = ("Data copied. Set the add-on's database_url (or "
                       "EDIBL_DATABASE_URL) to this Postgres URL and restart Edibl.")
     return jsonify(report)

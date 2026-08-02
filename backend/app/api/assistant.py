@@ -217,5 +217,8 @@ def undo():
         message = assistant.apply_undo(current_group().id, descriptor)
     except Exception as exc:  # noqa: BLE001
         db.session.rollback()
-        return jsonify({"error": f"undo failed: {exc}"}), 400
+        # Sanitize: this is a bare except, so `exc` may carry driver/provider text
+        # (DSNs, keys) that must not reach the client verbatim.
+        from ..services.sanitize import safe_upstream_detail
+        return jsonify({"error": f"undo failed: {safe_upstream_detail(exc)}"}), 400
     return jsonify({"ok": True, "message": message})

@@ -1733,8 +1733,9 @@ def reconcile_units(edibl_units, mymeal_units):
                 if isinstance(data, dict):
                     # Keep only well-formed {name, …} objects — models sometimes emit
                     # bare strings or a stray shape despite the prompt.
-                    dicts = lambda key: [u for u in (data.get(key) or [])
-                                         if isinstance(u, dict) and u.get("name")]
+                    def dicts(key):
+                        return [u for u in (data.get(key) or [])
+                                if isinstance(u, dict) and u.get("name")]
                     return {"toEdibl": dicts("toEdibl"), "toMyMeal": dicts("toMyMeal")}
     except Exception as exc:  # noqa: BLE001 — surface tool errors to the model
         _LOGGER.info("unit reconcile via '%s' failed: %s", cfg["provider"], exc)

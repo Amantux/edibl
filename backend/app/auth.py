@@ -10,6 +10,7 @@ from passlib.hash import bcrypt
 from sqlalchemy.exc import IntegrityError
 
 from .extensions import db
+from .logsafe import scrub
 from .models import User, Group, ApiToken, hash_token, TOKEN_PREFIX
 
 _LOGGER = logging.getLogger("edibl.auth")
@@ -219,7 +220,8 @@ def login_required(fn):
         user = load_current_user()
         if user is None:
             _LOGGER.warning("unauthorized %s %s from %s",
-                            request.method, request.path, request.remote_addr)
+                            scrub(request.method), scrub(request.path),
+                            scrub(request.remote_addr))
             return jsonify({"error": "unauthorized"}), 401
         if _read_only_write_blocked():
             return jsonify({"error": "this API key is read-only"}), 403

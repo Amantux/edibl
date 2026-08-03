@@ -8,7 +8,7 @@ on:
     branches: [master]
   pull_request:
   schedule:
-    - cron: "0 6 * * 1"   # weekly, Monday 06:00 UTC — catch newly-disclosed CVEs
+    - cron: "27 6 * * 1"   # weekly, Monday 06:00 UTC — catch newly-disclosed CVEs
   workflow_dispatch:
 
 # Least privilege. `security-events: write` is required to upload SARIF (CodeQL
@@ -95,3 +95,29 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           trivyignores: .trivyignore
+
+  # Ported from myMeal/HomeHoard, which already run both. Divergent security
+  # config across sibling repos is exactly how one of them ends up with a gap
+  # nobody notices — this repo was the odd one out.
+  dependency-review:
+    name: Dependency review (PRs)
+    runs-on: ubuntu-latest
+    # The deliberate exception to "scanning is advisory": this gates dependencies
+    # a PR is trying to ADD, which is cheap to act on before it lands.
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.8.2
+        with:
+          fail-on-severity: high
+
+  sbom:
+    name: SBOM (SPDX)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.20.9
+        with:
+          path: .
+          format: spdx-json
+          artifact-name: edibl-sbom.spdx.json

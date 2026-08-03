@@ -182,6 +182,18 @@ def ingest_plan():
     """myMeal pushes planned ingredients here. Upserts by (sourceRef, name) so a
     re-push of the same recipe/plan updates rather than duplicates.
 
+    ``sourceRef`` identifies the RECIPE (``mymeal:recipe:<id>``) and is shared by
+    all of its ingredients, so ``name`` has to be part of the key to tell them
+    apart. The consequence is that a renamed ingredient does not match its old
+    row: re-pushing a recipe whose "flour" became "plain flour" used to leave
+    BOTH rows, doubling that recipe's demand and putting two lines on the
+    shopping order. So a push is treated as the authoritative statement of what
+    a recipe needs — any row for a sourceRef in this payload whose name is no
+    longer in it is stale, and is removed.
+
+    Only sourceRefs present in THIS payload are touched: a recipe that isn't
+    being pushed is left completely alone.
+
     Body: { meal?, source?, items: [{name, quantity?, unit?, neededBy?, sourceRef?}] }
     """
     data = request.get_json(force=True) or {}
@@ -192,6 +204,8 @@ def ingest_plan():
     meal = data.get("meal", "")
     source = data.get("source", "mymeal")
     upserted = []
+    # ref -> the names this push says that recipe still needs.
+    kept: dict[str, set[str]] = {}
     for it in items:
         name = (it.get("name") or "").strip()
         if not name:
@@ -201,6 +215,7 @@ def ingest_plan():
         if ref:
             existing = (db.session.query(PlannedItem)
                         .filter_by(group_id=gid, source_ref=ref, name=name).first())
+            kept.setdefault(ref, set()).add(name)
         p = existing or PlannedItem(group_id=gid, name=name)
         p.quantity = float(it.get("quantity") or 1)
         p.unit = it.get("unit") or "count"
@@ -211,8 +226,22 @@ def ingest_plan():
         if existing is None:
             db.session.add(p)
         upserted.append(p)
+
+    # No explicit flush: a row added above is by definition in `kept`, so
+    # `notin_` excludes it whether or not it has been INSERTed yet. (An earlier
+    # version flushed here defensively; removing it failed no test, and a line
+    # no test can justify is a line that will confuse the next reader.)
+    pruned = 0
+    for ref, names in kept.items():
+        # `kept` only ever gains non-empty refs, so this cannot mass-delete the
+        # hand-added items that carry no sourceRef at all.
+        pruned += (db.session.query(PlannedItem)
+                   .filter(PlannedItem.group_id == gid,
+                           PlannedItem.source_ref == ref,
+                           PlannedItem.name.notin_(sorted(names)))
+                   .delete(synchronize_session=False))
     db.session.commit()
-    return jsonify({"upserted": len(upserted),
+    return jsonify({"upserted": len(upserted), "pruned": pruned,
                     "items": [_planned_out(p) for p in upserted]}), 201
 
 

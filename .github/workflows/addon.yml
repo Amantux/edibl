@@ -55,31 +55,78 @@ jobs:
   build:
     needs: version
     name: Build ${{ matrix.arch }} (${{ needs.version.outputs.version }})
-    runs-on: ubuntu-latest
+    # Native runners per architecture. home-assistant/builder used to emulate
+    # aarch64 under QEMU inside its own container; the replacement actions set up
+    # Buildx but NOT QEMU, so cross-arch has to be native — which is also several
+    # times faster and removes a class of emulation-only build failures.
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: read
       packages: write
+      id-token: write   # keyless Cosign signing of the published images
     strategy:
       fail-fast: false
       matrix:
-        arch: [aarch64, amd64]
+        include:
+          - arch: amd64
+            os: ubuntu-24.04
+          - arch: aarch64
+            os: ubuntu-24.04-arm
     steps:
       # Check out the branch head so we get the just-bumped config.yaml.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: master
 
-      - name: Log in to GHCR
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      # The replacement actions do NOT read build.yaml (the old builder did), so
+      # the base image has to be passed explicitly. Read it from build.yaml
+      # rather than repeating it here, so that file stays the one place base
+      # images are declared — a copy in the workflow would drift the moment
+      # someone bumps Python.
+      - name: Read base image from build.yaml
+        id: base
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          image=$(python3 -c "
+          import os, yaml
+          cfg = yaml.safe_load(open('addon/build.yaml'))
+          print(cfg['build_from'][os.environ['ARCH']])")
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "Base image for $ARCH: $image"
 
+      # Replaces home-assistant/builder, which is deprecated ("no longer
+      # maintained, the last official release was 2026.02.1") and had in fact
+      # been failing every run: it derives its builder-image tag from the
+      # directory it is checked out into, so pinning the action to a commit SHA
+      # made it `docker pull ghcr.io/home-assistant/amd64-builder:<sha>` and die
+      # with "manifest unknown". Unmaintained, so it would never be fixed.
+      #
+      # No login step is needed: this action logs in itself when push is true.
       - name: Build and push ${{ matrix.arch }}
-        uses: home-assistant/builder@6aa51d57cae748bf94c85a154c1602c941cc36dd # master @ 2026-07-30
+        uses: home-assistant/builder/actions/build-image@4de35182ce1e329181bffcbcc84d33db5e2c7e10 # 2026.06.0
         with:
-          args: |
-            --${{ matrix.arch }} \
-            --target /data/addon \
-            --addon
+          arch: ${{ matrix.arch }}
+          # Per-arch repositories, matching config.yaml's `image:` template
+          # `ghcr.io/amantux/edibl-{arch}` — the Supervisor substitutes {arch}
+          # itself, so an add-on wants separate repos, NOT a multi-arch manifest.
+          # (This is why publish-multi-arch-manifest is deliberately unused.)
+          image: ghcr.io/amantux/edibl-${{ matrix.arch }}
+          image-tags: |
+            ${{ needs.version.outputs.version }}
+            latest
+          version: ${{ needs.version.outputs.version }}
+          # addon/, not the repo root: addon/Dockerfile COPYs webroot, run.sh and
+          # register-discovery.py relative to that directory, and there is a
+          # second, different Dockerfile at the root for the standalone image.
+          context: addon
+          file: addon/Dockerfile
+          push: true
+          container-registry-username: ${{ github.actor }}
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+          build-args: |
+            BUILD_FROM=${{ steps.base.outputs.image }}
+          labels: |
+            org.opencontainers.image.title=Edibl
+            org.opencontainers.image.source=https://github.com/Amantux/edibl

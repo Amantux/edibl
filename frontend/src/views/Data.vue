@@ -111,8 +111,12 @@ async function applyAiSettings() {
     syncMsg.value = '⚠️ That doesn’t look like an AI settings string (it should start with “AICFG1:”).'
     return
   }
-  let cfg = null
-  try { cfg = JSON.parse(b64decode(raw.slice(prefix.length))) } catch (e) { cfg = null }
+  // Parsed in one expression so there is no dead initial assignment: the old
+  // `let cfg = null` was always overwritten by the try/catch below, which
+  // eslint 10's no-useless-assignment (new in its recommended set) flags.
+  const cfg = (() => {
+    try { return JSON.parse(b64decode(raw.slice(prefix.length))) } catch { return null }
+  })()
   if (!cfg || typeof cfg !== 'object') {
     syncMsg.value = '⚠️ Couldn’t read that settings string — it may be incomplete or copied wrong.'
     return

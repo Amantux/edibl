@@ -16,17 +16,19 @@ def _gid(app):
 def test_job_preference_unset_is_none(app, auth_client):
     with app.app_context():
         gid = db.session.query(User).filter_by(email="t@t.com").first().group_id
-        assert st.job_preference(gid, "enrich") == (None, None)
-        assert st.job_preference(gid, "categorize") == (None, None)
+        for kind in ("enrich", "categorize"):
+            assert st.job_override(gid, kind) == {
+                "provider": None, "model": None, "base_url": None, "api_key": None}
 
 
 def test_organize_preference_shared_by_categorize_and_cluster(app, auth_client):
     with app.app_context():
         gid = db.session.query(User).filter_by(email="t@t.com").first().group_id
         st.set_job_settings(gid, organize={"provider": "ollama", "model": "llama3.1"})
-        assert st.job_preference(gid, "categorize") == ("ollama", "llama3.1")
-        assert st.job_preference(gid, "cluster") == ("ollama", "llama3.1")
-        assert st.job_preference(gid, "enrich") == (None, None)  # enrich is separate
+        for kind in ("categorize", "cluster"):
+            got = st.job_override(gid, kind)
+            assert (got["provider"], got["model"]) == ("ollama", "llama3.1")
+        assert st.job_override(gid, "enrich")["provider"] is None  # enrich is separate
 
 
 def test_job_cfg_switching_vendor_drops_the_chat_key(app, monkeypatch):
@@ -121,7 +123,8 @@ def test_job_settings_endpoint_roundtrip_and_validation(auth_client):
         "enrich": {"provider": "ollama", "model": "m1"},
         "organize": {"provider": "", "model": ""}})
     assert r.status_code == 200
-    assert r.get_json()["enrich"] == {"provider": "ollama", "model": "m1"}
+    assert r.get_json()["enrich"] == {"provider": "ollama", "model": "m1",
+                                      "baseUrl": "", "apiKeySet": False}
     assert auth_client.get("/api/v1/assistant/job-settings").get_json()["enrich"]["provider"] == "ollama"
 
     bad = auth_client.put("/api/v1/assistant/job-settings", json={"enrich": {"provider": "bogus"}})

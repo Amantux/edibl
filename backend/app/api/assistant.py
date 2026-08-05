@@ -54,13 +54,24 @@ def get_job_settings_endpoint():
 @owner_required
 def put_job_settings_endpoint():
     """Set the async-job AI preference (owner only). Body:
-    {enrich:{provider,model}, organize:{provider,model}}. Blank provider = same as chat."""
+    {enrich:{provider,model,baseUrl,apiKey?,clearApiKey?}, organize:{...}}.
+    Blank field = same as chat. The key is never returned, only `apiKeySet`."""
+    from ..services.url_guard import llm_url_ok
+
     data = request.get_json(force=True) or {}
     for area in ("enrich", "organize"):
         blk = data.get(area)
-        if (isinstance(blk, dict) and blk.get("provider")
-                and str(blk["provider"]) not in assistant.PROVIDER_CHOICES):
+        if not isinstance(blk, dict):
+            continue
+        if blk.get("provider") and str(blk["provider"]) not in assistant.PROVIDER_CHOICES:
             return jsonify({"error": f"unknown provider {blk['provider']!r}"}), 422
+        # Refused here as well as at the point of use: rejecting on save is what
+        # makes the mistake visible while the user is looking at the field,
+        # rather than days later in a failed job.
+        if blk.get("baseUrl"):
+            ok, err = llm_url_ok(str(blk["baseUrl"]).strip())
+            if not ok:
+                return jsonify({"error": f"{area}: {err}"}), 422
     set_job_settings(current_group().id, enrich=data.get("enrich"), organize=data.get("organize"))
     return jsonify(get_job_settings(current_group().id))
 

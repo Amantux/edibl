@@ -1081,15 +1081,17 @@ def job_cfg(gid, kind, opts=None):
     opts = opts or {}
     base = _cfg(gid)   # honour this group's UI-configured provider in the worker
     try:
-        from .settings import job_preference
+        from .settings import job_override
         # gid is passed explicitly: jobs run in the worker thread, which has an
         # app context but NO request, so current_group() would raise and the
         # preference (per-group, no env fallback) would be silently dropped.
-        pref_provider, pref_model = job_preference(gid, kind)
+        pref = job_override(gid, kind)
     except Exception:  # noqa: BLE001 — no app/request context
-        pref_provider, pref_model = None, None
-    provider = (opts.get("provider") or pref_provider or "").strip()
-    model = (opts.get("model") or pref_model or "").strip()
+        pref = {"provider": None, "model": None, "base_url": None, "api_key": None}
+    provider = (opts.get("provider") or pref["provider"] or "").strip()
+    model = (opts.get("model") or pref["model"] or "").strip()
+    base_url = (opts.get("baseUrl") or pref["base_url"] or "").strip()
+    api_key = (opts.get("apiKey") or pref["api_key"] or "").strip()
     cfg = dict(base)
     if provider and provider != base["provider"]:
         d_base, d_model = _DEFAULTS.get(provider, ("", ""))
@@ -1101,6 +1103,19 @@ def job_cfg(gid, kind, opts=None):
         cfg["model"] = d_model
     if model:
         cfg["model"] = model
+    # Its own server / key, applied LAST so it wins over the provider defaults
+    # above. This is what lets the slow async work run on a local box while chat
+    # stays on something faster.
+    if base_url:
+        # Validated at the point of USE: this can also arrive through per-run
+        # opts, which never pass the settings endpoint's guard.
+        from .url_guard import llm_url_ok
+        ok, err = llm_url_ok(base_url)
+        if not ok:
+            raise ValueError(f"the async AI server URL is not allowed: {err}")
+        cfg["base_url"] = base_url
+    if api_key:
+        cfg["api_key"] = api_key
     return cfg
 
 

@@ -98,28 +98,54 @@ def set_chat_stream(gid, on):
 JOB_KEYS = ("enrich_provider", "enrich_model", "organize_provider", "organize_model")
 
 
-def job_preference(gid, kind):
-    """Stored async default ``(provider, model)`` for a background job. ``enrich``
-    has its own; the organize jobs (``categorize``/``cluster``) share ``organize``.
-    Either element is None when unset (→ same as the chat provider)."""
+JOB_AREAS = ("enrich", "organize")
+_BLANK_JOB = {"provider": None, "model": None, "base_url": None, "api_key": None}
+
+
+def job_override(gid, kind):
+    """Stored async override for a background job: provider/model/base_url/api_key.
+
+    ``enrich`` has its own; the organize jobs (``categorize``/``cluster``) share
+    ``organize``. Blank fields mean "same as chat", so an unset area behaves
+    exactly as before.
+
+    The base URL matters on its own: the usual setup is a fast hosted model for
+    chat and a small local model on your own box for the slow async work. Without
+    a per-area host that is only possible when the two are different PROVIDERS —
+    two Ollama servers would both resolve the single shared base URL.
+    """
     prefix = "enrich" if kind == "enrich" else "organize"
     try:
         d = _all(gid)
     except Exception:  # noqa: BLE001 — best-effort; never break a job
-        return (None, None)
-    return (d.get(f"{prefix}_provider") or None, d.get(f"{prefix}_model") or None)
+        return dict(_BLANK_JOB)
+    return {
+        "provider": d.get(f"{prefix}_provider") or None,
+        "model": d.get(f"{prefix}_model") or None,
+        "base_url": d.get(f"{prefix}_base_url") or None,
+        "api_key": d.get(f"{prefix}_api_key") or None,
+    }
 
 
 def get_job_settings(gid):
-    """UI view: {enrich:{provider,model}, organize:{provider,model}}."""
+    """UI view. Never includes the API key value — only whether one is stored."""
     d = _all(gid)
-    return {area: {"provider": d.get(f"{area}_provider", ""), "model": d.get(f"{area}_model", "")}
-            for area in ("enrich", "organize")}
+    return {area: {"provider": d.get(f"{area}_provider", ""),
+                   "model": d.get(f"{area}_model", ""),
+                   "baseUrl": d.get(f"{area}_base_url", ""),
+                   "apiKeySet": bool(d.get(f"{area}_api_key", ""))}
+            for area in JOB_AREAS}
 
 
 def set_job_settings(gid, enrich=None, organize=None):
-    """Upsert the async-job AI preference. Each area is {provider, model}; a field
-    left out is untouched, '' clears it (falls back to the chat provider)."""
+    """Upsert the async-job AI preference. Each area is
+    {provider, model, baseUrl, apiKey?, clearApiKey?}; a field left out is
+    untouched, '' clears it (falls back to the chat provider).
+
+    The key follows the same rule as the chat provider's: a blank apiKey leaves
+    the stored one alone, because the form never receives it back and treating
+    blank as a clear would wipe it on every unrelated save. Clearing is explicit.
+    """
     for area, blk in (("enrich", enrich), ("organize", organize)):
         if not isinstance(blk, dict):
             continue
@@ -127,6 +153,12 @@ def set_job_settings(gid, enrich=None, organize=None):
             _set(gid, f"{area}_provider", str(blk.get("provider") or "").strip())
         if "model" in blk:
             _set(gid, f"{area}_model", str(blk.get("model") or "").strip()[:100])
+        if "baseUrl" in blk:
+            _set(gid, f"{area}_base_url", str(blk.get("baseUrl") or "").strip()[:300])
+        if blk.get("clearApiKey"):
+            _set(gid, f"{area}_api_key", "")
+        elif blk.get("apiKey"):
+            _set(gid, f"{area}_api_key", str(blk["apiKey"]))
     db.session.commit()
 
 

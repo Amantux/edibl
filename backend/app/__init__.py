@@ -540,7 +540,7 @@ def _register_request_context(app):
 
 
 def _register_security_headers(app):
-    disable_auth = app.config["DISABLE_AUTH"]
+    from .auth import _request_from_ingress
 
     @app.after_request
     def _headers(resp):
@@ -551,7 +551,12 @@ def _register_security_headers(app):
             "style-src 'self' 'unsafe-inline'; script-src 'self'; "
             "connect-src 'self'; base-uri 'self'; form-action 'self'; object-src 'none'"
         )
-        if not disable_auth:
+        # Anti-clickjacking only when NOT from the ingress peer: HA frames the
+        # panel legitimately, and disable_auth:false behind ingress is supported
+        # (ingress identity runs even with auth on), so keying on auth mode
+        # blanks the HA panel — while a standalone disable_auth deployment is
+        # still clickjackable and must get the headers. Keyed per-request.
+        if not _request_from_ingress():
             csp += "; frame-ancestors 'self'"
             resp.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
         resp.headers.setdefault("Content-Security-Policy", csp)

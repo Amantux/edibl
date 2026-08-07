@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from flask import Blueprint, request, jsonify, abort
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import selectinload
 
 from ..extensions import db
 from ..models import (StockLot, Product, Location, ConsumptionEvent, InventoryEvent,
@@ -246,11 +247,23 @@ def _build_lot(data, product, gid, currency=None):
     )
 
 
+# Everything stock_out reads off a lot, eager-loaded so a list of N lots is a
+# handful of queries instead of ~2N (product + acquisition_lot were per-row
+# lazy loads). /dashboard is polled by the HACS coordinator every 300s.
+def _stock_load_opts():
+    return (
+        selectinload(StockLot.product),
+        selectinload(StockLot.location),
+        selectinload(StockLot.created_by_user),
+        selectinload(StockLot.acquisition_lot),
+    )
+
+
 @bp.get("/stock")
 @login_required
 def list_stock():
     gid = current_group().id
-    q = db.session.query(StockLot).filter_by(group_id=gid)
+    q = db.session.query(StockLot).options(*_stock_load_opts()).filter_by(group_id=gid)
     args = request.args
     if args.get("includeFinished", "false").lower() != "true":
         q = q.filter(StockLot.finished.is_(False))
@@ -275,7 +288,7 @@ def grouped():
     buy-dates / related products (organic vs filtered milk) read as one group while
     each lot keeps its own expiry. Each group lists its underlying lots."""
     gid = current_group().id
-    lots = (db.session.query(StockLot)
+    lots = (db.session.query(StockLot).options(*_stock_load_opts())
             .filter_by(group_id=gid, finished=False)
             .order_by(StockLot.expiry_date.is_(None).asc(),
                       StockLot.expiry_date.asc()).all())

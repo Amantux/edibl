@@ -4,6 +4,7 @@ from decimal import Decimal
 
 from flask import Blueprint, request, jsonify
 
+from sqlalchemy.orm import selectinload
 from ..extensions import db
 from ..models import StockLot, Product, Location, ConsumptionEvent, LOSS_OUTCOMES, utcnow
 from ..auth import login_required, current_group
@@ -15,7 +16,10 @@ bp = Blueprint("dashboard", __name__)
 
 
 def _active(gid):
-    return db.session.query(StockLot).filter_by(group_id=gid, finished=False).all()
+    return (db.session.query(StockLot)
+            .options(selectinload(StockLot.product),
+                     selectinload(StockLot.location))
+            .filter_by(group_id=gid, finished=False).all())
 
 
 def _month_key(dt):

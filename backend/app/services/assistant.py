@@ -1046,6 +1046,22 @@ def _job_key(ov, c, provider):
     return ""
 
 
+def _assert_base_url_ok(cfg) -> None:
+    """SSRF guard at the point of USE for the LLM base URL.
+
+    llm_url_ok runs at save-time, in list_models and in job opts — but the chat
+    and completion paths built cfg via _cfg() (which reads LLM_BASE_URL / add-on
+    options directly) and posted to it with the API key attached, never
+    checking. An env/options link-local value therefore bypassed every other
+    guard. Runs on every outbound call. Empty base_url (the homeassistant
+    provider uses the Supervisor) is allowed by llm_url_ok.
+    """
+    from .url_guard import llm_url_ok
+    ok, err = llm_url_ok(cfg.get("base_url") or "")
+    if not ok:
+        raise ValueError(f"refusing to reach that base URL: {err}")
+
+
 def _cfg(gid=None):
     """Effective config: UI overrides > add-on/env > provider default. Pass ``gid``
     from a background job so it honours that group's UI-configured provider (the
@@ -1278,6 +1294,7 @@ def run_chat(gid, messages):
                 "model": None, "enabled": False}
     actions = []
     try:
+        _assert_base_url_ok(cfg)  # SSRF: validate the base URL at point of use
         if provider == "homeassistant":
             reply = _relay_homeassistant(messages, cfg)
         elif provider == "anthropic":
@@ -1311,6 +1328,7 @@ def run_chat_stream(gid, messages):
         return
     actions = []
     try:
+        _assert_base_url_ok(cfg)  # SSRF: validate the base URL at point of use
         if provider in ("ollama", "openai"):
             reply = yield from _stream_openai_style(gid, messages, cfg, actions)
         elif provider == "homeassistant":
@@ -1440,6 +1458,7 @@ def _complete(cfg, system, user):
     """Return the model's text for one system+user prompt (no tool calling)."""
     import httpx
 
+    _assert_base_url_ok(cfg)  # SSRF: validate the base URL at point of use
     provider = cfg["provider"]
     with httpx.Client(timeout=cfg["timeout"]) as client:
         if provider == "ollama":
@@ -1567,6 +1586,8 @@ def _complete_vision(cfg, system, user, image_b64, media_type):
     """One completion where the user turn includes an image. Requires a vision
     model (gpt-4o / claude / llava). image_b64 is raw base64 (no data: prefix)."""
     import httpx
+
+    _assert_base_url_ok(cfg)  # SSRF: validate the base URL at point of use
 
     provider = cfg["provider"]
     with httpx.Client(timeout=cfg["timeout"]) as client:

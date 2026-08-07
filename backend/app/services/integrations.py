@@ -5,6 +5,7 @@ not configured or unreachable, callers get a clear {configured/reachable:false}
 rather than an exception. Edibl is the source of truth for inventory; these are
 for pulling recipes/plans (myMeal) or cross-querying non-food items (HomeHoard).
 """
+from .sanitize import safe_upstream_detail
 import logging
 import os
 
@@ -21,9 +22,27 @@ def _client(base_url, token):
     return httpx.Client(base_url=base_url.rstrip("/"), headers=headers, timeout=_TIMEOUT)
 
 
+def _url_blocked(base_url):
+    """SSRF guard at the point of USE for the sibling URL.
+
+    Same policy Edibl already applies to the owner-supplied LLM base URL
+    (url_guard.llm_url_ok): block link-local (169.254.169.254) while allowing
+    loopback/private LAN, where a sibling add-on legitimately runs. The myMeal
+    URL is set by the same owner at the same trust level and also arrives via
+    env / add-on options that bypass any save-time check, so it must be
+    validated here — right before the bearer token is attached.
+    """
+    from .url_guard import llm_url_ok
+    ok, _err = llm_url_ok(base_url or "")
+    return not ok
+
+
 def _get(base_url, token, path, params=None):
     if not base_url:
         return {"configured": False, "reachable": False}
+    if _url_blocked(base_url):
+        return {"configured": True, "reachable": False,
+                "error": "connected-app URL is not allowed"}
     try:
         with _client(base_url, token) as c:
             r = c.get(path, params=params or {})
@@ -31,7 +50,8 @@ def _get(base_url, token, path, params=None):
             return {"configured": True, "reachable": True, "data": r.json()}
     except Exception as e:  # noqa: BLE001 - bounded, best-effort
         _LOGGER.warning("integration GET %s%s failed: %s", base_url, path, e)
-        return {"configured": True, "reachable": False, "error": str(e)}
+        return {"configured": True, "reachable": False,
+                "error": safe_upstream_detail(e)}
 
 
 def _write(method, base_url, token, path, payload=None):
@@ -39,6 +59,9 @@ def _write(method, base_url, token, path, payload=None):
     as `_get`; DELETE (204, no body) yields data=None."""
     if not base_url:
         return {"configured": False, "reachable": False}
+    if _url_blocked(base_url):
+        return {"configured": True, "reachable": False,
+                "error": "connected-app URL is not allowed"}
     try:
         with _client(base_url, token) as c:
             r = c.request(method, path, json=payload)
@@ -47,7 +70,8 @@ def _write(method, base_url, token, path, payload=None):
                     "data": r.json() if r.content else None}
     except Exception as e:  # noqa: BLE001 - bounded, best-effort
         _LOGGER.warning("integration %s %s%s failed: %s", method, base_url, path, e)
-        return {"configured": True, "reachable": False, "error": str(e)}
+        return {"configured": True, "reachable": False,
+                "error": safe_upstream_detail(e)}
 
 
 def _mymeal_overrides():

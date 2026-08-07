@@ -144,7 +144,16 @@ def set_mymeal_settings():
     data = request.get_json(force=True) or {}
     kwargs = {}
     if "url" in data:
-        kwargs["url"] = str(data["url"] or "")
+        url = str(data["url"] or "")
+        # Reject a blocked URL at save with a clear 422, mirroring the LLM URL.
+        # The point-of-use guard in integrations._get/_write is the real
+        # boundary (env/options bypass this), but a save-time error is better
+        # UX than a silent later failure.
+        from ..services.url_guard import llm_url_ok
+        ok, err = llm_url_ok(url)
+        if not ok:
+            return jsonify({"error": err or "URL is not allowed"}), 422
+        kwargs["url"] = url
     if data.get("token"):
         kwargs["token"] = str(data["token"])
     gid = current_group().id

@@ -77,8 +77,10 @@ def test_create_token_defaults_to_write(auth_client):
 
 # --- MCP guard enforcement (allowlist on tools/call) ---------------------------
 
-def _run_guard(app, monkeypatch, raw, body_obj, method="POST"):
+def _run_guard(app, monkeypatch, raw, body_obj, method="POST",
+               server_token="", external=False):
     monkeypatch.setattr(edibl_mcp, "_app", app)
+    monkeypatch.setattr(edibl_mcp, "_expose_external", lambda: external)
     called = {"v": False}
 
     async def downstream(scope, receive, send):
@@ -86,7 +88,7 @@ def _run_guard(app, monkeypatch, raw, body_obj, method="POST"):
         await send({"type": "http.response.start", "status": 200, "headers": []})
         await send({"type": "http.response.body", "body": b"ok"})
 
-    guard = edibl_mcp._guard(downstream, "")
+    guard = edibl_mcp._guard(downstream, server_token)
     sent = []
     body = json.dumps(body_obj).encode()
 
@@ -111,6 +113,29 @@ def test_mcp_read_key_blocks_write_tool(app, monkeypatch):
     status, called = _run_guard(app, monkeypatch, raw,
                                 {"method": "tools/call", "params": {"name": "add_stock"}})
     assert status == 403 and called is False
+
+
+def test_mcp_read_key_blocks_write_on_the_internal_token_path(app, monkeypatch):
+    """A key's access is a property of the KEY, not the exposure. Mapping the
+    MCP port to the LAN + setting a server token (expose_external off) must not
+    grant a read-only key write. Edibl's guard already runs the read-only check
+    on every path (not nested in `if external:`, unlike the other two apps
+    before their fix); this pins it explicitly."""
+    raw = _key(app, "mcp", "read")
+    status, called = _run_guard(
+        app, monkeypatch, raw,
+        {"method": "tools/call", "params": {"name": "add_stock"}},
+        server_token="tok", external=False)
+    assert status == 403 and called is False
+
+
+def test_mcp_write_key_writes_on_the_internal_token_path(app, monkeypatch):
+    raw = _key(app, "mcp", "write")
+    status, called = _run_guard(
+        app, monkeypatch, raw,
+        {"method": "tools/call", "params": {"name": "add_stock"}},
+        server_token="tok", external=False)
+    assert status == 200 and called is True
 
 
 def test_mcp_read_key_allows_read_tool(app, monkeypatch):

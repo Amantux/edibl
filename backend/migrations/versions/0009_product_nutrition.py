@@ -33,6 +33,23 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    if "nutrition" in _columns("products"):
+    if "nutrition" not in _columns("products"):
+        return
+    bind = op.get_bind()
+    if bind.dialect.name == "postgresql":
+        op.drop_column("products", "nutrition")
+        return
+    # SQLite batch_alter_table rebuilds `products`, which 6 tables FK-reference
+    # under this app's enforced foreign keys — so the rebuild's DROP raised
+    # "FOREIGN KEY constraint failed" on any populated DB and left an
+    # _alembic_tmp corpse. Suspend enforcement around it (PRAGMA is a no-op
+    # inside a transaction → autocommit_block). Same dance as 0008's upgrade.
+    with op.get_context().autocommit_block():
+        op.execute('DROP TABLE IF EXISTS "_alembic_tmp_products"')
+        op.execute("PRAGMA foreign_keys=OFF")
+    try:
         with op.batch_alter_table("products") as batch:
             batch.drop_column("nutrition")
+    finally:
+        with op.get_context().autocommit_block():
+            op.execute("PRAGMA foreign_keys=ON")

@@ -34,6 +34,23 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    if "description" in _columns("locations"):
+    if "description" not in _columns("locations"):
+        return
+    bind = op.get_bind()
+    if bind.dialect.name == "postgresql":
+        op.drop_column("locations", "description")
+        return
+    # SQLite batch_alter_table rebuilds `locations`, which stock_lots and
+    # locations.parent_id FK-reference under enforced foreign keys — so the
+    # rebuild's DROP raised "FOREIGN KEY constraint failed" on a populated DB
+    # and left an _alembic_tmp corpse. Suspend enforcement around it (PRAGMA is
+    # a no-op inside a transaction → autocommit_block).
+    with op.get_context().autocommit_block():
+        op.execute('DROP TABLE IF EXISTS "_alembic_tmp_locations"')
+        op.execute("PRAGMA foreign_keys=OFF")
+    try:
         with op.batch_alter_table("locations") as batch:
             batch.drop_column("description")
+    finally:
+        with op.get_context().autocommit_block():
+            op.execute("PRAGMA foreign_keys=ON")

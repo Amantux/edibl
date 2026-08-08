@@ -95,13 +95,22 @@ def downgrade() -> None:
     if "currency" in _columns("stock_lots"):
         op.drop_column("stock_lots", "currency")
 
-    for table in ("acquisition_lots", "stock_lots"):
-        if "cost" not in _columns(table):
-            continue
-        if is_pg:
-            op.alter_column(
-                table, "cost", type_=sa.Float(),
-                postgresql_using="cost::double precision", existing_nullable=True)
-        else:
-            with op.batch_alter_table(table) as batch:
-                batch.alter_column("cost", type_=sa.Float(), existing_nullable=True)
+    # Same FK-rebuild hazard as the upgrade: rebuilding acquisition_lots (which
+    # stock_lots FK-references) under enforced foreign keys fails on populated
+    # data. Suspend enforcement around the batch, exactly as upgrade() does.
+    if not is_pg:
+        _fk_safe_sqlite()
+    try:
+        for table in ("acquisition_lots", "stock_lots"):
+            if "cost" not in _columns(table):
+                continue
+            if is_pg:
+                op.alter_column(
+                    table, "cost", type_=sa.Float(),
+                    postgresql_using="cost::double precision", existing_nullable=True)
+            else:
+                with op.batch_alter_table(table) as batch:
+                    batch.alter_column("cost", type_=sa.Float(), existing_nullable=True)
+    finally:
+        if not is_pg:
+            _fk_restore_sqlite()

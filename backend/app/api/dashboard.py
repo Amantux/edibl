@@ -332,15 +332,23 @@ def spend_insights():
 @bp.get("/dashboard/expiring")
 @login_required
 def expiring():
-    days = int(request.args.get("days", 5) or 5)
+    # The window is the caller's N, not the fixed 5-day "expiring soon" bucket:
+    # comparing days-to-expiry directly is what makes ?days=14 include a lot 10
+    # days out. Already-expired lots (negative days) are always in.
+    try:
+        days = int(request.args.get("days", 5) or 5)
+    except (TypeError, ValueError):
+        days = 5
+    days = max(days, 0)
     lots = _active(current_group().id)
     out = []
     for s in lots:
-        st = expiry_status(s.expiry_date)
-        if st == "expired" or (st == "expiring" and (s.expiry_date is not None)):
-            dt = stock_out(s)
-            if dt["daysToExpiry"] is None or dt["daysToExpiry"] <= days:
-                out.append(dt)
+        if s.expiry_date is None:
+            continue  # no tracked expiry isn't "expiring within N days"
+        dt = stock_out(s)
+        d = dt["daysToExpiry"]
+        if d is not None and d <= days:
+            out.append(dt)
     out.sort(key=lambda d: (d["daysToExpiry"] if d["daysToExpiry"] is not None else 9999))
     return jsonify({"items": out, "total": len(out)})
 
@@ -411,9 +419,13 @@ def have():
     like = ingredient.lower()
     matches = [s for s in _active(current_group().id)
                if s.product and like in s.product.name.lower()]
-    total = sum(s.quantity or 0 for s in matches)
+    # Aggregate unit-aware: 2 kg + 500 g is 2.5 kg, not 2.5; 3 cans + 500 g stay
+    # two buckets, never 503. `byUnit` is the honest breakdown.
+    from ..services.onhand import aggregate_on_hand
+    agg = aggregate_on_hand(matches)
     locations = sorted({s.location.name for s in matches if s.location})
     return jsonify({
-        "ingredient": ingredient, "have": total > 0, "onHand": round(total, 2),
+        "ingredient": ingredient, "have": bool(matches),
+        "onHand": agg["onHand"], "unit": agg["unit"], "byUnit": agg["byUnit"],
         "locations": locations, "lots": [stock_out(s) for s in matches],
     })

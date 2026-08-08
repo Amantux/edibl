@@ -41,11 +41,7 @@ async function cookRecipe(r) {
   const idempotencyKey = (crypto.randomUUID?.() || String(Date.now()))
   try {
     const res = await api.post(`/cook/recipe/${r.recipeId}`, { idempotencyKey })
-    const used = (res.cooked || []).filter((c) => c.consumed > 0).length
-    const short = (res.cooked || []).filter((c) => c.shortfall > 0)
-    ui.success(short.length
-      ? `Deducted ${used} ingredient(s) for ${r.name}. Short on: ${short.map((s) => s.name).join(', ')}.`
-      : `Deducted all ${used} ingredient(s) for ${r.name}.`)
+    reportCook(res.cooked, `for ${r.name}`)
     await Promise.all([load(true), loadSuggestions()])
   } catch (e) { ui.error(e.message || 'Could not cook that recipe.') }
   finally { cookingId.value = '' }
@@ -81,15 +77,36 @@ async function order() {
   try { const r = await api.post('/plan/order'); ui.success(`Added ${r.added} item(s) to the shopping list.`) }
   catch (e) { ui.error(e.message || 'Could not order.') }
 }
+// "We don't know which one you meant" and "you're out of it" are different
+// answers and used to read identically ("Short on: milk"). An ambiguous
+// ingredient deducts nothing on purpose, so it gets its own line naming the
+// products to choose between — and it must not be double-reported as short.
+function reportCook(cooked, suffix = '') {
+  const rows = cooked || []
+  const used = rows.filter((c) => c.consumed > 0).length
+  const ask = rows.filter((c) => c.status === 'needs_confirmation')
+  const short = rows.filter((c) => c.shortfall > 0 && c.status !== 'needs_confirmation')
+  const where = suffix ? ` ${suffix}` : ''
+  const parts = [`Deducted ${used} ingredient(s)${where}.`]
+  if (short.length) parts.push(`Short on: ${short.map((s) => s.name).join(', ')}.`)
+  if (ask.length) {
+    const detail = ask.map((a) => {
+      const names = (a.candidates || []).map((c) => c.name).join(' or ')
+      return names ? `${a.name} (${names})` : a.name
+    }).join('; ')
+    parts.push(`Nothing deducted for: ${detail} — say which you meant.`)
+  }
+  // Anything needing a decision persists until dismissed; a clean cook doesn't.
+  const msg = parts.join(' ')
+  if (ask.length) ui.error(msg)
+  else ui.success(msg)
+}
+
 async function cook() {
   if (!confirm('Deduct this meal\'s ingredients from your stock?')) return
   try {
     const r = await api.post('/plan/cook', { clear: true })
-    const used = r.cooked.filter((c) => c.consumed > 0).length
-    const short = r.cooked.filter((c) => c.shortfall > 0)
-    ui.success(short.length
-      ? `Deducted ${used} ingredient(s). Short on: ${short.map((s) => s.name).join(', ')}.`
-      : `Deducted all ${used} ingredient(s) from stock.`)
+    reportCook(r.cooked)
     await load()
   } catch (e) { ui.error(e.message || 'Could not deduct ingredients.') }
 }

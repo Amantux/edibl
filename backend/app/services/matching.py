@@ -11,7 +11,7 @@ import re
 from dataclasses import dataclass, field
 
 from ..extensions import db
-from ..models import Product
+from ..models import Product, StockLot
 
 
 def normalize(s: str) -> str:
@@ -69,7 +69,14 @@ def match_products(gid, query, *, item_types=None, allow_substring=True) -> list
     if not nq:
         return []
     out: list[Candidate] = []
-    for p in db.session.query(Product).filter_by(group_id=gid).all():
+    # Eager-load the lots (and their locations) every consumer then reads to
+    # describe a candidate — `candidate_out` touches p.stock and lot.location per
+    # candidate, which was a query per product on the machine-called cook path.
+    from sqlalchemy.orm import selectinload
+    products = (db.session.query(Product).filter_by(group_id=gid)
+                .options(selectinload(Product.stock).selectinload(StockLot.location))
+                .all())
+    for p in products:
         if item_types and (p.item_type or "food") not in item_types:
             continue
         np = normalize(p.name)

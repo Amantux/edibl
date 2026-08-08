@@ -6,7 +6,7 @@ from flask import Blueprint, request, jsonify, abort
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
-from ..extensions import db
+from ..extensions import db, limiter
 from ..models import (StockLot, Product, Location, ConsumptionEvent, InventoryEvent,
                       Detection, utcnow, STORAGE_METHODS, PACKAGE_STATES, QUANTITY_KINDS)
 from ..auth import login_required, current_group, current_user
@@ -369,6 +369,9 @@ def create():
 # rule regardless of order, and a test pins that so "resolve" can never be
 # swallowed as a lot id.
 @bp.get("/stock/resolve")
+# ?explain=1 makes an outbound LLM call, so this follows the same convention as
+# every other provider-calling endpoint (products.py 60/min, assistant 30/min).
+@limiter.limit("60/minute")
 @login_required
 def resolve_stock():
     """Resolve a name/id to ONE lot to act on, or to the candidates worth asking about.
@@ -667,6 +670,8 @@ def merge():
 
 
 @bp.post("/stock/consume")
+# {"explain": true} makes an outbound LLM call on the low-confidence branch.
+@limiter.limit("60/minute")
 @login_required
 def consume_by_product():
     """Consume an amount of a PRODUCT, drawing across its lots by an explicit
@@ -693,9 +698,10 @@ def consume_by_product():
     # — not guess — when you own three. `productId` stays the unambiguous handle,
     # and is exactly what the caller sends back to confirm a choice.
     pending = None
-    if not product and data.get("name"):
+    name_q = data.get("name")
+    if not product and isinstance(name_q, str) and name_q.strip():
         from ..services import disambiguation, matching
-        resolution = matching.resolve_for_mutation(gid, data["name"].strip())
+        resolution = matching.resolve_for_mutation(gid, name_q.strip())
         product = resolution.product
         if product is None and resolution.candidates:
             pending = resolution.candidates[:disambiguation.MAX_CANDIDATES]
@@ -738,7 +744,7 @@ def consume_by_product():
         cands = [disambiguation.candidate_out(c) for c in pending]
         by_id = {c.product.id: c.product for c in pending}
         explained = disambiguation.explain_candidates(
-            gid, data["name"].strip(), cands,
+            gid, name_q.strip(), cands,
             allow_autoresolve=False, use_llm=bool(data.get("explain")))
         order = {pid: i for i, pid in enumerate(explained["order"])}
         cands.sort(key=lambda c: order.get(c["productId"], len(order)))
@@ -747,7 +753,8 @@ def consume_by_product():
             "reasoning": explained["reasoning"],
             "candidates": cands,
             "preview": disambiguation.consume_preview(
-                cands, by_id, qty, unit=data.get("unit"), scope_ids=scope),
+                cands, by_id, qty, unit=data.get("unit"), scope_ids=scope,
+                policy=policy),
             "confirmWith": "productId",
         }), 409
 

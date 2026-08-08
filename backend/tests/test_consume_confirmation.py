@@ -263,3 +263,55 @@ def test_cook_reports_ambiguity_separately_from_missing(auth_client, app):
     assert {c["name"] for c in amb["candidates"]} == {"Almond Milk", "Coconut Milk"}
     assert amb["consumed"] == 0
     assert missing["status"] == "unmatched" and "candidates" not in missing
+
+
+# ---- the preview must not drift in ANY configuration ------------------------
+# The original preview test used one lot per product, unit "count" and the
+# default policy — the single setup where both drift bugs below are invisible.
+
+def test_preview_honours_the_requested_policy(auth_client, app):
+    """policy=fefo must preview the SAME lot it will consume (preview ignored
+    policy and always previewed prefer-open)."""
+    from app.extensions import db
+    from app.models import Product, StockLot
+    from datetime import datetime
+    gid = _gid(app)
+    _stock(auth_client, "Coconut Milk", 5, category="dairy-alt")  # forces ambiguity
+    with app.app_context():
+        p = Product(name="Almond Milk", category="dairy-alt", group_id=gid)
+        db.session.add(p)
+        db.session.flush()
+        # opened but expiring LATER; sealed expiring sooner -> the policies differ
+        db.session.add(StockLot(product_id=p.id, quantity=5, unit="count",
+                                group_id=gid, finished=False, package_state="opened",
+                                expiry_date=datetime(2030, 1, 1)))
+        db.session.add(StockLot(product_id=p.id, quantity=5, unit="count",
+                                group_id=gid, finished=False, package_state="sealed",
+                                expiry_date=datetime(2029, 1, 1)))
+        db.session.commit()
+
+    body = auth_client.post("/api/v1/stock/consume",
+                            json={"name": "milk", "quantity": 1,
+                                  "policy": "fefo"}).get_json()
+    prev = next(p for p in body["preview"] if p["name"] == "Almond Milk")
+    res = auth_client.post("/api/v1/stock/consume",
+                           json={"productId": prev["productId"], "quantity": 1,
+                                 "policy": "fefo"}).get_json()
+
+    assert prev["fromLots"][0]["lotId"] == res["draws"][0]["lot"]["id"], \
+        "preview named a different lot than the confirmed draw"
+
+
+def test_preview_amount_is_comparable_to_what_is_consumed(auth_client):
+    """Preview said 'would use 500' while the act reported 'used 0.5' — same
+    draw, two scales. The preview must carry the unit it is quoted in."""
+    _stock(auth_client, "Almond Milk", 2, unit="kg", category="dairy-alt")
+    _stock(auth_client, "Coconut Milk", 2, unit="kg", category="dairy-alt")
+
+    body = auth_client.post("/api/v1/stock/consume",
+                            json={"name": "milk", "quantity": 500,
+                                  "unit": "g"}).get_json()
+    prev = next(p for p in body["preview"] if p["name"] == "Almond Milk")
+
+    assert "unit" in prev, "preview amount has no unit — unreadable next to consumed"
+    assert prev["unit"] == "g" and prev["wouldConsume"] == 500

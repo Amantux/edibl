@@ -25,17 +25,31 @@ _LOGGER = logging.getLogger("edibl.disambiguation")
 # How many candidates a human can actually choose between (SOP: 3-5).
 MAX_CANDIDATES = 5
 
+# The caller-supplied phrase is interpolated into the prompt, so it is bounded:
+# a 200KB "name" otherwise became a 200KB prompt on every explain request.
+_MAX_PHRASE = 200
 
-def _soonest_lot(product):
-    """The lot a mutation would act on: soonest-to-expire, unfinished (FEFO)."""
+# The model's prose is returned to callers (and, on the chat path, back into a
+# tool-using model), so it is length-capped too.
+_MAX_REASONING = 600
+
+
+def _soonest_lot(product, scope_ids=None):
+    """The lot a mutation would act on: soonest-to-expire, unfinished (FEFO).
+    `scope_ids` narrows to a location subtree so the candidate describes the
+    stock actually in play — otherwise a scoped consume can show "in Fridge"
+    while it draws from the Garage, and location is exactly the field a human
+    disambiguates on."""
     lots = [s for s in product.stock if not s.finished]
+    if scope_ids:
+        lots = [s for s in lots if s.location_id in scope_ids]
     if not lots:
         return None
     lots.sort(key=lambda s: (s.expiry_date is None, s.expiry_date))
     return lots[0]
 
 
-def candidate_out(cand):
+def candidate_out(cand, scope_ids=None):
     """One product a user can actually choose between: what it is, and where.
 
     Brand/category/location are what make "Milk (Organic Valley, dairy, in
@@ -45,7 +59,9 @@ def candidate_out(cand):
     """
     p = cand.product
     lots = [s for s in p.stock if not s.finished]
-    lot = _soonest_lot(p)
+    if scope_ids:
+        lots = [s for s in lots if s.location_id in scope_ids]
+    lot = _soonest_lot(p, scope_ids)
     return {
         "productId": p.id,
         "name": p.name,
@@ -84,12 +100,19 @@ def deterministic_reasoning(query: str, candidates: list) -> str:
 
 
 def consume_preview(candidates, products_by_id, quantity, unit=None,
-                    scope_ids=None) -> list:
+                    scope_ids=None, policy=None) -> list:
     """What each candidate would actually consume, WITHOUT consuming anything.
 
     Runs the same pure planner the real consume uses (`selection.plan_consumption`)
-    so the preview cannot drift from the act. `scope_ids` applies the same
-    optional location scope. Returns one row per candidate.
+    with the SAME inputs — including `policy`, which decides *which* lot is drawn
+    (prefer-open vs strict FEFO). Previewing under a different policy named a
+    different lot than the confirmed call then drew.
+
+    `wouldConsume`/`shortfall` are in the DEMAND unit and the row carries that
+    `unit`, because the real response reports `consumed` as a sum of per-lot
+    takes in LOT units — "would use 500 (g)" next to "used 0.5 (kg)" is the same
+    draw at two scales, and a preview that reads as a different number is worse
+    than none.
     """
     from .inventory import selection
     out = []
@@ -101,14 +124,19 @@ def consume_preview(candidates, products_by_id, quantity, unit=None,
         if scope_ids:
             lots = [s for s in lots if s.location_id in scope_ids]
         picks, shortfall = selection.plan_consumption(
-            lots, quantity, demand_unit=unit)
+            lots, quantity, demand_unit=unit,
+            policy=policy or selection.PREFER_OPEN_FEFO)
         out.append({
             "productId": c["productId"],
             "name": c["name"],
-            # In the DEMAND unit, matching what the real call reports.
             "wouldConsume": round(max(quantity - shortfall, 0.0), 4),
             "shortfall": round(shortfall, 4),
+            # The unit `wouldConsume`/`shortfall` are quoted in: the demand unit
+            # when one was given, else the drawn lots' own unit.
+            "unit": (unit or (picks[0].lot.unit if picks else
+                              (lots[0].unit if lots else ""))),
             "fromLots": [{"lotId": p.lot.id, "take": p.take,
+                          "unit": p.lot.unit,
                           "location": (p.lot.location.name
                                        if p.lot.location else "")}
                          for p in picks],
@@ -151,12 +179,17 @@ def explain_candidates(gid, query, candidates, *, allow_autoresolve=False,
         return fallback
 
     from . import assistant
-    cfg = assistant._cfg(gid)
-    if cfg["provider"] not in assistant._PROVIDERS:
-        return fallback
+    cfg = None
     try:
+        # _cfg reads DB overrides and deliberately does NOT swallow a real DB
+        # error — inside the try, so an advisory explanation can never turn a
+        # safe 409 into a 500 on a destructive flow.
+        cfg = assistant._cfg(gid)
+        if cfg["provider"] not in assistant._PROVIDERS:
+            return fallback
         payload = json.dumps({
-            "phrase": query,
+            # Cap the phrase: it is caller-controlled and goes into the prompt.
+            "phrase": (query or "")[:_MAX_PHRASE],
             "candidates": [{k: c.get(k) for k in
                             ("productId", "name", "brand", "category",
                              "location", "lots", "nextExpiry")}
@@ -170,8 +203,10 @@ def explain_candidates(gid, query, candidates, *, allow_autoresolve=False,
                 if isinstance(data, dict):
                     return _shape(data, candidates, fallback, allow_autoresolve)
     except Exception as exc:  # noqa: BLE001 — advisory only; degrade, never fail
+        # cfg may be None when _cfg itself raised, so don't index it blindly.
         _LOGGER.info("disambiguation via '%s' failed, using deterministic "
-                     "reasoning: %s", cfg["provider"], exc)
+                     "reasoning: %s",
+                     (cfg or {}).get("provider", "?"), exc)
     return fallback
 
 
@@ -182,6 +217,7 @@ def _shape(data, candidates, fallback, allow_autoresolve) -> dict:
     reasoning = data.get("reasoning")
     if not isinstance(reasoning, str) or not reasoning.strip():
         reasoning = fallback["reasoning"]
+    reasoning = reasoning[:_MAX_REASONING]
 
     order = [pid for pid in (data.get("order") or []) if pid in valid]
     # Anything the model dropped keeps its deterministic rank, at the back.

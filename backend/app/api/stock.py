@@ -677,7 +677,11 @@ def consume_by_product():
 
     policy = data.get("policy") or selection.PREFER_OPEN_FEFO
     lots = [s for s in product.stock if not s.finished]
-    picks, shortfall = selection.plan_consumption(lots, data["quantity"], policy)
+    # `unit` is optional: when given, the quantity is converted per-lot (a 500 g
+    # request against a 2 kg lot draws 0.5 kg). Omitted → the lots' own unit,
+    # unchanged. `policy` MUST stay keyword — demand_unit sits before it now.
+    picks, shortfall = selection.plan_consumption(
+        lots, data["quantity"], demand_unit=data.get("unit"), policy=policy)
     results = []
     for p in picks:
         res = inventory.consume_lot(

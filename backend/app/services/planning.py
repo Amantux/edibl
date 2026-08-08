@@ -12,9 +12,12 @@ from ..schemas.serializers import expiry_status
 
 
 def _on_hand_by_name(gid):
-    """Map lower-cased product name → (total_qty, unit, expiring_soon_bool)."""
+    """Map lower-cased product name → list of (qty, unit, expiring_soon_bool),
+    ONE entry per lot. Kept per-lot (not pre-summed) so the caller can convert
+    each lot into the demanded unit before adding — summing g and kg lots into a
+    single number, as this used to, silently inflates on-hand by 1000x."""
     lots = db.session.query(StockLot).filter_by(group_id=gid, finished=False).all()
-    agg = {}
+    agg: dict[str, list] = {}
     for s in lots:
         if not s.product:
             continue
@@ -22,9 +25,8 @@ def _on_hand_by_name(gid):
         if (getattr(s.product, "item_type", "food") or "food") == "consumable":
             continue
         key = s.product.name.lower()
-        qty, unit, exp = agg.get(key, (0.0, s.unit, False))
-        exp = exp or expiry_status(s.expiry_date) in ("expiring", "expired")
-        agg[key] = (qty + (s.quantity or 0), s.unit, exp)
+        exp = expiry_status(s.expiry_date) in ("expiring", "expired")
+        agg.setdefault(key, []).append((s.quantity or 0, s.unit, exp))
     return agg
 
 
@@ -39,12 +41,21 @@ def analyze_demand(gid, demand):
             continue
         need = float(d.get("quantity") or 1)
         unit = d.get("unit") or "count"
-        # substring match so "milk" matches "Whole milk".
+        # substring match so "milk" matches "Whole milk". Convert each lot into
+        # the demanded unit before summing; a lot in an incompatible dimension
+        # (mass vs the demanded volume) can't satisfy it and is skipped, so
+        # on-hand is measured in the SAME unit as the need — no 2 kg-reads-as-2
+        # blindness, no cross-dimension inflation.
+        from ..services.quantity import convert
         have_qty, have_unit, expiring = 0.0, unit, False
-        for key, (qty, u, exp) in on_hand.items():
-            if name.lower() in key or key in name.lower():
-                have_qty += qty
-                have_unit = u
+        for key, lots in on_hand.items():
+            if not (name.lower() in key or key in name.lower()):
+                continue
+            for qty, u, exp in lots:
+                conv = convert(qty, u, unit)
+                if conv is None:
+                    continue  # different dimension — doesn't count toward this need
+                have_qty += conv
                 expiring = expiring or exp
         missing = round(max(need - have_qty, 0), 2)
         items.append({

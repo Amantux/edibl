@@ -36,17 +36,40 @@ def rank_lots(lots, policy=PREFER_OPEN_FEFO):
     return sorted(usable, key=lambda s: (s.expiry_date is None, s.expiry_date or s.created_at))
 
 
-def plan_consumption(lots, amount, policy=PREFER_OPEN_FEFO):
-    """Plan how to draw `amount` across ranked lots, spilling to the next lot when
-    one runs out. Returns (picks, shortfall) — shortfall > 0 means not enough stock.
-    Does NOT mutate; the caller runs consume_lot per pick so each is a ledger event."""
-    remaining = round(float(amount), 4)
+def plan_consumption(lots, amount, demand_unit=None, policy=PREFER_OPEN_FEFO):
+    """Plan how to draw `amount` (in `demand_unit`) across ranked lots, spilling
+    to the next lot when one runs out. Returns (picks, shortfall).
+
+    Unit-aware: a lot's quantity is in the LOT's unit, which may differ from the
+    recipe's `demand_unit` (2 kg on hand vs a 500 g need). Each lot is converted
+    into the demand unit to decide how much it satisfies; each Pick's `take` is
+    in that lot's OWN unit so ``consume_lot`` deducts correctly. `shortfall` is
+    in `demand_unit`. A lot whose unit is a different, non-convertible dimension
+    (mass vs volume, no density) is SKIPPED — cooking must never guess how much
+    of it satisfies the demand. When `demand_unit` is None the old same-unit
+    arithmetic is used unchanged."""
+    from ..quantity import convert
+    remaining = round(float(amount), 4)  # in demand_unit
+    du = (demand_unit or "").strip().lower() or None
     picks: list[Pick] = []
     for s in rank_lots(lots, policy):
         if remaining <= 0:
             break
-        take = min(remaining, s.quantity or 0)
-        if take > 0:
-            picks.append(Pick(lot=s, take=round(take, 4)))
-            remaining = round(remaining - take, 4)
+        lu = (s.unit or "").strip().lower() or None
+        avail = s.quantity or 0
+        if du and lu and du != lu:
+            avail_in_demand = convert(avail, lu, du)
+            if avail_in_demand is None:
+                continue  # incompatible dimension — don't guess
+            take_demand = min(remaining, avail_in_demand)
+            take_lot = convert(take_demand, du, lu)
+            if not take_lot or take_lot <= 0:
+                continue
+            picks.append(Pick(lot=s, take=round(take_lot, 4)))
+            remaining = round(remaining - take_demand, 4)
+        else:
+            take = min(remaining, avail)
+            if take > 0:
+                picks.append(Pick(lot=s, take=round(take, 4)))
+                remaining = round(remaining - take, 4)
     return picks, max(remaining, 0)

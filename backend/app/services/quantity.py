@@ -93,6 +93,35 @@ def _to_decimal(v) -> Optional[Decimal]:
         return None
 
 
+def convert(value, from_unit, to_unit) -> Optional[float]:
+    """`value` (in `from_unit`) expressed in `to_unit`, or None when the two
+    units are NOT inter-convertible.
+
+    Count/mass/volume convert freely within their dimension (g↔kg, ml↔cup);
+    package/serving/qualitative-level and unregistered (``other:``) units only
+    match unit-for-unit — there is no principled factor between "2 cans" and
+    "500 g", so we return None rather than invent one. This is the single
+    conversion used by consumption planning and demand analysis so neither one
+    guesses across a dimension boundary."""
+    if value is None:
+        return None
+    fu = (from_unit or "count").strip().lower()
+    tu = (to_unit or "count").strip().lower()
+    if fu == tu:
+        v = _to_decimal(value)
+        return float(v) if v is not None else None
+    df, dt = dimension_of(fu), dimension_of(tu)
+    if (df != dt or df in (PACKAGE, SERVING, LEVEL, PRESENCE_DIM)
+            or df.startswith("other:")):
+        return None
+    v = _to_decimal(value)
+    if v is None:
+        return None
+    ff = UNIT_DIMENSIONS.get(fu, (COUNT, Decimal(1)))[1]
+    ft = UNIT_DIMENSIONS.get(tu, (COUNT, Decimal(1)))[1]
+    return float(v * ff / ft)
+
+
 @dataclass(frozen=True)
 class Quantity:
     value: Optional[Decimal]

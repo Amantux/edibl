@@ -92,19 +92,26 @@ def cook_ingredients(gid, ingredients, *, source_app="plan", idempotency_key=Non
         # own docstring already promises.
         resolution = matching.resolve_for_mutation(
             gid, name, item_types={"food", "beverage"})
+        demand_unit = (it.get("unit") or "").strip() or None
         product = resolution.product
         consumed, shortfall = 0.0, qty
         if product:
             lots = [s for s in product.stock if not s.finished]
-            picks, shortfall = selection.plan_consumption(lots, qty)
+            # qty is in the recipe's unit; lots are in their own units. Convert
+            # per-lot so a 500 g need doesn't consume a whole 2 kg lot. Each
+            # pick's `take` is in that lot's unit; shortfall is in the demand
+            # unit, so consumed (demand unit) = qty - shortfall.
+            picks, shortfall = selection.plan_consumption(
+                lots, qty, demand_unit=demand_unit)
             for pk in picks:
                 key = f"{idempotency_key}:{idx}:{pk.lot.id}" if idempotency_key else None
                 consume_lot(pk.lot, amount=pk.take, outcome="eaten",
                             actor_user_id=None, source_app=source_app,
                             idempotency_key=key)
-                consumed += pk.take
+            consumed = max(qty - shortfall, 0.0)
         results.append({"name": name, "consumed": round(consumed, 4),
-                        "shortfall": round(shortfall, 4), "matched": bool(product)})
+                        "shortfall": round(shortfall, 4),
+                        "unit": demand_unit, "matched": bool(product)})
     return results
 
 

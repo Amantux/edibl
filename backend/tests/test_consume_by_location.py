@@ -112,3 +112,41 @@ def test_another_groups_location_is_refused(auth_client, app):
 
     assert r.status_code == 422, "accepted another tenant's location"
     assert _qty(auth_client, lot["id"]) == 5, "consumed using a foreign location scope"
+
+
+# ---- chat assistant surface ------------------------------------------------
+
+def test_assistant_consume_is_scoped_to_the_named_location(auth_client, app):
+    """The chat surface must obey the same strict scope as REST and MCP."""
+    from app.extensions import db
+    from app.models import Group
+    from app.services.assistant import h_record_consumption
+
+    kitchen, garage = _loc(auth_client, "Kitchen"), _loc(auth_client, "Garage")
+    k_lot = _stock(auth_client, "Milk", 5, kitchen["id"])
+    g_lot = _stock(auth_client, "Milk", 5, garage["id"])
+
+    with app.app_context():
+        gid = db.session.query(Group).first().id
+        h_record_consumption(gid, "Milk", quantity=2, location="Garage")
+        db.session.commit()
+
+    assert _qty(auth_client, g_lot["id"]) == 3
+    assert _qty(auth_client, k_lot["id"]) == 5, "chat consumed another location's stock"
+
+
+def test_assistant_consume_reports_when_the_location_has_none(auth_client, app):
+    from app.extensions import db
+    from app.models import Group
+    from app.services.assistant import h_record_consumption
+
+    kitchen = _loc(auth_client, "Kitchen")
+    _loc(auth_client, "Garage")
+    k_lot = _stock(auth_client, "Milk", 5, kitchen["id"])
+
+    with app.app_context():
+        gid = db.session.query(Group).first().id
+        msg = h_record_consumption(gid, "Milk", quantity=1, location="Garage")
+
+    assert "Garage" in (msg if isinstance(msg, str) else msg[0])
+    assert _qty(auth_client, k_lot["id"]) == 5, "fell back to another location"

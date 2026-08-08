@@ -280,10 +280,22 @@ def h_grouped_stock(gid, query=""):
                      for k, g in sorted(groups.items()))
 
 
-def h_record_consumption(gid, name, quantity=1, outcome="eaten"):
+def h_record_consumption(gid, name, quantity=1, outcome="eaten", location=None):
     lots = _match_lots(gid, name)
     if not lots:
         return f"No stock matching '{name}' to update."
+    if location:
+        # "use the milk in the garage" — scope to that area and everything nested
+        # in it, and never fall back to a lot elsewhere (same strict rule the
+        # REST consume uses; drawing from the wrong area isn't recoverable).
+        from .placement import location_scope_ids
+        loc_id = _find_location(gid, location)
+        scope = location_scope_ids(gid, loc_id) if loc_id else set()
+        if not scope:
+            return f"No location named '{location}'."
+        lots = [s for s in lots if s.location_id in scope]
+        if not lots:
+            return f"No {name} in {location} to use."
     s = lots[0]
     # Same command layer REST uses — identical decrement/finish/ledger semantics.
     res = consume_lot(s, amount=quantity, outcome=outcome, source_app="assistant")
@@ -543,9 +555,14 @@ TOOLS = {
                                "name": {"type": "string"},
                                "quantity": {"type": "number"},
                                "outcome": {"type": "string",
-                                           "enum": list(OUTCOMES)}},
+                                           "enum": list(OUTCOMES)},
+                               "location": {"type": "string",
+                                            "description": ("Optional: only use "
+                                                            "stock in this area "
+                                                            "(and areas inside it).")}},
                             "required": ["name"]},
-                           "Record that food was eaten, spoiled, expired, or discarded."),
+                           "Record that food was eaten, spoiled, expired, or discarded. "
+                           "Pass `location` to use up only what's in that area."),
     "open_stock": (h_open_stock,
                    {"type": "object", "properties": {
                        "name": {"type": "string"}}, "required": ["name"]},

@@ -129,6 +129,15 @@ def resolve_for_mutation(gid, query, *, item_types=None) -> Resolution:
         return Resolution(top.product, False, cands) if len(cands) == 1 \
             else Resolution(None, True, cands)
 
+    # A UNIQUE exact name/barcode match is unambiguous by KIND: exact identity
+    # beats softer evidence, so an alias (0.9) or family (0.8) rival within the
+    # 0.3 dominance gap must not turn it into a question. Only another EXACT
+    # match (two products literally named the same) is real ambiguity.
+    if top.score >= SCORE_EXACT:
+        exact_rivals = [c for c in cands[1:] if c.score >= SCORE_EXACT]
+        if not exact_rivals:
+            return Resolution(top.product, False, cands)
+
     # Judge dominance only against REAL rivals: a description-only hit is
     # supplementary ranking info, not a competing interpretation, so it must not
     # turn an otherwise-clear match into a question.

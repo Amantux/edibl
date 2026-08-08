@@ -39,22 +39,48 @@ def _type_of(table, column):
     return ""
 
 
+def _fk_safe_sqlite():
+    """SQLite batch_alter_table rebuilds a table (create temp, copy, DROP,
+    rename). acquisition_lots is FK-referenced by stock_lots and this app
+    enforces foreign keys (extensions.py registers the PRAGMA on the Engine
+    CLASS, so Alembic's engine gets it too) — so the rebuild's DROP raised
+    "FOREIGN KEY constraint failed" on any populated legacy DB, and the leftover
+    _alembic_tmp table then wedged every boot. Suspend FK enforcement around the
+    rebuild and clean up stale temp tables. Ported from HomeHoard 0014; the
+    PRAGMA is a no-op inside a transaction, hence autocommit_block."""
+    with op.get_context().autocommit_block():
+        for table in ("acquisition_lots", "stock_lots"):
+            op.execute(f'DROP TABLE IF EXISTS "_alembic_tmp_{table}"')
+        op.execute("PRAGMA foreign_keys=OFF")
+
+
+def _fk_restore_sqlite():
+    with op.get_context().autocommit_block():
+        op.execute("PRAGMA foreign_keys=ON")
+
+
 def upgrade() -> None:
     bind = op.get_bind()
     is_pg = bind.dialect.name == "postgresql"
-
-    for table in ("acquisition_lots", "stock_lots"):
-        if "cost" not in _columns(table):
-            continue
-        if "NUMERIC" in _type_of(table, "cost"):
-            continue  # already converted (fresh DB from metadata baseline)
-        if is_pg:
-            op.alter_column(
-                table, "cost", type_=sa.Numeric(10, 2),
-                postgresql_using="cost::numeric(10,2)", existing_nullable=True)
-        else:
-            with op.batch_alter_table(table) as batch:
-                batch.alter_column("cost", type_=sa.Numeric(10, 2), existing_nullable=True)
+    if not is_pg:
+        _fk_safe_sqlite()
+    try:
+        for table in ("acquisition_lots", "stock_lots"):
+            if "cost" not in _columns(table):
+                continue
+            if "NUMERIC" in _type_of(table, "cost"):
+                continue  # already converted (fresh DB from metadata baseline)
+            if is_pg:
+                op.alter_column(
+                    table, "cost", type_=sa.Numeric(10, 2),
+                    postgresql_using="cost::numeric(10,2)", existing_nullable=True)
+            else:
+                with op.batch_alter_table(table) as batch:
+                    batch.alter_column("cost", type_=sa.Numeric(10, 2),
+                                       existing_nullable=True)
+    finally:
+        if not is_pg:
+            _fk_restore_sqlite()
 
     if "currency" not in _columns("stock_lots"):
         op.add_column("stock_lots",

@@ -30,6 +30,16 @@ def money_out(x):
     return float(x) if x is not None else None
 
 
+def _original_qty(s):
+    """The lot's ORIGINAL purchased quantity (from its acquisition lot), for a
+    stable per-unit price; falls back to the remaining quantity when there's no
+    acquisition record."""
+    acq = getattr(s, "acquisition_lot", None)
+    if acq is not None and getattr(acq, "original_quantity", None):
+        return acq.original_quantity
+    return s.quantity
+
+
 def _unit_price(cost, quantity):
     """Price per unit = cost / quantity, as a 4dp Decimal, when both are usable
     (quantity > 0). None otherwise — presence/unknown lots have no per-unit price."""
@@ -222,7 +232,12 @@ def stock_out(s):
         # Money: `cost`/`price` are the same lot price (float on the wire, Decimal in
         # DB); `unitPrice` = price / amount when both are known; `currency` is the code.
         "cost": money_out(s.cost), "price": money_out(s.cost),
-        "unitPrice": money_out(_unit_price(s.cost, s.quantity if _numeric_kind(s) else None)),
+        # unitPrice divides by the ORIGINAL purchased amount (the acquisition
+        # lot), not the remaining quantity — else it inflates as the lot is
+        # consumed. Falls back to the remaining quantity for lots with no
+        # acquisition record.
+        "unitPrice": money_out(_unit_price(
+            s.cost, _original_qty(s) if _numeric_kind(s) else None)),
         "currency": getattr(s, "currency", "") or "",
         "source": s.source, "lotCode": s.lot_code,
         "finished": s.finished, "notes": s.notes, "attrs": s.attrs or {},

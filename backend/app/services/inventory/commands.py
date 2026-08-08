@@ -354,7 +354,11 @@ def reverse_event(event: InventoryEvent, *, actor_user_id=None, source_app="web"
                 db.session.delete(ce)  # remove the learning signal for the undone consume
         name = lot.product.name if (lot and lot.product) else "item"
         summary = f"Restored {amount} {event.delta_unit} of {name}"
-    else:  # open
+    elif event.type == "open":
+        # ONLY for an actual open-reversal. This was a bare `else`, so it ran
+        # for adjust/move/split/merge/freeze/thaw too — re-sealing the lot and
+        # wiping opened_date before the real type block ran, corrupting
+        # prefer-open FEFO, the open-packages count and opened-based shelf life.
         if lot is not None:
             prev = (event.state_changes or {}).get("package_state", ["sealed", "opened"])[0]
             lot.package_state = prev or "sealed"

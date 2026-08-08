@@ -38,8 +38,15 @@ def _typical_unit_prices(gid):
     unit_prices, last_unit, last_price, price_unit = defaultdict(list), {}, {}, {}
     for s in lots:
         last_price[s.product_id] = Decimal(str(s.cost))
-        if s.quantity and s.quantity > 0:
-            up = (Decimal(str(s.cost)) / Decimal(str(s.quantity)))
+        # ORIGINAL purchased quantity, not the consumed-down remaining one —
+        # dividing by s.quantity made a lot's unit price balloon as it was used
+        # (10 kg @ $10 -> 1.00; after consuming 9 -> 10.00). The acquisition lot
+        # holds the immutable purchase cost + original_quantity.
+        acq = s.acquisition_lot
+        denom = acq.original_quantity if (acq and acq.original_quantity) else s.quantity
+        cost = Decimal(str(acq.cost)) if (acq and acq.cost is not None) else Decimal(str(s.cost))
+        if denom and denom > 0:
+            up = (cost / Decimal(str(denom)))
             unit_prices[s.product_id].append(up)
             last_unit[s.product_id] = up
             price_unit[s.product_id] = canonical_unit(s.unit)  # unit this price is PER

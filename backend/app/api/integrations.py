@@ -85,8 +85,14 @@ def cook_ingredients(gid, ingredients, *, source_app="plan", idempotency_key=Non
             qty = float(it.get("quantity") or 1)
         except (TypeError, ValueError):
             qty = 1.0
-        cands = matching.match_products(gid, name, item_types={"food", "beverage"})
-        product = cands[0].product if cands else None
+        # resolve_for_mutation, NOT match_products[0]: consuming stock is a
+        # mutation and must not GUESS across materially-different products
+        # (ADR-0003). An ambiguous or weak-only match reports unmatched rather
+        # than silently eating the wrong product — which is what this function's
+        # own docstring already promises.
+        resolution = matching.resolve_for_mutation(
+            gid, name, item_types={"food", "beverage"})
+        product = resolution.product
         consumed, shortfall = 0.0, qty
         if product:
             lots = [s for s in product.stock if not s.finished]

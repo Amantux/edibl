@@ -4,6 +4,7 @@ myMeal propagates the ingredients its recipes/meal-plans need → Edibl tracks
 them as PlannedItems and reconciles against real stock. The result answers
 "what do I need / what should I order / what can I make right now?".
 """
+import math
 from datetime import datetime
 
 from flask import Blueprint, request, jsonify, abort
@@ -18,6 +19,17 @@ from ..services.integrations import integration_status, mymeal_get
 from ..services.settings import set_mymeal
 
 bp = Blueprint("integrations", __name__)
+
+
+def _finite_float(v, default=1.0):
+    """Coerce a JSON quantity to a finite, non-negative float, else `default`.
+    Blocks the hostile values that either 500'd (`"abc"`, a list) or — as `inf`
+    from `float("Infinity")` — drained stock and polluted the Float column."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return default
+    return f if math.isfinite(f) and f >= 0 else default
 
 
 def _parse_dt(v):
@@ -51,10 +63,7 @@ def _map_recipe_ingredients(recipe):
         if not name:
             continue
         u = unit.get("abbreviation") or "count"
-        try:
-            q = float(ing.get("quantity") or 1)
-        except (TypeError, ValueError):
-            q = 1.0
+        q = _finite_float(ing.get("quantity"))
         key = (name.lower(), u)
         if key in out:
             out[key]["quantity"] += q
@@ -78,13 +87,12 @@ def cook_ingredients(gid, ingredients, *, source_app="plan", idempotency_key=Non
     from ..services.inventory import selection, consume_lot
     results = []
     for idx, it in enumerate(ingredients):
+        if not isinstance(it, dict):
+            continue  # a bare string in the list must not 500 on .get
         name = (it.get("name") or "").strip()
         if not name:
             continue
-        try:
-            qty = float(it.get("quantity") or 1)
-        except (TypeError, ValueError):
-            qty = 1.0
+        qty = _finite_float(it.get("quantity"))
         # resolve_for_mutation, NOT match_products[0]: consuming stock is a
         # mutation and must not GUESS across materially-different products
         # (ADR-0003). An ambiguous or weak-only match reports unmatched rather
@@ -210,6 +218,8 @@ def _upsert_planned(gid, items, *, default_meal="", default_source="mymeal",
     upserted = []
     kept: dict[str, set[str]] = {}   # ref -> names this payload still needs
     for it in items:
+        if not isinstance(it, dict):
+            continue  # a bare string / non-object entry must not 500 on .get
         name = (it.get("name") or "").strip()
         if not name:
             continue
@@ -220,7 +230,7 @@ def _upsert_planned(gid, items, *, default_meal="", default_source="mymeal",
                         .filter_by(group_id=gid, source_ref=ref, name=name).first())
             kept.setdefault(ref, set()).add(name)
         p = existing or PlannedItem(group_id=gid, name=name)
-        p.quantity = float(it.get("quantity") or 1)
+        p.quantity = _finite_float(it.get("quantity"))
         p.unit = it.get("unit") or "count"
         p.needed_by = _parse_dt(it.get("neededBy"))
         p.source = default_source

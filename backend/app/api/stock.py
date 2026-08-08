@@ -497,9 +497,11 @@ def update(lot_id):
         # ingestion does — a PUT must not smuggle a value POST would refuse.
         s.cost = to_money(data["cost"])
     for k, attr in {"source": "source", "lotCode": "lot_code",
-                    "notes": "notes", "finished": "finished"}.items():
+                    "notes": "notes"}.items():
         if k in data:
             setattr(s, attr, data[k])
+    if "finished" in data:
+        s.finished = bool(data["finished"])  # Boolean column: a raw string 500s on PG
     # `finished` is derived state: a lot is finished exactly when it's depleted.
     # An explicit quantity edit is the ground truth, so recompute from it (the
     # command layer keeps the same invariant) — a direct PUT must not leave a
@@ -692,6 +694,15 @@ def consume_by_product():
         return jsonify({"error": "productId or a known product name is required"}), 404
     if data.get("quantity") is None:
         return jsonify({"error": "quantity required"}), 422
+    # Validate like PUT /stock: an unguarded float() let "Infinity" (min(inf,
+    # avail)=avail per lot) DRAIN every lot, and "abc"/a list 500'd. plan_
+    # consumption must never see a non-finite or negative demand.
+    try:
+        qty = float(data["quantity"])
+    except (TypeError, ValueError):
+        return jsonify({"error": "quantity must be a number"}), 422
+    if not math.isfinite(qty) or qty < 0:
+        return jsonify({"error": "quantity must be a finite, non-negative number"}), 422
 
     policy = data.get("policy") or selection.PREFER_OPEN_FEFO
     lots = [s for s in product.stock if not s.finished]
@@ -699,7 +710,7 @@ def consume_by_product():
     # request against a 2 kg lot draws 0.5 kg). Omitted → the lots' own unit,
     # unchanged. `policy` MUST stay keyword — demand_unit sits before it now.
     picks, shortfall = selection.plan_consumption(
-        lots, data["quantity"], demand_unit=data.get("unit"), policy=policy)
+        lots, qty, demand_unit=data.get("unit"), policy=policy)
     results = []
     for p in picks:
         res = inventory.consume_lot(

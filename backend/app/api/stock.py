@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from ..extensions import db, limiter
+from ..utils import to_int, to_positive_float
 from ..models import (StockLot, Product, Location, ConsumptionEvent, InventoryEvent,
                       Detection, utcnow, STORAGE_METHODS, PACKAGE_STATES, QUANTITY_KINDS)
 from ..auth import login_required, current_group, current_user
@@ -640,9 +641,13 @@ def split(lot_id):
     data = request.get_json(force=True) or {}
     if not _valid_location(s.group_id, data.get("locationId")):
         return jsonify({"error": "unknown location"}), 422
+    # A non-numeric/NaN/negative amount reached split_lot's arithmetic and 500'd.
+    amount = to_positive_float(data.get("quantity"))
+    if amount is None:
+        return jsonify({"error": "quantity must be a finite, non-negative number"}), 422
     try:
         res = inventory.split_lot(
-            s, amount=data.get("quantity"), location_id=data.get("locationId") or None,
+            s, amount=amount, location_id=data.get("locationId") or None,
             package_state=data.get("packageState"), actor_user_id=current_user().id,
             source_app=data.get("sourceApp", "web"),
             idempotency_key=data.get("idempotencyKey"))
@@ -922,7 +927,7 @@ def list_events():
     if pid:
         q = q.filter((InventoryEvent.src_position_id == pid)
                      | (InventoryEvent.dst_position_id == pid))
-    limit = min(int(request.args.get("limit", 100) or 100), 500)
+    limit = to_int(request.args.get("limit"), default=100, lo=1, hi=500)
     events = q.order_by(InventoryEvent.at.desc()).limit(limit).all()
     return jsonify({"events": [event_out(e) for e in events], "total": len(events)})
 

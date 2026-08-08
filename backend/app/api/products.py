@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify, abort
 
 from ..extensions import db, limiter
+from ..utils import to_int
 from ..models import (Product, StockLot, FoodConcept, ITEM_TYPES, CATEGORIES, UNITS,
                       FRESHNESS_LEVELS, STORAGE_METHODS)
 from ..auth import login_required, owner_required, current_group
@@ -150,7 +151,7 @@ def autocomplete():
     q = (request.args.get("q") or "").strip()
     if not q:
         return jsonify({"names": []})
-    limit = min(int(request.args.get("limit", 8) or 8), 20)
+    limit = to_int(request.args.get("limit"), default=8, lo=1, hi=20)
     names = []
     for c in matching.match_products(current_group().id, q):
         if c.product.name not in names:

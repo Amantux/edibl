@@ -4,7 +4,6 @@ myMeal propagates the ingredients its recipes/meal-plans need → Edibl tracks
 them as PlannedItems and reconciles against real stock. The result answers
 "what do I need / what should I order / what can I make right now?".
 """
-import math
 from datetime import datetime
 
 from flask import Blueprint, request, jsonify, abort
@@ -22,14 +21,11 @@ bp = Blueprint("integrations", __name__)
 
 
 def _finite_float(v, default=1.0):
-    """Coerce a JSON quantity to a finite, non-negative float, else `default`.
-    Blocks the hostile values that either 500'd (`"abc"`, a list) or — as `inf`
-    from `float("Infinity")` — drained stock and polluted the Float column."""
-    try:
-        f = float(v)
-    except (TypeError, ValueError):
-        return default
-    return f if math.isfinite(f) and f >= 0 else default
+    """Finite, non-negative quantity else `default` — see utils.to_positive_float.
+    Kept as a local alias because these call sites want a substituted default
+    rather than a 422."""
+    from ..utils import to_positive_float
+    return to_positive_float(v, default)
 
 
 def _parse_dt(v):

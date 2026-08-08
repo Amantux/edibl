@@ -6,6 +6,7 @@ from ..models import (ShoppingItem, Product, StockLot, ConsumptionEvent, Reserva
 from ..auth import login_required, current_group
 from ..schemas.serializers import shopping_out, reservation_out
 from ..services.shopping import format_for_delivery
+from ..utils import to_float
 
 bp = Blueprint("shopping", __name__)
 
@@ -35,7 +36,7 @@ def add():
     name = (data.get("name") or "").strip()
     if not name:
         return jsonify({"error": "name required"}), 422
-    i = ShoppingItem(name=name, quantity=float(data.get("quantity") or 1),
+    i = ShoppingItem(name=name, quantity=to_float(data.get("quantity"), 1),
                      unit=data.get("unit") or "count", note=data.get("note", ""),
                      source=data.get("source", "manual"),
                      product_id=data.get("productId"), group_id=current_group().id)
@@ -142,7 +143,7 @@ def add_reservation():
         if c is None or c.group_id != current_group().id:
             return jsonify({"error": "unknown concept"}), 404
     r = Reservation(product_id=pid, concept_id=concept_id, name=name,
-                    quantity=float(data.get("quantity") or 1),
+                    quantity=to_float(data.get("quantity"), 1),
                     unit=data.get("unit") or "count", meal=data.get("meal", ""),
                     source_ref=data.get("sourceRef", ""), group_id=current_group().id)
     db.session.add(r)

@@ -11,6 +11,7 @@ from ..auth import login_required, current_group
 from ..schemas.serializers import stock_out, expiry_status, money_out
 from ..services.estimation import predict_runout, waste_insights
 from ..services.settings import get_currency
+from ..utils import to_int
 
 bp = Blueprint("dashboard", __name__)
 
@@ -227,7 +228,7 @@ def spend_insights():
     value is reported separately as valueOnHand.expiredUnused), and per-product price
     history (with typical/last price for re-add prefill)."""
     gid = current_group().id
-    months = max(1, min(int(request.args.get("months", 12) or 12), 36))
+    months = to_int(request.args.get("months"), default=12, lo=1, hi=36)
     # DB datetimes are naive (SQLite/Postgres columns) — compare in naive UTC.
     now = utcnow().replace(tzinfo=None)
     window_start = (now - timedelta(days=months * 31)).replace(

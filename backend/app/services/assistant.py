@@ -119,11 +119,13 @@ def h_do_i_have(gid, ingredient=""):
     lots = _match_lots(gid, ingredient)
     if not lots:
         return f"No, there's no {ingredient} in stock."
-    total = round(sum(s.quantity or 0 for s in lots), 2)
+    # Report each unit on its own: summing 2 kg + 500 g into "2.5" (or 502) lies.
+    from .onhand import aggregate_on_hand
+    agg = aggregate_on_hand(lots)
+    amount = ", ".join(f"{q:g} {u}" for u, q in agg["byUnit"].items()) or "some"
     where = sorted({s.location.name for s in lots if s.location})
-    unit = lots[0].unit
     loc = f" ({', '.join(where)})" if where else ""
-    return f"Yes — about {total} {unit} of {ingredient}{loc}."
+    return f"Yes — about {amount} of {ingredient}{loc}."
 
 
 def h_whats_in_stock(gid, query=""):

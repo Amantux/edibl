@@ -281,7 +281,29 @@ def h_grouped_stock(gid, query=""):
 
 
 def h_record_consumption(gid, name, quantity=1, outcome="eaten", location=None):
-    lots = _match_lots(gid, name)
+    # Consuming is destructive, so chat runs the SAME tiered resolution the REST
+    # and MCP surfaces do (ADR-0003). This used to be a raw substring match that
+    # silently took lots[0] — "use the milk" with almond AND coconut in stock ate
+    # whichever expired first. A low-confidence name now asks and changes
+    # nothing; the user answers and the model calls back with the exact name.
+    from . import disambiguation, matching
+    resolution = matching.resolve_for_mutation(gid, name)
+    if resolution.product is None:
+        if not resolution.candidates:
+            return f"No stock matching '{name}' to update."
+        cands = [disambiguation.candidate_out(c)
+                 for c in resolution.candidates[:disambiguation.MAX_CANDIDATES]]
+        # use_llm=False on purpose: this text is a TOOL RESULT that goes straight
+        # back into the chat model, which then phrases the question itself. A
+        # second LLM round-trip here would pay latency to reason about candidates
+        # the caller is already reasoning about. The deterministic sentence names
+        # every candidate with the facts that settle it, which is what the model
+        # needs. (allow_autoresolve stays False regardless — destructive path.)
+        return disambiguation.explain_candidates(
+            gid, name, cands, allow_autoresolve=False, use_llm=False)["reasoning"]
+
+    lots = [s for s in resolution.product.stock if not s.finished]
+    lots.sort(key=lambda s: (s.expiry_date is None, s.expiry_date or s.created_at))
     if not lots:
         return f"No stock matching '{name}' to update."
     if location:

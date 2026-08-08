@@ -117,9 +117,20 @@ def cook_ingredients(gid, ingredients, *, source_app="plan", idempotency_key=Non
                             actor_user_id=None, source_app=source_app,
                             idempotency_key=key)
             consumed = max(qty - shortfall, 0.0)
-        results.append({"name": name, "consumed": round(consumed, 4),
-                        "shortfall": round(shortfall, 4),
-                        "unit": demand_unit, "matched": bool(product)})
+        # "ambiguous, ask which" and "you don't have it" are different answers
+        # and used to be indistinguishable (both matched:False, no candidates),
+        # so the caller could only report a shortfall. Surface the candidates.
+        row = {"name": name, "consumed": round(consumed, 4),
+               "shortfall": round(shortfall, 4),
+               "unit": demand_unit, "matched": bool(product),
+               "status": "consumed" if product else "unmatched"}
+        if product is None and resolution.candidates:
+            from ..services import disambiguation
+            row["status"] = "needs_confirmation"
+            row["candidates"] = [
+                disambiguation.candidate_out(c)
+                for c in resolution.candidates[:disambiguation.MAX_CANDIDATES]]
+        results.append(row)
     return results
 
 

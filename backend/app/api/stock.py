@@ -10,7 +10,7 @@ from ..extensions import db
 from ..models import (StockLot, Product, Location, ConsumptionEvent, InventoryEvent,
                       Detection, utcnow, STORAGE_METHODS, PACKAGE_STATES, QUANTITY_KINDS)
 from ..auth import login_required, current_group, current_user
-from ..schemas.serializers import stock_out, expiry_status, to_money, iso
+from ..schemas.serializers import stock_out, expiry_status, to_money
 from ..services.estimation import estimate_expiry, product_insights
 from ..services.settings import get_currency
 from ..services import inventory
@@ -412,8 +412,18 @@ def resolve_stock():
                         "lot": stock_out(lot)})
     if not res.candidates:
         return jsonify({"confidence": "none", "candidates": []})
-    return jsonify({"confidence": "low",
-                    "candidates": [_candidate_out(c) for c in res.candidates[:5]]})
+    cands = [_candidate_out(c) for c in res.candidates[:5]]
+    out = {"confidence": "low", "candidates": cands}
+    # ?explain=1 adds a plain-language reason the candidates differ, for a caller
+    # that is about to ask a human. It NEVER changes `confidence`: every mutating
+    # MCP tool acts on "high", so letting a model promote a low match here would
+    # auto-resolve a destructive action through the back door — the exact thing
+    # the consume flow refuses to do. Reasoning is advisory text, nothing more.
+    if (request.args.get("explain") or "").lower() in ("1", "true", "yes"):
+        from ..services import disambiguation
+        out["reasoning"] = disambiguation.explain_candidates(
+            gid, q, cands, allow_autoresolve=False)["reasoning"]
+    return jsonify(out)
 
 
 def _soonest_lot(product):
@@ -427,27 +437,12 @@ def _soonest_lot(product):
 
 
 def _candidate_out(cand):
-    """One product a user can actually choose between: what it is, and where.
-
-    Brand/category/location are what make "Milk (Organic Valley, dairy, in
-    Fridge)" distinguishable from "Almond Milk (Califia, dairy-alt, in Pantry)".
-    """
-    p = cand.product
-    lots = [s for s in p.stock if not s.finished]
-    lot = _soonest_lot(p)
-    return {
-        "productId": p.id,
-        "name": p.name,
-        "brand": p.brand or "",
-        "category": p.category or "",
-        "family": p.family or "",
-        "location": (lot.location.name if lot and lot.location else ""),
-        "lots": len(lots),
-        "lotId": lot.id if lot else None,
-        "nextExpiry": iso(lot.expiry_date) if lot and lot.expiry_date else None,
-        "matchedOn": cand.reasons,
-        "score": cand.score,
-    }
+    """One product a user can actually choose between — see
+    `services.disambiguation.candidate_out`. Kept as a local alias because the
+    consume-confirmation flow and this endpoint must describe a candidate
+    identically; the shape lives in one place."""
+    from ..services.disambiguation import candidate_out
+    return candidate_out(cand)
 
 
 @bp.get("/stock/<lot_id>")
@@ -693,10 +688,18 @@ def consume_by_product():
         product = db.session.get(Product, pid)
         if product and product.group_id != gid:
             product = None
+    # A name goes through the SHARED tiered resolution (ADR-0003) rather than an
+    # exact-match-or-404: "milk" should work when you own one milk, and must ASK
+    # — not guess — when you own three. `productId` stays the unambiguous handle,
+    # and is exactly what the caller sends back to confirm a choice.
+    pending = None
     if not product and data.get("name"):
-        product = (db.session.query(Product)
-                   .filter_by(group_id=gid, name=data["name"].strip()).first())
-    if not product:
+        from ..services import disambiguation, matching
+        resolution = matching.resolve_for_mutation(gid, data["name"].strip())
+        product = resolution.product
+        if product is None and resolution.candidates:
+            pending = resolution.candidates[:disambiguation.MAX_CANDIDATES]
+    if not product and pending is None:
         return jsonify({"error": "productId or a known product name is required"}), 404
     if data.get("quantity") is None:
         return jsonify({"error": "quantity required"}), 422
@@ -711,19 +714,45 @@ def consume_by_product():
         return jsonify({"error": "quantity must be a finite, non-negative number"}), 422
 
     policy = data.get("policy") or selection.PREFER_OPEN_FEFO
-    lots = [s for s in product.stock if not s.finished]
     # Optional location scope: "use up the milk in the Garage". STRICT — the draw
     # never spills to a lot outside that location (consuming the wrong household
     # stock is not a recoverable surprise), and the scope includes nested
     # locations because users name the area they think in, not the leaf. An
     # unknown/foreign id is REFUSED, never silently treated as "everywhere" — a
     # typo must not eat the whole product.
+    scope = None
     scope_id = data.get("locationId")
     if scope_id:
         from ..services.placement import location_scope_ids
         scope = location_scope_ids(gid, scope_id)
         if not scope:
             return jsonify({"error": "unknown location"}), 422
+
+    # LOW confidence → ask, don't guess. Returns the candidates, what each one
+    # WOULD consume (same pure planner as the real draw, so the preview can't
+    # drift), and why they differ. Mutates nothing; the caller confirms by
+    # re-sending `productId`. The LLM only ever writes the explanation here —
+    # allow_autoresolve stays False because this is a destructive action.
+    if pending is not None:
+        from ..services import disambiguation
+        cands = [disambiguation.candidate_out(c) for c in pending]
+        by_id = {c.product.id: c.product for c in pending}
+        explained = disambiguation.explain_candidates(
+            gid, data["name"].strip(), cands,
+            allow_autoresolve=False, use_llm=bool(data.get("explain")))
+        order = {pid: i for i, pid in enumerate(explained["order"])}
+        cands.sort(key=lambda c: order.get(c["productId"], len(order)))
+        return jsonify({
+            "status": "needs_confirmation",
+            "reasoning": explained["reasoning"],
+            "candidates": cands,
+            "preview": disambiguation.consume_preview(
+                cands, by_id, qty, unit=data.get("unit"), scope_ids=scope),
+            "confirmWith": "productId",
+        }), 409
+
+    lots = [s for s in product.stock if not s.finished]
+    if scope:
         lots = [s for s in lots if s.location_id in scope]
     # `unit` is optional: when given, the quantity is converted per-lot (a 500 g
     # request against a 2 kg lot draws 0.5 kg). Omitted → the lots' own unit,

@@ -676,7 +676,13 @@ def merge():
 def consume_by_product():
     """Consume an amount of a PRODUCT, drawing across its lots by an explicit
     selection policy (default: prefer-open, then FEFO) and spilling to the next lot
-    when one runs out. Body: {productId | name, quantity, outcome?, policy?}.
+    when one runs out.
+
+    Body: {productId | name, quantity, outcome?, policy?, unit?, locationId?}.
+    `locationId` scopes the draw to that location AND its sub-locations ("use up
+    the milk in the Garage"); it never spills outside the scope — an amount larger
+    than what's there consumes what it can and reports the rest as `shortfall`.
+
     Returns each lot's resulting event so every draw is independently reversible."""
     from ..services.inventory import selection
     gid = current_group().id
@@ -706,6 +712,19 @@ def consume_by_product():
 
     policy = data.get("policy") or selection.PREFER_OPEN_FEFO
     lots = [s for s in product.stock if not s.finished]
+    # Optional location scope: "use up the milk in the Garage". STRICT — the draw
+    # never spills to a lot outside that location (consuming the wrong household
+    # stock is not a recoverable surprise), and the scope includes nested
+    # locations because users name the area they think in, not the leaf. An
+    # unknown/foreign id is REFUSED, never silently treated as "everywhere" — a
+    # typo must not eat the whole product.
+    scope_id = data.get("locationId")
+    if scope_id:
+        from ..services.placement import location_scope_ids
+        scope = location_scope_ids(gid, scope_id)
+        if not scope:
+            return jsonify({"error": "unknown location"}), 422
+        lots = [s for s in lots if s.location_id in scope]
     # `unit` is optional: when given, the quantity is converted per-lot (a 500 g
     # request against a 2 kg lot draws 0.5 kg). Omitted → the lots' own unit,
     # unchanged. `policy` MUST stay keyword — demand_unit sits before it now.

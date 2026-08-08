@@ -391,10 +391,13 @@ def split_stock(name: str, quantity: float, location: str = "") -> str:
 
 
 @mcp.tool()
-def use_stock(name: str, quantity: float, outcome: str = "eaten") -> str:
+def use_stock(name: str, quantity: float, outcome: str = "eaten",
+              location: str = "") -> str:
     """Use an amount of a product, drawing across its lots by policy (prefer-open,
     then first-expiring-first-out) and spilling to the next lot as needed — the safe
     way to 'use the milk' without picking a specific lot.
+    Pass `location` to use up only what's in that area ("use 2 milk from the garage");
+    it includes areas nested inside it and NEVER draws from anywhere else.
     If the name matches several different products this asks which you meant and changes NOTHING — show the options, then call again with the exact name.
     """
     # Resolve to ONE product first (so a partial name works and an ambiguous one
@@ -403,19 +406,30 @@ def use_stock(name: str, quantity: float, outcome: str = "eaten") -> str:
     if not lot:
         return _clarify(name, candidates)
     product = lot.get("product") or {}
+    body = {"productId": product.get("id"), "quantity": quantity, "outcome": outcome}
+    if location:
+        loc_id = _location_id(location)
+        if not loc_id:
+            return f"No location named '{location}'. Add it first, or use an existing one."
+        body["locationId"] = loc_id
     try:
-        res = _post("/stock/consume", {"productId": product.get("id"),
-                                       "quantity": quantity, "outcome": outcome})
+        res = _post("/stock/consume", body)
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 404:
             return f"No stock matching '{name}'."
         raise
-    if res.get("consumed", 0) == 0:
-        return f"No stock matching '{name}'."
     label = product.get("name") or name
-    msg = f"Used {res['consumed']} of {label} across {len(res.get('draws', []))} lot(s)."
+    where = f" in {location}" if location else ""
+    if res.get("consumed", 0) == 0:
+        # With a scope, "none matching" would be wrong — there IS stock, just not
+        # there; say so, since that's the answer the user needs.
+        return (f"No {label} in {location} to use." if location
+                else f"No stock matching '{name}'.")
+    msg = (f"Used {res['consumed']} of {label}{where} across "
+           f"{len(res.get('draws', []))} lot(s).")
     if res.get("shortfall"):
-        msg += f" Short by {res['shortfall']}."
+        msg += (f" Short by {res['shortfall']}"
+                + (f" (nothing else in {location})." if location else "."))
     return msg
 
 

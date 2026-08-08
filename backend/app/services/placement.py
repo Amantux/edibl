@@ -153,3 +153,27 @@ def describe_area(gid, loc, *, use_llm=True):
     if top_cats:
         return f"{kind_hint} — mostly {', '.join(top_cats)}."
     return f"{kind_hint}."
+
+
+def location_scope_ids(gid, location_id) -> set:
+    """`location_id` plus every location nested under it, as an id set.
+
+    "Use up the milk in the Garage" must also see the Garage Fridge inside it —
+    a user names the area they think in, not the leaf. Group-scoped (a foreign
+    id yields an empty set, so it can never widen a scope onto another tenant's
+    stock) and cycle-guarded, since a malformed parent chain would otherwise
+    loop forever. Returns an empty set for an unknown/foreign id — callers treat
+    that as "no such location" rather than "everything"."""
+    if not location_id:
+        return set()
+    root = db.session.get(Location, location_id)
+    if root is None or root.group_id != gid:
+        return set()
+    scope, stack = set(), [root]
+    while stack:
+        loc = stack.pop()
+        if loc.id in scope:
+            continue  # cycle guard
+        scope.add(loc.id)
+        stack.extend(c for c in loc.children if c.group_id == gid)
+    return scope

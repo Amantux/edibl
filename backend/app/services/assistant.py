@@ -96,10 +96,40 @@ def _active(gid):
 
 
 def _match_lots(gid, name):
+    """Raw substring match across products, FEFO-sorted. Fine for a READ (a
+    question about "milk" should summarise every milk); NOT safe for a mutation —
+    use `_lots_for_mutation`, which resolves to ONE product first."""
     q = (name or "").lower().strip()
     lots = [s for s in _active(gid) if s.product and q and q in s.product.name.lower()]
     lots.sort(key=lambda s: (s.expiry_date is None, s.expiry_date or s.created_at))
     return lots
+
+
+def _lots_for_mutation(gid, name):
+    """``(lots, ask)`` — the resolved product's lots (FEFO), or a question.
+
+    Every chat handler that CHANGES a lot goes through here, so a name that
+    matches materially-different products (almond vs coconut milk) asks instead
+    of acting on whichever happens to expire first (ADR-0003). Exactly one of the
+    two is non-None; `ask` is ready to return to the model as the tool result.
+
+    Reads deliberately keep `_match_lots`: summarising everything that matches is
+    the right answer to a question, and refusing one would be a regression.
+    """
+    from . import disambiguation, matching
+    resolution = matching.resolve_for_mutation(gid, name)
+    if resolution.product is None:
+        if not resolution.candidates:
+            return [], None          # caller emits its own "no stock matching"
+        cands = [disambiguation.candidate_out(c)
+                 for c in resolution.candidates[:disambiguation.MAX_CANDIDATES]]
+        # use_llm=False: this text goes straight back into the chat model, which
+        # phrases the question itself — see h_record_consumption.
+        return None, disambiguation.explain_candidates(
+            gid, name, cands, allow_autoresolve=False, use_llm=False)["reasoning"]
+    lots = [s for s in resolution.product.stock if not s.finished]
+    lots.sort(key=lambda s: (s.expiry_date is None, s.expiry_date or s.created_at))
+    return lots, None
 
 
 def _resolve_product(gid, name, category="other", family=""):
@@ -206,7 +236,9 @@ def h_update_stock(gid, name, quantity=None, unit=None, location=None,
                    storage_method=None, freshness=None, expiry=None,
                    source=None, notes=None):
     """Edit the soonest-to-expire lot matching `name`."""
-    lots = _match_lots(gid, name)
+    lots, ask = _lots_for_mutation(gid, name)
+    if ask:
+        return ask
     if not lots:
         return f"No stock matching '{name}' to update."
     s = lots[0]
@@ -246,7 +278,9 @@ def h_update_stock(gid, name, quantity=None, unit=None, location=None,
 
 def h_delete_stock(gid, name):
     """Remove the soonest-to-expire lot matching `name` (discard, no history)."""
-    lots = _match_lots(gid, name)
+    lots, ask = _lots_for_mutation(gid, name)
+    if ask:
+        return ask
     if not lots:
         return f"No stock matching '{name}' to remove."
     s = lots[0]
@@ -286,24 +320,9 @@ def h_record_consumption(gid, name, quantity=1, outcome="eaten", location=None):
     # silently took lots[0] — "use the milk" with almond AND coconut in stock ate
     # whichever expired first. A low-confidence name now asks and changes
     # nothing; the user answers and the model calls back with the exact name.
-    from . import disambiguation, matching
-    resolution = matching.resolve_for_mutation(gid, name)
-    if resolution.product is None:
-        if not resolution.candidates:
-            return f"No stock matching '{name}' to update."
-        cands = [disambiguation.candidate_out(c)
-                 for c in resolution.candidates[:disambiguation.MAX_CANDIDATES]]
-        # use_llm=False on purpose: this text is a TOOL RESULT that goes straight
-        # back into the chat model, which then phrases the question itself. A
-        # second LLM round-trip here would pay latency to reason about candidates
-        # the caller is already reasoning about. The deterministic sentence names
-        # every candidate with the facts that settle it, which is what the model
-        # needs. (allow_autoresolve stays False regardless — destructive path.)
-        return disambiguation.explain_candidates(
-            gid, name, cands, allow_autoresolve=False, use_llm=False)["reasoning"]
-
-    lots = [s for s in resolution.product.stock if not s.finished]
-    lots.sort(key=lambda s: (s.expiry_date is None, s.expiry_date or s.created_at))
+    lots, ask = _lots_for_mutation(gid, name)
+    if ask:
+        return ask
     if not lots:
         return f"No stock matching '{name}' to update."
     if location:
@@ -333,7 +352,9 @@ def h_record_consumption(gid, name, quantity=1, outcome="eaten", location=None):
 
 def h_open_stock(gid, name):
     """Open a package (orthogonal to using it up) — the soonest-to-expire match."""
-    lots = _match_lots(gid, name)
+    lots, ask = _lots_for_mutation(gid, name)
+    if ask:
+        return ask
     if not lots:
         return f"No stock matching '{name}' to open."
     s = lots[0]
@@ -343,7 +364,9 @@ def h_open_stock(gid, name):
 
 def h_freeze_stock(gid, name):
     """Freeze the soonest-to-expire matching lot (extends shelf life)."""
-    lots = _match_lots(gid, name)
+    lots, ask = _lots_for_mutation(gid, name)
+    if ask:
+        return ask
     if not lots:
         return f"No stock matching '{name}' to freeze."
     res = freeze_lot(lots[0], actor_user_id=None, source_app="assistant")
@@ -352,7 +375,9 @@ def h_freeze_stock(gid, name):
 
 def h_thaw_stock(gid, name):
     """Thaw the soonest-to-expire matching lot (shortens shelf life)."""
-    lots = _match_lots(gid, name)
+    lots, ask = _lots_for_mutation(gid, name)
+    if ask:
+        return ask
     if not lots:
         return f"No stock matching '{name}' to thaw."
     res = thaw_lot(lots[0], actor_user_id=None, source_app="assistant")
@@ -361,7 +386,9 @@ def h_thaw_stock(gid, name):
 
 def h_adjust_stock(gid, name, quantity):
     """Correct the soonest-to-expire matching lot to a measured amount."""
-    lots = _match_lots(gid, name)
+    lots, ask = _lots_for_mutation(gid, name)
+    if ask:
+        return ask
     if not lots:
         return f"No stock matching '{name}' to correct."
     res = adjust_lot(lots[0], new_quantity=quantity, quantity_kind="exact",
@@ -371,7 +398,9 @@ def h_adjust_stock(gid, name, quantity):
 
 def h_move_stock(gid, name, location):
     """Move the soonest-to-expire matching lot to another location."""
-    lots = _match_lots(gid, name)
+    lots, ask = _lots_for_mutation(gid, name)
+    if ask:
+        return ask
     if not lots:
         return f"No stock matching '{name}' to move."
     res = move_lot(lots[0], location_id=_find_location(gid, location),
@@ -381,7 +410,9 @@ def h_move_stock(gid, name, location):
 
 def h_split_stock(gid, name, quantity, location=""):
     """Split an amount off the soonest-to-expire matching lot into a new position."""
-    lots = _match_lots(gid, name)
+    lots, ask = _lots_for_mutation(gid, name)
+    if ask:
+        return ask
     if not lots:
         return f"No stock matching '{name}' to split."
     try:

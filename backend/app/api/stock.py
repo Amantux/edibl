@@ -1,3 +1,4 @@
+import math
 from datetime import datetime
 from decimal import Decimal
 
@@ -461,7 +462,13 @@ def update(lot_id):
     s = _get(lot_id)
     data = request.get_json(force=True) or {}
     if "quantity" in data:
-        s.quantity = float(data["quantity"])
+        try:
+            q = float(data["quantity"])
+        except (TypeError, ValueError):
+            return jsonify({"error": "quantity must be a number"}), 422
+        if not math.isfinite(q) or q < 0:
+            return jsonify({"error": "quantity must be a finite, non-negative number"}), 422
+        s.quantity = q
     if "unit" in data:
         s.unit = canonical_unit(data["unit"])
     if "locationId" in data:
@@ -484,10 +491,21 @@ def update(lot_id):
         s.expiry_date, s.expiry_estimated, s.expiry_basis, s.expiry_confidence = s.best_by, False, "best_by", 0.85
     elif "expiryDate" in data and data["expiryDate"]:
         s.expiry_estimated, s.expiry_basis, s.expiry_confidence = False, "user", 0.9
-    for k, attr in {"cost": "cost", "source": "source", "lotCode": "lot_code",
+    if "cost" in data:
+        # Coerce through the single money chokepoint: negative / NaN / a raw
+        # float into a Numeric(10,2) column is rejected to None, exactly as
+        # ingestion does — a PUT must not smuggle a value POST would refuse.
+        s.cost = to_money(data["cost"])
+    for k, attr in {"source": "source", "lotCode": "lot_code",
                     "notes": "notes", "finished": "finished"}.items():
         if k in data:
             setattr(s, attr, data[k])
+    # `finished` is derived state: a lot is finished exactly when it's depleted.
+    # An explicit quantity edit is the ground truth, so recompute from it (the
+    # command layer keeps the same invariant) — a direct PUT must not leave a
+    # 0-quantity lot "active" or a refilled lot "finished".
+    if "quantity" in data:
+        s.finished = s.quantity <= 0
     if "attrs" in data and isinstance(data["attrs"], dict):
         s.attrs = {**(s.attrs or {}), **data["attrs"]}
     db.session.commit()

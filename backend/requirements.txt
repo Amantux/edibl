@@ -13,7 +13,7 @@ passlib==1.7.4
 # passlib 1.7.4 reads bcrypt.__about__ which bcrypt>=4.1 removed; pin below that.
 bcrypt==4.0.1
 python-dotenv>=1.1.0
-gunicorn>=23.0.0
+gunicorn>=26.0.0
 # Edibl MCP server (AI tooling for myMeal / Home Assistant)
 mcp==1.29.0  # pin: newer mcp dropped mcp.server.fastmcp (breaks the MCP server + CI)
 uvicorn>=0.52.0

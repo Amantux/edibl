@@ -5,11 +5,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 from app.extensions import db
-from app.models import ConsumptionEvent, Group, Product, StockLot, User, utcnow
-
-
-def _gid():
-    return db.session.query(User).filter_by(email="t@t.com").first().group_id
+from app.models import ConsumptionEvent, Group, Product, StockLot, utcnow
 
 
 def _priced_product(gid, name, *, unit_price, qty=4, unit="count"):
@@ -33,9 +29,9 @@ def _insights(auth_client):
     return auth_client.get("/api/v1/stock/insights").get_json()
 
 
-def test_repeat_waste_nudges_and_single_loss_ignored(auth_client, app):
+def test_repeat_waste_nudges_and_single_loss_ignored(auth_client, app, gid):
     with app.app_context():
-        gid = _gid()
+
         berries = _priced_product(gid, "Berries", unit_price=2.00)  # 2.00 / count
         _loss(gid, berries, qty=1)
         _loss(gid, berries, qty=1)                                  # 2 losses → nudge
@@ -49,11 +45,11 @@ def test_repeat_waste_nudges_and_single_loss_ignored(auth_client, app):
     assert nudges["Berries"]["suggestion"]                          # a non-empty tip
 
 
-def test_wasted_value_matches_wastecost(auth_client, app):
+def test_wasted_value_matches_wastecost(auth_client, app, gid):
     # Losses on a single product → the nudge's wastedValue must equal the headline
     # wasteCost, proving both use the same unit-matched valuation.
     with app.app_context():
-        gid = _gid()
+
         pid = _priced_product(gid, "Yogurt", unit_price=1.50)
         _loss(gid, pid, qty=2)
         _loss(gid, pid, qty=1)                                      # 3 count → 4.50
@@ -62,11 +58,11 @@ def test_wasted_value_matches_wastecost(auth_client, app):
     assert ins["wasteNudges"][0]["wastedValue"] == 4.5
 
 
-def test_unit_mismatch_counts_but_not_valued(auth_client, app):
+def test_unit_mismatch_counts_but_not_valued(auth_client, app, gid):
     # A loss in a unit that doesn't match the priced unit still counts toward the
     # repeat-waste count, but adds no bogus value — same rule as wasteCost.
     with app.app_context():
-        gid = _gid()
+
         pid = _priced_product(gid, "Cheese", unit_price=2.00, unit="count")
         _loss(gid, pid, qty=100, unit="g")
         _loss(gid, pid, qty=100, unit="g")
@@ -76,9 +72,9 @@ def test_unit_mismatch_counts_but_not_valued(auth_client, app):
     assert ins["wasteCost"] == 0.0
 
 
-def test_trend_windowing_and_shape(auth_client, app):
+def test_trend_windowing_and_shape(auth_client, app, gid):
     with app.app_context():
-        gid = _gid()
+
         pid = _priced_product(gid, "Bread", unit_price=1.00)
         _loss(gid, pid, qty=1, days_ago=100)   # in the 6-month trend, OUTSIDE the 90d nudge window
         _loss(gid, pid, qty=3, days_ago=1)
@@ -92,18 +88,18 @@ def test_trend_windowing_and_shape(auth_client, app):
     assert ins["wasteNudges"][0]["count"] == 2
 
 
-def test_empty_when_no_losses(auth_client, app):
+def test_empty_when_no_losses(auth_client, app, gid):
     with app.app_context():
-        gid = _gid()
+
         _priced_product(gid, "Rice", unit_price=1.00)              # stock, no losses
     ins = _insights(auth_client)
     assert ins["wasteNudges"] == []
     assert ins["wasteCost"] == 0.0
 
 
-def test_group_scoped(auth_client, app):
+def test_waste_nudges_are_group_scoped(auth_client, app, gid):
     with app.app_context():
-        gid = _gid()
+
         mine = _priced_product(gid, "MyBerries", unit_price=2.00)
         _loss(gid, mine, qty=1)
         _loss(gid, mine, qty=1)

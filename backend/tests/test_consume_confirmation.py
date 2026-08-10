@@ -11,12 +11,6 @@ The LLM only ever explains and ranks on a destructive path — it can never turn
 LOW match into an action.
 """
 from app.extensions import db
-from app.models import Group
-
-
-def _gid(app):
-    with app.app_context():
-        return db.session.query(Group).first().id
 
 
 def _stock(c, name, quantity=5, **kw):
@@ -36,11 +30,10 @@ def _two_milks(c):
 
 # ---- chat: the live defect --------------------------------------------------
 
-def test_chat_ambiguous_consume_changes_nothing(auth_client, app):
+def test_chat_ambiguous_consume_changes_nothing(auth_client, app, gid):
     """Was: silently consumed lots[0]. Now: asks."""
     from app.services.assistant import h_record_consumption
     a, c = _two_milks(auth_client)
-    gid = _gid(app)
 
     with app.app_context():
         out = h_record_consumption(gid, "milk", quantity=1)
@@ -52,10 +45,9 @@ def test_chat_ambiguous_consume_changes_nothing(auth_client, app):
     assert "Almond Milk" in msg and "Coconut Milk" in msg, msg
 
 
-def test_chat_unambiguous_consume_still_acts(auth_client, app):
+def test_chat_unambiguous_consume_still_acts(auth_client, app, gid):
     from app.services.assistant import h_record_consumption
     lot = _stock(auth_client, "Butter", 4)
-    gid = _gid(app)
 
     with app.app_context():
         h_record_consumption(gid, "butter", quantity=1)
@@ -64,11 +56,10 @@ def test_chat_unambiguous_consume_still_acts(auth_client, app):
     assert _qty(auth_client, lot["id"]) == 3
 
 
-def test_chat_exact_name_after_asking_acts(auth_client, app):
+def test_chat_exact_name_after_asking_acts(auth_client, app, gid):
     """The confirm round-trip: user answers, model re-calls with the exact name."""
     from app.services.assistant import h_record_consumption
     a, c = _two_milks(auth_client)
-    gid = _gid(app)
 
     with app.app_context():
         h_record_consumption(gid, "milk", quantity=1)          # asks
@@ -120,7 +111,7 @@ def test_rest_confirming_with_product_id_acts(auth_client):
     assert _qty(auth_client, a["id"]) == 3
 
 
-def test_preview_matches_what_confirming_actually_consumes(auth_client):
+def test_preview_matches_what_confirming_actually_consumes(auth_client, gid):
     """A preview that lies is worse than none."""
     a, _c = _two_milks(auth_client)
     body = auth_client.post("/api/v1/stock/consume",
@@ -198,7 +189,7 @@ def test_workflow_works_with_no_llm_configured(auth_client):
     assert "Almond Milk" in body["reasoning"] and "Coconut Milk" in body["reasoning"]
 
 
-def test_llm_failure_still_refuses_cleanly(auth_client, monkeypatch):
+def test_llm_failure_still_refuses_cleanly(auth_client, monkeypatch, gid):
     import app.services.assistant as asst
 
     def _boom(cfg, system, user):
@@ -248,10 +239,9 @@ def test_resolve_explain_cannot_autoresolve_even_with_a_confident_llm(
 
 # ---- cook: ambiguous is distinguishable from missing ------------------------
 
-def test_cook_reports_ambiguity_separately_from_missing(auth_client, app):
+def test_cook_reports_ambiguity_separately_from_missing(auth_client, app, gid):
     from app.api.integrations import cook_ingredients
     _two_milks(auth_client)
-    gid = _gid(app)
 
     with app.app_context():
         res = cook_ingredients(gid, [{"name": "milk", "quantity": 1},
@@ -269,13 +259,13 @@ def test_cook_reports_ambiguity_separately_from_missing(auth_client, app):
 # The original preview test used one lot per product, unit "count" and the
 # default policy — the single setup where both drift bugs below are invisible.
 
-def test_preview_honours_the_requested_policy(auth_client, app):
+def test_preview_honours_the_requested_policy(auth_client, app, gid):
     """policy=fefo must preview the SAME lot it will consume (preview ignored
     policy and always previewed prefer-open)."""
     from app.extensions import db
     from app.models import Product, StockLot
     from datetime import datetime
-    gid = _gid(app)
+
     _stock(auth_client, "Coconut Milk", 5, category="dairy-alt")  # forces ambiguity
     with app.app_context():
         p = Product(name="Almond Milk", category="dairy-alt", group_id=gid)

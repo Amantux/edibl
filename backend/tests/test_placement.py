@@ -7,12 +7,8 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
 from app.extensions import db
-from app.models import Location, Product, StockLot, User
+from app.models import Location, Product, StockLot
 from app.services.placement import suggest_location
-
-
-def _gid():
-    return db.session.query(User).filter_by(email="t@t.com").first().group_id
 
 
 def _loc(gid, name, kind, description=""):
@@ -22,9 +18,9 @@ def _loc(gid, name, kind, description=""):
     return loc
 
 
-def test_history_wins(auth_client, app):
+def test_history_wins(auth_client, app, gid):
     with app.app_context():
-        gid = _gid()
+
         fridge = _loc(gid, "Fridge", "fridge")
         _loc(gid, "Pantry", "pantry")
         p = Product(name="Milk", group_id=gid)
@@ -38,9 +34,9 @@ def test_history_wins(auth_client, app):
         assert s["locationId"] == fridge.id and s["reason"] == "with the others"
 
 
-def test_new_frozen_item_goes_to_freezer(auth_client, app):
+def test_new_frozen_item_goes_to_freezer(auth_client, app, gid):
     with app.app_context():
-        gid = _gid()
+
         _loc(gid, "Pantry", "pantry")
         fz = _loc(gid, "Deep Freeze", "freezer")
         db.session.commit()
@@ -48,9 +44,9 @@ def test_new_frozen_item_goes_to_freezer(auth_client, app):
         assert s["locationId"] == fz.id
 
 
-def test_description_keyword_match(auth_client, app):
+def test_description_keyword_match(auth_client, app, gid):
     with app.app_context():
-        gid = _gid()
+
         _loc(gid, "Fridge", "fridge")
         rack = _loc(gid, "Cellar", "wine_cellar", description="Wine, beer and cider")
         db.session.commit()
@@ -58,20 +54,20 @@ def test_description_keyword_match(auth_client, app):
         assert s["locationId"] == rack.id
 
 
-def test_offline_returns_a_sensible_area(auth_client, app):
+def test_offline_returns_a_sensible_area(auth_client, app, gid):
     # No LLM in tests: an unknown item with no signal still lands somewhere real.
     with app.app_context():
-        gid = _gid()
+
         pantry = _loc(gid, "Pantry", "pantry")
         db.session.commit()
         s = suggest_location(gid, "Mystery thing")
         assert s is not None and s["locationId"] == pantry.id
 
 
-def test_group_scoped(auth_client, app):
+def test_placement_suggestions_are_group_scoped(auth_client, app, gid):
     from app.models import Group
     with app.app_context():
-        gid = _gid()
+
         mine = _loc(gid, "My Pantry", "pantry")
         # A SEPARATE household with its own freezer + a Milk lot living there.
         other = Group(name="Other household")
@@ -91,9 +87,9 @@ def test_group_scoped(auth_client, app):
         assert s["locationId"] != foreign.id
 
 
-def test_classify_returns_suggested_location(auth_client, app):
+def test_classify_returns_suggested_location(auth_client, app, gid):
     with app.app_context():
-        gid = _gid()
+
         _loc(gid, "Freezer", "freezer")
         db.session.commit()
     r = auth_client.post("/api/v1/stock/classify", json={"name": "Frozen peas"})
@@ -103,9 +99,9 @@ def test_classify_returns_suggested_location(auth_client, app):
     assert body["suggestedLocation"] is None or "locationId" in body["suggestedLocation"]
 
 
-def test_describe_endpoint_persists(auth_client, app):
+def test_describe_endpoint_persists(auth_client, app, gid):
     with app.app_context():
-        gid = _gid()
+
         fz = _loc(gid, "Freezer", "freezer")
         db.session.commit()
         lid = fz.id
@@ -115,10 +111,10 @@ def test_describe_endpoint_persists(auth_client, app):
         assert db.session.get(Location, lid).description  # persisted
 
 
-def test_describe_area_chat_tool_and_undo(auth_client, app):
+def test_describe_area_chat_tool_and_undo(auth_client, app, gid):
     from app.services.assistant import h_describe_area, apply_undo
     with app.app_context():
-        gid = _gid()
+
         fz = _loc(gid, "Freezer", "freezer", description="old")
         db.session.commit()
         lid = fz.id
@@ -150,9 +146,9 @@ def test_migration_0010_idempotent(app):
 
 
 # ---- ingestion auto-placement + confidence (location_estimated) ---------------
-def test_suggest_location_reports_confidence(auth_client, app):
+def test_suggest_location_reports_confidence(auth_client, app, gid):
     with app.app_context():
-        gid = _gid()
+
         _loc(gid, "Deep Freeze", "freezer")
         db.session.commit()
         assert suggest_location(gid, "Ice cream", storage_method="frozen")["confidence"] == "high"
@@ -160,9 +156,9 @@ def test_suggest_location_reports_confidence(auth_client, app):
         assert suggest_location(gid, "Mystery gadget")["confidence"] == "low"
 
 
-def test_ingestion_high_confidence_auto_places_not_flagged(auth_client, app):
+def test_ingestion_high_confidence_auto_places_not_flagged(auth_client, app, gid):
     with app.app_context():
-        gid = _gid()
+
         _loc(gid, "Deep Freeze", "freezer")
         db.session.commit()
     r = auth_client.post("/api/v1/stock",
@@ -172,9 +168,9 @@ def test_ingestion_high_confidence_auto_places_not_flagged(auth_client, app):
     assert r["locationEstimated"] is False          # frozen→freezer is trusted
 
 
-def test_ingestion_low_confidence_placed_but_flagged(auth_client, app):
+def test_ingestion_low_confidence_placed_but_flagged(auth_client, app, gid):
     with app.app_context():
-        gid = _gid()
+
         _loc(gid, "Pantry", "pantry")               # no fridge/freezer to match
         db.session.commit()
     r = auth_client.post("/api/v1/stock",
@@ -183,9 +179,9 @@ def test_ingestion_low_confidence_placed_but_flagged(auth_client, app):
     assert r["locationEstimated"] is True           # low-confidence guess → review
 
 
-def test_explicit_location_is_never_estimated(auth_client, app):
+def test_explicit_location_is_never_estimated(auth_client, app, gid):
     with app.app_context():
-        gid = _gid()
+
         loc = _loc(gid, "Pantry", "pantry")
         db.session.commit()
         lid = loc.id
@@ -194,9 +190,9 @@ def test_explicit_location_is_never_estimated(auth_client, app):
     assert r["locationEstimated"] is False
 
 
-def test_confirming_location_clears_estimated(auth_client, app):
+def test_confirming_location_clears_estimated(auth_client, app, gid):
     with app.app_context():
-        gid = _gid()
+
         _loc(gid, "Pantry", "pantry")
         c = _loc(gid, "Cupboard", "cupboard")
         db.session.commit()

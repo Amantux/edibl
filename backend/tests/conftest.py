@@ -40,15 +40,19 @@ def auth_client(client):
 
 
 @pytest.fixture()
-def gid(app):
-    """The household's group id.
+def gid(app, auth_client):
+    """The group the authenticated test client is acting as.
 
-    Hand-rolled as a local `_gid(app)` in 18 test files before this existed; the
-    bodies were identical, so any future change to how a group is resolved had
-    18 places to miss."""
-    from app.models import Group
+    Resolved through the USER, deliberately. The hand-rolled copies came in two
+    flavours — `User(email=...).group_id` (13 files) and `Group.first().id`
+    (2 files) — which agree only while a test has exactly one household. The
+    moment one registers a second, `Group.first()` returns whichever row the DB
+    hands back first, so a cross-tenant test can quietly assert against the
+    wrong household. The user-scoped definition is the one that stays true."""
+    from app.models import User
     with app.app_context():
-        return db.session.query(Group).first().id
+        return db.session.query(User).filter_by(
+            email="t@t.com").first().group_id
 
 
 @pytest.fixture()

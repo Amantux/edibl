@@ -2,13 +2,8 @@
 builds on the existing Product.staple / reorder_threshold policy fields and the
 ShoppingItem.source marker (auto rows use source='auto', the only ones we retract)."""
 from app.extensions import db
-from app.models import Product, ShoppingItem, StockLot, User
+from app.models import Product, ShoppingItem, StockLot
 from app.services.core_items import sync_staple_shopping
-
-
-def _gid(app):
-    with app.app_context():
-        return db.session.query(User).filter_by(email="t@t.com").first().group_id
 
 
 def _mk_product(gid, name, *, staple=False, threshold=None, min_q=None, on_hand=None):
@@ -28,8 +23,8 @@ def _open_items(gid, pid):
             .filter_by(group_id=gid, product_id=pid, status="needed").all())
 
 
-def test_low_staple_auto_adds_one_idempotent(auth_client, app):
-    gid = _gid(app)
+def test_low_staple_auto_adds_one_idempotent(auth_client, app, gid):
+
     with app.app_context():
         pid = _mk_product(gid, "Butter", staple=True, threshold=1, on_hand=1)  # at level → low
         assert sync_staple_shopping(gid, product_id=pid)["added"] == 1
@@ -40,8 +35,8 @@ def test_low_staple_auto_adds_one_idempotent(auth_client, app):
         assert len(_open_items(gid, pid)) == 1
 
 
-def test_restock_removes_only_the_auto_row(auth_client, app):
-    gid = _gid(app)
+def test_restock_removes_only_the_auto_row(auth_client, app, gid):
+
     with app.app_context():
         pid = _mk_product(gid, "Milk", staple=True, threshold=1, on_hand=0)  # empty → low
         sync_staple_shopping(gid, product_id=pid)
@@ -62,8 +57,8 @@ def test_restock_removes_only_the_auto_row(auth_client, app):
         assert ("auto", "needed") not in left     # open auto row retracted
 
 
-def test_non_staple_never_auto_adds(auth_client, app):
-    gid = _gid(app)
+def test_non_staple_never_auto_adds(auth_client, app, gid):
+
     with app.app_context():
         # has a reorder threshold (would be a *suggestion*) but is NOT a staple
         pid = _mk_product(gid, "Sprinkles", staple=False, threshold=1, on_hand=0)
@@ -71,9 +66,9 @@ def test_non_staple_never_auto_adds(auth_client, app):
         assert _open_items(gid, pid) == []
 
 
-def test_threshold_resolution_matches_reorder(auth_client, app):
+def test_threshold_resolution_matches_reorder(auth_client, app, gid):
     from app.services.reorder import reorder_state
-    gid = _gid(app)
+
     with app.app_context():
         # reorder_threshold wins over min_quantity
         p = db.session.get(Product, _mk_product(gid, "Eggs", staple=True,
@@ -91,9 +86,9 @@ def test_threshold_resolution_matches_reorder(auth_client, app):
         assert st3["threshold"] == 1 and st3["isLow"] is True       # 1 <= 1
 
 
-def test_set_staple_tool_adds_and_undo_reverts(auth_client, app):
+def test_set_staple_tool_adds_and_undo_reverts(auth_client, app, gid):
     from app.services.assistant import h_set_staple, apply_undo
-    gid = _gid(app)
+
     with app.app_context():
         pid = _mk_product(gid, "Coffee", staple=False, on_hand=0)  # empty
         msg, undo = h_set_staple(gid, "Coffee", staple=True)
@@ -105,11 +100,11 @@ def test_set_staple_tool_adds_and_undo_reverts(auth_client, app):
         assert db.session.get(Product, pid).staple is False
 
 
-def test_consume_to_low_triggers_auto_add(auth_client, app):
+def test_consume_to_low_triggers_auto_add(auth_client, app, gid):
     """End-to-end through the command layer: consuming a staple down to its threshold
     should add the auto row via the _restock_sync hook."""
     from app.services.inventory import consume_lot
-    gid = _gid(app)
+
     with app.app_context():
         pid = _mk_product(gid, "Yogurt", staple=True, threshold=1, on_hand=2)
         assert _open_items(gid, pid) == []          # not low yet (2 > 1)
@@ -120,10 +115,10 @@ def test_consume_to_low_triggers_auto_add(auth_client, app):
         assert len(items) == 1 and items[0].source == "auto"
 
 
-def test_name_only_manual_row_blocks_auto_add(auth_client, app):
+def test_name_only_manual_row_blocks_auto_add(auth_client, app, gid):
     """A row the user typed by name (no productId) for a staple must block the auto-add,
     so we don't create a duplicate 'Milk' line."""
-    gid = _gid(app)
+
     with app.app_context():
         pid = _mk_product(gid, "Milk", staple=True, threshold=1, on_hand=0)  # low
         db.session.add(ShoppingItem(name="milk", group_id=gid, source="manual"))  # no product_id
@@ -134,10 +129,10 @@ def test_name_only_manual_row_blocks_auto_add(auth_client, app):
         assert len(rows) == 1 and rows[0].source == "manual"
 
 
-def test_duplicate_auto_rows_collapse_to_one(auth_client, app):
+def test_duplicate_auto_rows_collapse_to_one(auth_client, app, gid):
     """A concurrent double-add can slip two auto rows through the check-then-insert
     window; the next sync must converge back to one."""
-    gid = _gid(app)
+
     with app.app_context():
         pid = _mk_product(gid, "Oats", staple=True, threshold=1, on_hand=0)  # low
         for _ in range(2):  # simulate the raced duplicate
@@ -150,9 +145,9 @@ def test_duplicate_auto_rows_collapse_to_one(auth_client, app):
         assert len(_open_items(gid, pid)) == 1  # converged
 
 
-def test_grouped_lots_expose_product_staple(auth_client, app):
+def test_grouped_lots_expose_product_staple(auth_client, app, gid):
     """The grouped view needs each lot's product.staple to render the ★ toggle."""
-    gid = _gid(app)
+
     with app.app_context():
         _mk_product(gid, "Butter", staple=True, on_hand=1)
     g = auth_client.get("/api/v1/stock/grouped").get_json()
@@ -160,9 +155,9 @@ def test_grouped_lots_expose_product_staple(auth_client, app):
     assert lot["product"]["staple"] is True
 
 
-def test_unmark_staple_retracts_orphan_auto_row(auth_client, app):
+def test_unmark_staple_retracts_orphan_auto_row(auth_client, app, gid):
     from app.services.assistant import h_set_staple
-    gid = _gid(app)
+
     with app.app_context():
         pid = _mk_product(gid, "Tea", staple=True, threshold=1, on_hand=0)  # low → auto row
         sync_staple_shopping(gid, product_id=pid)

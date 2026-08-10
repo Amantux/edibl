@@ -14,21 +14,15 @@ from app.models import Group, Product, StockLot
 
 # ---- consuming: convert the demand into each lot's unit ----
 
-def _gid(app):
-    from app.models import Group
-    with app.app_context():
-        return db.session.query(Group).first().id
-
-
 def _add(c, name, quantity, unit):
     return c.post("/api/v1/stock",
                   json={"name": name, "quantity": quantity, "unit": unit,
                         "category": "dry_goods"}).get_json()
 
 
-def test_cook_500g_from_a_2kg_lot_consumes_half_a_kg(auth_client, app):
+def test_cook_500g_from_a_2kg_lot_consumes_half_a_kg(auth_client, app, gid):
     lot = _add(auth_client, "Flour", 2, "kg")
-    gid = _gid(app)
+
     with app.app_context():
         res = cook_ingredients(gid, [{"name": "Flour", "quantity": 500,
                                       "unit": "g"}])
@@ -41,9 +35,9 @@ def test_cook_500g_from_a_2kg_lot_consumes_half_a_kg(auth_client, app):
     assert after["quantity"] == 1.5
 
 
-def test_cook_1kg_need_against_500g_reports_the_real_shortfall(auth_client, app):
+def test_cook_1kg_need_against_500g_reports_the_real_shortfall(auth_client, app, gid):
     _add(auth_client, "Sugar", 500, "g")
-    gid = _gid(app)
+
     with app.app_context():
         res = cook_ingredients(gid, [{"name": "Sugar", "quantity": 1,
                                       "unit": "kg"}])
@@ -53,29 +47,29 @@ def test_cook_1kg_need_against_500g_reports_the_real_shortfall(auth_client, app)
     assert round(r["shortfall"], 3) == 0.5
 
 
-def test_cook_incompatible_units_does_not_over_consume(auth_client, app):
+def test_cook_incompatible_units_does_not_over_consume(auth_client, app, gid):
     # recipe asks for volume, lot is mass — no density, can't convert safely
     lot = _add(auth_client, "Milk", 1000, "g")
-    gid = _gid(app)
+
     with app.app_context():
         cook_ingredients(gid, [{"name": "Milk", "quantity": 2, "unit": "cup"}])
     after = auth_client.get(f"/api/v1/stock/{lot['id']}").get_json()
     assert after["quantity"] == 1000, "consumed an incompatible-unit lot (a guess)"
 
 
-def test_cook_same_unit_still_works(auth_client, app):
+def test_cook_same_unit_still_works(auth_client, app, gid):
     _add(auth_client, "Eggs", 12, "count")
-    gid = _gid(app)
+
     with app.app_context():
         res = cook_ingredients(gid, [{"name": "Eggs", "quantity": 3, "unit": "count"}])
     assert res[0]["consumed"] == 3
 
 
-def test_analyze_demand_converts_units(auth_client, app):
+def test_analyze_demand_converts_units(auth_client, app, gid):
     """/plan: a 2 kg lot vs a 500 g need is fully covered, not 'short 498'."""
     from app.services.planning import analyze_demand
     from app.models import Product, StockLot
-    gid = _gid(app)
+
     with app.app_context():
         p = Product(name="Flour", category="dry_goods", group_id=gid)
         db.session.add(p)
@@ -125,7 +119,7 @@ def test_have_does_not_merge_incompatible_units(auth_client, app):
     assert r["onHand"] != 503
 
 
-def test_assistant_have_reports_each_unit(auth_client, app):
+def test_assistant_have_reports_each_unit(auth_client, app, gid):
     gid = _seed(app, [(2, "kg"), (500, "g")])
     from app.services.assistant import h_do_i_have
     with app.app_context():

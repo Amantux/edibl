@@ -4,12 +4,8 @@ Idempotent."""
 from datetime import datetime
 
 from app.extensions import db
-from app.models import Product, StockLot, User
+from app.models import Product, StockLot
 from app.services import jobs, reprocess
-
-
-def _gid():
-    return db.session.query(User).filter_by(email="t@t.com").first().group_id
 
 
 def _run(gid):
@@ -17,11 +13,11 @@ def _run(gid):
     jobs.run_job(jobs.claim_one())
 
 
-def test_reclassifies_other_and_assigns_family(app, auth_client, monkeypatch):
+def test_reclassifies_other_and_assigns_family(app, auth_client, monkeypatch, gid):
     monkeypatch.setattr(reprocess, "classify_food",
                         lambda name: {"category": "dairy", "family": "Milk"})
     with app.app_context():
-        gid = _gid()
+
         p = Product(name="Whole milk 2L", category="other", family="", group_id=gid)
         db.session.add(p)
         db.session.commit()
@@ -32,13 +28,13 @@ def test_reclassifies_other_and_assigns_family(app, auth_client, monkeypatch):
         assert p2.category == "dairy" and p2.family == "Milk"
 
 
-def test_leaves_user_set_category_and_explicit_expiry_untouched(app, auth_client, monkeypatch):
+def test_leaves_user_set_category_and_explicit_expiry_untouched(app, auth_client, monkeypatch, gid):
     # classify would say "dairy", but the product already has an explicit category,
     # and its lot has an explicit (non-estimated) expiry — both must survive.
     monkeypatch.setattr(reprocess, "classify_food",
                         lambda name: {"category": "dairy", "family": "Milk"})
     with app.app_context():
-        gid = _gid()
+
         p = Product(name="Grandma's stew", category="prepared", family="Stews", group_id=gid)
         db.session.add(p)
         db.session.flush()
@@ -55,11 +51,11 @@ def test_leaves_user_set_category_and_explicit_expiry_untouched(app, auth_client
         assert db.session.get(StockLot, lid).expiry_date == when       # explicit date kept
 
 
-def test_is_idempotent(app, auth_client, monkeypatch):
+def test_is_idempotent(app, auth_client, monkeypatch, gid):
     monkeypatch.setattr(reprocess, "classify_food",
                         lambda name: {"category": "dairy", "family": "Milk"})
     with app.app_context():
-        gid = _gid()
+
         db.session.add(Product(name="Whole milk", category="other", family="", group_id=gid))
         db.session.commit()
         _run(gid)                    # first pass fixes it

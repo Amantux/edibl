@@ -6,33 +6,28 @@ functions directly. No live vendor calls (enrich.describe is stubbed).
 from datetime import timedelta
 
 from app.extensions import db
-from app.models import Group, Job, Product, User, utcnow
+from app.models import Group, Job, Product, utcnow
 from app.services import jobs
 
 
-def _gid(app):
-    with app.app_context():
-        return db.session.query(User).filter_by(email="t@t.com").first().group_id
+def test_enqueue_creates_pending_and_dedups(auth_client, app, gid):
 
-
-def test_enqueue_creates_pending_and_dedups(auth_client, app):
-    gid = _gid(app)
     with app.app_context():
         a = jobs.enqueue("enrich", gid)
         b = jobs.enqueue("enrich", gid)
         assert a.id == b.id and a.status == "pending"
 
 
-def test_claim_is_atomic_no_double_run(auth_client, app):
-    gid = _gid(app)
+def test_claim_is_atomic_no_double_run(auth_client, app, gid):
+
     with app.app_context():
         jobs.enqueue("enrich", gid)
         assert jobs.claim_one() is not None
         assert jobs.claim_one() is None
 
 
-def test_enrich_job_describes_missing_products(auth_client, app, monkeypatch):
-    gid = _gid(app)
+def test_enrich_job_describes_missing_products(auth_client, app, monkeypatch, gid):
+
     with app.app_context():
         db.session.add_all([Product(name="Milk", group_id=gid),
                             Product(name="Eggs", group_id=gid, search_text="already")])
@@ -51,8 +46,8 @@ def test_enrich_job_describes_missing_products(auth_client, app, monkeypatch):
         assert "dairy" in milk.search_text
 
 
-def test_enrich_job_errors_when_not_configured(auth_client, app, monkeypatch):
-    gid = _gid(app)
+def test_enrich_job_errors_when_not_configured(auth_client, app, monkeypatch, gid):
+
     with app.app_context():
         monkeypatch.setattr("app.services.enrich.enabled", lambda: False)
         job = jobs.enqueue("enrich", gid)
@@ -60,8 +55,8 @@ def test_enrich_job_errors_when_not_configured(auth_client, app, monkeypatch):
         assert db.session.get(Job, job.id).status == "error"
 
 
-def test_reap_stale_requeues_dead_and_spares_live(auth_client, app):
-    gid = _gid(app)
+def test_reap_stale_requeues_dead_and_spares_live(auth_client, app, gid):
+
     with app.app_context():
         dead = Job(kind="enrich", group_id=gid, status="running",
                    started_at=utcnow() - timedelta(hours=1))
@@ -79,9 +74,9 @@ def test_reap_stale_requeues_dead_and_spares_live(auth_client, app):
         assert db.session.get(Job, live.id).status == "running"
 
 
-def test_only_one_active_job_per_group_kind_enforced(auth_client, app):
+def test_only_one_active_job_per_group_kind_enforced(auth_client, app, gid):
     from sqlalchemy.exc import IntegrityError
-    gid = _gid(app)
+
     with app.app_context():
         db.session.add(Job(kind="enrich", group_id=gid, status="pending"))
         db.session.commit()

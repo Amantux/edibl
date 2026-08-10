@@ -8,12 +8,8 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
 from app.extensions import db
-from app.models import Product, StockLot, User
+from app.models import Product, StockLot
 from app.services.barcode import _nutrition_from_off
-
-
-def _gid():
-    return db.session.query(User).filter_by(email="t@t.com").first().group_id
 
 
 # ---- OFF parse (pure) ------------------------------------------------------ #
@@ -62,30 +58,30 @@ def test_off_parse_rejects_infinity(app):
 
 
 # ---- storage + serializer -------------------------------------------------- #
-def test_product_nutrition_stored_and_serialized(auth_client, app):
+def test_product_nutrition_stored_and_serialized(auth_client, app, gid):
     from app.schemas.serializers import product_out
     with app.app_context():
-        p = Product(name="Oats", group_id=_gid(), default_unit="g",
+        p = Product(name="Oats", group_id=gid, default_unit="g",
                     nutrition={"basis": "100g", "per100": {"kcal": 380, "protein": 13}})
         db.session.add(p)
         db.session.commit()
         assert product_out(p)["nutrition"]["per100"]["kcal"] == 380
 
 
-def test_scan_add_stores_nutrition_on_new_product(auth_client, app):
+def test_scan_add_stores_nutrition_on_new_product(auth_client, app, gid):
     r = auth_client.post("/api/v1/stock", json={
         "productName": "Cereal", "quantity": 1, "barcode": "5010",
         "nutrition": {"basis": "100g", "per100": {"kcal": 100}}})
     assert r.status_code in (200, 201)
     with app.app_context():
-        p = db.session.query(Product).filter_by(group_id=_gid(), name="Cereal").first()
+        p = db.session.query(Product).filter_by(group_id=gid, name="Cereal").first()
         assert p.nutrition["per100"]["kcal"] == 100
 
 
 # ---- pantry aggregate ------------------------------------------------------ #
-def test_pantry_nutrition_sums_only_convertible_items(auth_client, app):
+def test_pantry_nutrition_sums_only_convertible_items(auth_client, app, gid):
     with app.app_context():
-        gid = _gid()
+
         rice = Product(name="Rice", group_id=gid, default_unit="g",
                        nutrition={"basis": "100g", "per100": {"kcal": 250, "protein": 5}})
         db.session.add(rice)
@@ -106,11 +102,11 @@ def test_pantry_nutrition_sums_only_convertible_items(auth_client, app):
     assert pn["itemsExcluded"] >= 1  # the count-unit eggs (and any other on-hand lots)
 
 
-def test_pantry_keeps_zero_and_counts_null_quantity_kind(auth_client, app):
+def test_pantry_keeps_zero_and_counts_null_quantity_kind(auth_client, app, gid):
     # A legacy lot with quantity but no quantity_kind must still count (mirrors runout's
     # `or "exact"`); and a genuine 0 macro is data, kept as 0.0 not dropped to unknown.
     with app.app_context():
-        gid = _gid()
+
         soda = Product(name="Soda", group_id=gid, default_unit="ml",
                        nutrition={"basis": "100ml", "per100": {"kcal": 40, "sugar": 0}})
         db.session.add(soda)
@@ -124,12 +120,12 @@ def test_pantry_keeps_zero_and_counts_null_quantity_kind(auth_client, app):
     assert pn["totals"]["sugar"] == 0.0     # genuine zero kept, not dropped
 
 
-def test_backfill_sentinels_unfillable_product(auth_client, app, monkeypatch):
+def test_backfill_sentinels_unfillable_product(auth_client, app, monkeypatch, gid):
     # A barcode OFF has no nutrition for must be marked (sentinel {}) so it drops out of
     # the NULL candidate set instead of being re-fetched every enrich run.
     from app.services import jobs
     with app.app_context():
-        gid = _gid()
+
         p = Product(name="Mystery", group_id=gid, barcode="9999", nutrition=None)
         db.session.add(p)
         db.session.commit()

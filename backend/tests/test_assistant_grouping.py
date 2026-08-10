@@ -1,17 +1,13 @@
 """Chat tools: group products into a display family, and move items between
 locations — both reversible via the assistant's undo."""
 from app.extensions import db
-from app.models import Location, Product, StockLot, User
+from app.models import Location, Product, StockLot
 from app.services import assistant
 
 
-def _gid():
-    return db.session.query(User).filter_by(email="t@t.com").first().group_id
-
-
-def test_group_products_sets_family_and_undo_restores(app, auth_client):
+def test_group_products_sets_family_and_undo_restores(app, auth_client, gid):
     with app.app_context():
-        gid = _gid()
+
         a = Product(name="Whole milk", family="", group_id=gid)
         b = Product(name="Oat milk", family="", group_id=gid)
         db.session.add_all([a, b])
@@ -31,24 +27,24 @@ def test_group_products_sets_family_and_undo_restores(app, auth_client):
         assert db.session.get(Product, b_id).family == ""
 
 
-def test_group_products_reports_missing(app, auth_client):
+def test_group_products_reports_missing(app, auth_client, gid):
     with app.app_context():
-        gid = _gid()
+
         db.session.add(Product(name="Butter", group_id=gid))
         db.session.commit()
         text, _undo = assistant.h_group_products(gid, "Dairy", ["Butter", "Nope"])
         assert "Butter" in text and "couldn't find" in text.lower() and "Nope" in text
 
 
-def test_group_products_all_missing_is_a_plain_message(app, auth_client):
+def test_group_products_all_missing_is_a_plain_message(app, auth_client, gid):
     with app.app_context():
-        res = assistant.h_group_products(_gid(), "X", ["Ghost"])
+        res = assistant.h_group_products(gid, "X", ["Ghost"])
         assert isinstance(res, str) and "couldn't find" in res.lower()  # no undo → nothing changed
 
 
-def test_move_stock_relocates_and_undo_restores(app, auth_client):
+def test_move_stock_relocates_and_undo_restores(app, auth_client, gid):
     with app.app_context():
-        gid = _gid()
+
         fridge = Location(name="Fridge", group_id=gid)
         freezer = Location(name="Freezer", group_id=gid)
         db.session.add_all([fridge, freezer])

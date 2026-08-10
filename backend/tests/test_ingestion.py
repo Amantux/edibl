@@ -6,11 +6,6 @@ from app.extensions import db
 from app.models import Detection, InventoryEvent, Product, StockLot, User
 
 
-def _gid(app):
-    with app.app_context():
-        return db.session.query(User).filter_by(email="t@t.com").first().group_id
-
-
 def test_scan_same_barcode_reuses_product_no_duplicate(auth_client, app):
     assert auth_client.post("/api/v1/stock",
                             json={"productName": "Beans", "barcode": "5000", "quantity": 2}).status_code == 201
@@ -46,8 +41,8 @@ def test_bulk_import_logs_events_and_is_idempotent(auth_client, app):
         assert db.session.query(InventoryEvent).filter_by(type="add").count() == 2  # events logged
 
 
-def test_detection_confirm_reuses_the_matched_product(auth_client, app):
-    gid = _gid(app)
+def test_detection_confirm_reuses_the_matched_product(auth_client, app, gid):
+
     with app.app_context():
         uid = db.session.query(User).filter_by(email="t@t.com").first().id
         prod = Product(name="Cheddar", family="Cheese", group_id=gid)
@@ -66,8 +61,8 @@ def test_detection_confirm_reuses_the_matched_product(auth_client, app):
         assert db.session.get(StockLot, r.get_json()["id"]).product.name == "Cheddar"
 
 
-def test_unique_barcode_per_group_is_enforced(auth_client, app):
-    gid = _gid(app)
+def test_unique_barcode_per_group_is_enforced(auth_client, app, gid):
+
     with app.app_context():
         db.session.add(Product(name="A", barcode="9999", group_id=gid))
         db.session.commit()

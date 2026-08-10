@@ -7,11 +7,6 @@ from app.extensions import db
 from app.models import ConsumptionEvent, StockLot, User
 
 
-def _gid(app):
-    with app.app_context():
-        return db.session.query(User).filter_by(email="t@t.com").first().group_id
-
-
 def test_price_stored_as_decimal_not_float(auth_client, app):
     r = auth_client.post("/api/v1/stock",
                          json={"productName": "Milk", "quantity": 2, "price": "3.50"})
@@ -46,7 +41,7 @@ def test_grouped_value_on_hand(auth_client, app):
     assert milk["valueOnHand"] == 7.0
 
 
-def test_bulk_import_with_per_item_price(auth_client, app):
+def test_bulk_import_with_per_item_price(auth_client, app, gid):
     r = auth_client.post("/api/v1/stock/bulk", json={"items": [
         {"name": "Rice", "quantity": 1, "price": "5.25"},
         {"name": "Beans", "quantity": 1, "cost": "1.10"},
@@ -72,7 +67,7 @@ def test_insights_spend_by_month_and_value(auth_client, app):
     assert cats.get("dairy") == 4.0
 
 
-def test_waste_cost_from_wasted_consumption(auth_client, app):
+def test_waste_cost_from_wasted_consumption(auth_client, app, gid):
     # A priced lot establishes the product's unit price; a spoiled consumption of
     # 2 units should be valued at 2 * unit_price.
     r = auth_client.post("/api/v1/stock", json={"productName": "Berries", "quantity": 4,
@@ -124,7 +119,7 @@ def test_negative_price_not_stored_and_not_in_totals(auth_client, app):
     assert ins["valueOnHand"]["total"] == 0.0
 
 
-def test_waste_cost_skips_unit_mismatch(auth_client, app):
+def test_waste_cost_skips_unit_mismatch(auth_client, app, gid):
     # Lot priced per COUNT (8.00 / 4 = 2.00/count). A loss recorded in grams must NOT
     # be valued at the per-count price (that would be a meaningless number).
     r = auth_client.post("/api/v1/stock", json={"productName": "Grapes", "quantity": 4,

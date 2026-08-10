@@ -1,13 +1,8 @@
 """AI tooling: confidence-gated auto-categorize (product category), cluster (family)
 proposals, review queue, ICL feedback. No live vendor calls (the LLM is stubbed)."""
 from app.extensions import db
-from app.models import AiSuggestion, Group, Product, User
+from app.models import AiSuggestion, Group, Product
 from app.services import jobs
-
-
-def _gid(app):
-    with app.app_context():
-        return db.session.query(User).filter_by(email="t@t.com").first().group_id
 
 
 def _use_llm(monkeypatch, reply):
@@ -23,8 +18,8 @@ def _run(kind, gid):
     jobs.run_job(jobs.claim_one())
 
 
-def test_categorize_auto_applies_high_confidence_known_category(auth_client, app, monkeypatch):
-    gid = _gid(app)
+def test_categorize_auto_applies_high_confidence_known_category(auth_client, app, monkeypatch, gid):
+
     with app.app_context():
         db.session.add(Product(name="Whole milk", group_id=gid, category="other"))
         db.session.commit()
@@ -37,8 +32,8 @@ def test_categorize_auto_applies_high_confidence_known_category(auth_client, app
         assert db.session.query(AiSuggestion).filter_by(status="accepted").count() == 1
 
 
-def test_categorize_queues_unknown_category(auth_client, app, monkeypatch):
-    gid = _gid(app)
+def test_categorize_queues_unknown_category(auth_client, app, monkeypatch, gid):
+
     with app.app_context():
         db.session.add(Product(name="Mystery", group_id=gid, category="other"))
         db.session.commit()
@@ -51,8 +46,8 @@ def test_categorize_queues_unknown_category(auth_client, app, monkeypatch):
         assert db.session.query(AiSuggestion).filter_by(status="pending").count() == 1
 
 
-def test_categorize_rerun_does_not_duplicate_pending(auth_client, app, monkeypatch):
-    gid = _gid(app)
+def test_categorize_rerun_does_not_duplicate_pending(auth_client, app, monkeypatch, gid):
+
     with app.app_context():
         db.session.add(Product(name="Mystery", group_id=gid, category="other"))
         db.session.commit()
@@ -62,8 +57,8 @@ def test_categorize_rerun_does_not_duplicate_pending(auth_client, app, monkeypat
         assert db.session.query(AiSuggestion).filter_by(status="pending").count() == 1
 
 
-def test_categorize_malformed_confidence_completes(auth_client, app, monkeypatch):
-    gid = _gid(app)
+def test_categorize_malformed_confidence_completes(auth_client, app, monkeypatch, gid):
+
     with app.app_context():
         db.session.add(Product(name="Thing", group_id=gid, category="other"))
         db.session.commit()
@@ -73,8 +68,8 @@ def test_categorize_malformed_confidence_completes(auth_client, app, monkeypatch
         assert db.session.query(Job).filter_by(kind="categorize").first().status == "done"
 
 
-def test_accept_categorize_sets_category(auth_client, app):
-    gid = _gid(app)
+def test_accept_categorize_sets_category(auth_client, app, gid):
+
     with app.app_context():
         p = Product(name="Cheddar", group_id=gid, category="other")
         db.session.add(p)
@@ -89,8 +84,8 @@ def test_accept_categorize_sets_category(auth_client, app):
         assert db.session.get(Product, pid).category == "dairy"
 
 
-def test_cluster_and_accept_sets_family(auth_client, app, monkeypatch):
-    gid = _gid(app)
+def test_cluster_and_accept_sets_family(auth_client, app, monkeypatch, gid):
+
     with app.app_context():
         for n in ("Whole milk", "Skimmed milk", "Bread"):
             db.session.add(Product(name=n, group_id=gid))
@@ -109,8 +104,8 @@ def test_cluster_and_accept_sets_family(auth_client, app, monkeypatch):
         assert fams["Bread"] == ""  # not a member
 
 
-def test_reject_suggestion(auth_client, app):
-    gid = _gid(app)
+def test_reject_suggestion(auth_client, app, gid):
+
     with app.app_context():
         s = AiSuggestion(kind="categorize", status="pending", label="dairy",
                          confidence=0.3, group_id=gid)
@@ -122,8 +117,8 @@ def test_reject_suggestion(auth_client, app):
         assert db.session.get(AiSuggestion, sid).status == "rejected"
 
 
-def test_categorize_job_errors_without_provider(auth_client, app, monkeypatch):
-    gid = _gid(app)
+def test_categorize_job_errors_without_provider(auth_client, app, monkeypatch, gid):
+
     with app.app_context():
         db.session.add(Product(name="X", group_id=gid, category="other"))
         db.session.commit()
@@ -134,8 +129,8 @@ def test_categorize_job_errors_without_provider(auth_client, app, monkeypatch):
         assert db.session.get(Job, job.id).status == "error"
 
 
-def test_delete_product_with_suggestion_succeeds(auth_client, app):
-    gid = _gid(app)
+def test_delete_product_with_suggestion_succeeds(auth_client, app, gid):
+
     with app.app_context():
         p = Product(name="Disposable", group_id=gid)
         db.session.add(p)
@@ -149,10 +144,10 @@ def test_delete_product_with_suggestion_succeeds(auth_client, app):
         assert db.session.query(AiSuggestion).filter_by(product_id=pid).count() == 0
 
 
-def test_categorize_other_reply_skipped_no_accumulation(auth_client, app, monkeypatch):
+def test_categorize_other_reply_skipped_no_accumulation(auth_client, app, monkeypatch, gid):
     # "other" is the uncategorized sentinel, not a real category — a confident "other"
     # reply must not auto-apply a no-op or accumulate accepted rows across runs.
-    gid = _gid(app)
+
     with app.app_context():
         db.session.add(Product(name="Weird thing", group_id=gid, category="other"))
         db.session.commit()
@@ -163,8 +158,8 @@ def test_categorize_other_reply_skipped_no_accumulation(auth_client, app, monkey
         assert db.session.query(Product).filter_by(name="Weird thing").first().category == "other"
 
 
-def test_categorize_applies_model_override(auth_client, app, monkeypatch):
-    gid = _gid(app)
+def test_categorize_applies_model_override(auth_client, app, monkeypatch, gid):
+
     captured = {}
     with app.app_context():
         db.session.add(Product(name="X", group_id=gid, category="other"))

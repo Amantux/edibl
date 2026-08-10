@@ -8,12 +8,7 @@ from app.services import assistant
 from app.services import settings as st
 
 
-def _gid(app):
-    with app.app_context():
-        return db.session.query(User).filter_by(email="t@t.com").first().group_id
-
-
-def test_job_preference_unset_is_none(app, auth_client):
+def test_job_preference_unset_is_none(app, auth_client, gid):
     with app.app_context():
         gid = db.session.query(User).filter_by(email="t@t.com").first().group_id
         for kind in ("enrich", "categorize"):
@@ -21,7 +16,7 @@ def test_job_preference_unset_is_none(app, auth_client):
                 "provider": None, "model": None, "base_url": None, "api_key": None}
 
 
-def test_organize_preference_shared_by_categorize_and_cluster(app, auth_client):
+def test_organize_preference_shared_by_categorize_and_cluster(app, auth_client, gid):
     with app.app_context():
         gid = db.session.query(User).filter_by(email="t@t.com").first().group_id
         st.set_job_settings(gid, organize={"provider": "ollama", "model": "llama3.1"})
@@ -31,7 +26,7 @@ def test_organize_preference_shared_by_categorize_and_cluster(app, auth_client):
         assert st.job_override(gid, "enrich")["provider"] is None  # enrich is separate
 
 
-def test_job_cfg_switching_vendor_drops_the_chat_key(app, monkeypatch):
+def test_job_cfg_switching_vendor_drops_the_chat_key(app, monkeypatch, gid):
     with app.app_context():
         monkeypatch.setattr(assistant, "_cfg", lambda gid=None: {
             "provider": "anthropic", "base_url": "https://api.anthropic.com",
@@ -43,7 +38,7 @@ def test_job_cfg_switching_vendor_drops_the_chat_key(app, monkeypatch):
         assert "sk-ant-secret" not in str(cfg)
 
 
-def test_job_cfg_model_only_keeps_provider_and_key(app, monkeypatch):
+def test_job_cfg_model_only_keeps_provider_and_key(app, monkeypatch, gid):
     with app.app_context():
         monkeypatch.setattr(assistant, "_cfg", lambda gid=None: {
             "provider": "ollama", "base_url": "http://h", "api_key": "k",
@@ -52,7 +47,7 @@ def test_job_cfg_model_only_keeps_provider_and_key(app, monkeypatch):
         assert cfg["provider"] == "ollama" and cfg["model"] == "smaller" and cfg["api_key"] == "k"
 
 
-def test_stored_pref_applies_without_a_request_context(app, auth_client, monkeypatch):
+def test_stored_pref_applies_without_a_request_context(app, auth_client, monkeypatch, gid):
     """Regression: jobs run in the worker (app context, NO request). The stored
     per-group preference must still apply — it was read via current_group(), which
     the worker never sets, so the whole feature was silently inert."""
@@ -67,7 +62,7 @@ def test_stored_pref_applies_without_a_request_context(app, auth_client, monkeyp
         assert cfg["provider"] == "ollama" and cfg["model"] == "tiny"
 
 
-def test_ui_configured_provider_applies_to_jobs_without_request(app, auth_client, monkeypatch):
+def test_ui_configured_provider_applies_to_jobs_without_request(app, auth_client, monkeypatch, gid):
     """A group that set its provider in the Edibl UI (per-group override, no env)
     must have its jobs use THAT provider. The worker has no request context, so
     _cfg(gid) must resolve the group's overrides instead of falling back to env —
@@ -91,7 +86,7 @@ def test_job_settings_accepts_any_valid_provider(auth_client):
                            json={"enrich": {"provider": "bogus"}}).status_code == 422
 
 
-def test_keys_are_isolated_per_provider(app, auth_client):
+def test_keys_are_isolated_per_provider(app, auth_client, gid):
     """Two providers keyed → each resolves its OWN key; one vendor's key never
     appears in another's config."""
     from app.services.settings import set_llm
@@ -104,7 +99,7 @@ def test_keys_are_isolated_per_provider(app, auth_client):
         assert "sk-openai" not in str(cfg)
 
 
-def test_job_switch_uses_the_switched_providers_own_key(app, auth_client):
+def test_job_switch_uses_the_switched_providers_own_key(app, auth_client, gid):
     """A job switched to a different (hosted) vendor uses THAT vendor's stored key —
     not the chat provider's key. This is what per-provider storage buys us."""
     from app.services.settings import set_llm

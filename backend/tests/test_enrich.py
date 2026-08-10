@@ -6,12 +6,7 @@ synthesis falls back to the top result's snippet, so tests are deterministic.
 from sqlalchemy import inspect
 
 from app.extensions import db
-from app.models import Product, User
-
-
-def _gid(app):
-    with app.app_context():
-        return db.session.query(User).filter_by(email="t@t.com").first().group_id
+from app.models import Product
 
 
 def _mk(app, gid, name="Milk", search_text=""):
@@ -34,8 +29,8 @@ def test_migration_added_search_text_column(app):
     assert "search_text" in cols
 
 
-def test_describe_stores_text_and_makes_product_findable(app, auth_client, monkeypatch):
-    gid = _gid(app)
+def test_describe_stores_text_and_makes_product_findable(app, auth_client, monkeypatch, gid):
+
     _enable(app, monkeypatch, [{"url": "http://x", "content": "organic whole milk 2% fat"}])
     pid = _mk(app, gid)
 
@@ -47,15 +42,15 @@ def test_describe_stores_text_and_makes_product_findable(app, auth_client, monke
     assert any(p["name"] == "Milk" for p in found)
 
 
-def test_describe_409_when_not_configured(app, auth_client):
-    gid = _gid(app)
+def test_describe_409_when_not_configured(app, auth_client, gid):
+
     app.config["OLLAMA_SEARCH_KEY"] = ""
     pid = _mk(app, gid)
     assert auth_client.post(f"/api/v1/products/{pid}/describe").status_code == 409
 
 
-def test_describe_422_when_nothing_found(app, auth_client, monkeypatch):
-    gid = _gid(app)
+def test_describe_422_when_nothing_found(app, auth_client, monkeypatch, gid):
+
     _enable(app, monkeypatch, [])
     pid = _mk(app, gid)
     assert auth_client.post(f"/api/v1/products/{pid}/describe").status_code == 422
@@ -65,7 +60,7 @@ def test_describe_422_when_nothing_found(app, auth_client, monkeypatch):
 # its owner-only guard and per-product processing.
 
 
-def test_synthesis_is_provider_agnostic(app, monkeypatch):
+def test_synthesis_is_provider_agnostic(app, monkeypatch, gid):
     """Phase 5 parity: synthesis routes through assistant._complete, so it works with
     ANY provider (here anthropic), not just an Ollama-shaped /api/generate call."""
     from app.services import enrich

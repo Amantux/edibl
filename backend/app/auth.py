@@ -1,7 +1,9 @@
 """Auth: JWT bearer tokens + long-lived API keys, with a DISABLE_AUTH single-
 tenant mode. Mirrors HomeHoard's hardened auth."""
+import contextlib
 import functools
 import logging
+import os
 import secrets
 from datetime import datetime, timezone
 
@@ -65,6 +67,71 @@ def _rotate_known_backdoor_password(user: User) -> None:
         db.session.commit()
 
 
+@contextlib.contextmanager
+def _group_bootstrap_lock():
+    """Serialize the check-then-maybe-create-Group step across gunicorn's worker
+    PROCESSES (a Python lock only covers threads within one). Two concurrent
+    first-load requests hitting different workers could otherwise both observe
+    zero groups and each insert one — Group has no unique constraint to catch
+    that the way the User-email race is caught below. Mirrors the fcntl file
+    lock _init_schema() takes at boot, but taken per-call since this runs at
+    request time."""
+    import fcntl
+    lock_path = os.path.join(current_app.config["DATA_DIR"], ".group-bootstrap.lock")
+    with open(lock_path, "w") as lock:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        except OSError:
+            pass  # locking unsupported (rare FS) — best-effort only.
+        try:
+            yield
+        finally:
+            try:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+
+
+def _group_race_probe():
+    """Test seam only: called right after reading the existing-household state,
+    while (in production) still holding _group_bootstrap_lock(). A test can use
+    this to hold one caller here and let a second, UNLOCKED caller run the same
+    read concurrently, proving the lock — not luck — is what stops two
+    households from being created. No-op in production."""
+
+
+def _resolve_bootstrap_group() -> Group:
+    """The household a synthetic/service account (the shared local user, or an
+    anonymous ingress/HA account) should join. Joining "the earliest-created
+    group" is only a safe guess when it's the ONLY group that exists — once
+    self-registration (ALLOW_REGISTRATION) has produced more than one
+    household, guessing which is the operator's real one would let a
+    machine-bound account (the HA integration token) or an open-mode ingress
+    user become an owner inside a stranger's household. When that ambiguity
+    already exists, give the synthetic account its own new household instead
+    of guessing. Caller must hold _group_bootstrap_lock()."""
+    existing = db.session.query(Group).order_by(Group.created_at.asc()).limit(2).all()
+    _group_race_probe()
+    if len(existing) == 1:
+        return existing[0]
+    if existing:
+        _LOGGER.warning(
+            "Multiple households already exist; provisioning a separate "
+            "household for a synthetic/service account instead of guessing "
+            "which existing one belongs to the operator."
+        )
+    group = Group(name=DEFAULT_GROUP)
+    db.session.add(group)
+    # COMMIT, not just flush: the next caller to take _group_bootstrap_lock()
+    # queries from ITS OWN session, which — being a separate DB transaction —
+    # cannot see this row until it's committed. A flush-only row is invisible
+    # to that re-query, so the lock would hand off cleanly but the second
+    # caller would still create a second household.
+    db.session.commit()
+    _seed_defaults(group.id)
+    return group
+
+
 def _default_user() -> User:
     user = db.session.query(User).filter_by(email=DEFAULT_EMAIL).first()
     if user:
@@ -81,13 +148,9 @@ def _default_user() -> User:
         # ingress users are provisioned into — rather than minting a fresh one.
         # A machine client bound to this user (the HA integration token) would
         # otherwise read a different, empty household than the real HA users
-        # populate. Only seed a brand-new household (an existing one is seeded).
-        group = db.session.query(Group).order_by(Group.created_at.asc()).first()
-        if group is None:
-            group = Group(name=DEFAULT_GROUP)
-            db.session.add(group)
-            db.session.flush()
-            _seed_defaults(group.id)
+        # populate.
+        with _group_bootstrap_lock():
+            group = _resolve_bootstrap_group()
         user = User(name="Local", email=DEFAULT_EMAIL,
                     # A random, discarded password — this account is never meant
                     # to be reachable through /users/login (it exists only as the
@@ -151,12 +214,8 @@ def _ingress_user():
             db.session.commit()
         return user
 
-    group = db.session.query(Group).order_by(Group.created_at.asc()).first()
-    if group is None:
-        group = Group(name=DEFAULT_GROUP)
-        db.session.add(group)
-        db.session.flush()
-    _seed_defaults(group.id)
+    with _group_bootstrap_lock():
+        group = _resolve_bootstrap_group()
     # Count owners among REAL HA users only, so a legacy synthetic local user
     # (ha_user_id NULL, is_owner True from single-user mode) doesn't lock the
     # first real HA user out of owner on a migrated install.

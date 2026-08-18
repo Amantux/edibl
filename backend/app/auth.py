@@ -2,6 +2,7 @@
 tenant mode. Mirrors HomeHoard's hardened auth."""
 import functools
 import logging
+import secrets
 from datetime import datetime, timezone
 
 import jwt
@@ -49,9 +50,25 @@ def _seed_defaults(group_id):
     seed_default_locations(group_id)
 
 
+# Versions before this fix minted synthetic users with this literal password,
+# which /users/login's ungated email+password check made a public, guessable
+# owner-login backdoor. Rotating it only in the CREATE branch of _default_user/
+# _ingress_user would leave every already-provisioned install exposed forever —
+# the row already exists, so those functions just return it. Detect and rotate
+# it here, on every read, so an upgrade closes the door without a migration.
+_KNOWN_BACKDOOR_PASSWORD = "unused"
+
+
+def _rotate_known_backdoor_password(user: User) -> None:
+    if verify_password(_KNOWN_BACKDOOR_PASSWORD, user.password_hash):
+        user.password_hash = hash_password(secrets.token_urlsafe(32))
+        db.session.commit()
+
+
 def _default_user() -> User:
     user = db.session.query(User).filter_by(email=DEFAULT_EMAIL).first()
     if user:
+        _rotate_known_backdoor_password(user)
         if not user.is_owner:  # a migrated single-user install stays the owner
             user.is_owner = True
             db.session.commit()
@@ -72,7 +89,15 @@ def _default_user() -> User:
             db.session.flush()
             _seed_defaults(group.id)
         user = User(name="Local", email=DEFAULT_EMAIL,
-                    password_hash=hash_password("unused"), is_owner=True, group_id=group.id)
+                    # A random, discarded password — this account is never meant
+                    # to be reachable through /users/login (it exists only as the
+                    # DISABLE_AUTH fallback identity and the anchor the
+                    # integration token binds to). A fixed literal here would be
+                    # a public, guessable password for an owner account on every
+                    # install, including hardened (DISABLE_AUTH=false) ones where
+                    # the integration token is minted at startup regardless.
+                    password_hash=hash_password(secrets.token_urlsafe(32)),
+                    is_owner=True, group_id=group.id)
         db.session.add(user)
         db.session.commit()
         return user
@@ -120,6 +145,7 @@ def _ingress_user():
     real_name = (request.headers.get("X-Remote-User-Display-Name")
                  or request.headers.get("X-Remote-User-Name") or "").strip()
     if user:
+        _rotate_known_backdoor_password(user)
         if real_name and user.name != real_name:
             user.name = real_name
             db.session.commit()
@@ -140,7 +166,10 @@ def _ingress_user():
         User.ha_user_id.isnot(None),
     ).count() > 0
     user = User(name=real_name or "Home Assistant user",
-                email=f"ha:{ha_id}", password_hash=hash_password("unused"),
+                email=f"ha:{ha_id}",
+                # Random, discarded — this account authenticates only via the
+                # trusted ingress header, never via /users/login.
+                password_hash=hash_password(secrets.token_urlsafe(32)),
                 is_owner=not has_owner, ha_user_id=ha_id, group_id=group.id)
     db.session.add(user)
     # Race-safe: parallel first-load requests from one HA user can collide on the

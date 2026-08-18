@@ -184,6 +184,59 @@ def test_integration_token_binds_household_when_minted_first(app):
         assert ha_user.is_owner is True                      # first real HA user owns it
 
 
+def test_default_user_password_is_not_a_known_login_backdoor(app):
+    # Regression: the account _default_user()/_ingress_user() synthesize must
+    # NOT be reachable via a plain password login — it's minted at startup on
+    # every Supervisor-run install (open OR hardened) so the integration token
+    # has a household to bind to, and a fixed literal password would be a
+    # public, guessable owner login on every install.
+    ensure_integration_token(app)
+    client = app.test_client()
+
+    resp = client.post(
+        "/api/v1/users/login",
+        json={"email": "local@edibl", "password": "unused"},
+    )
+
+    assert resp.status_code == 401
+
+
+def test_preexisting_backdoor_password_is_rotated_on_upgrade(app):
+    # Installs that ran BEFORE this fix already have a local@edibl row with the
+    # literal "unused" password persisted in their database — rotating the
+    # password only in the create branch would leave every such upgrade
+    # exposed forever, since _default_user()/_ingress_user() just return the
+    # existing row. Simulate that pre-existing state and confirm it heals.
+    from app.auth import DEFAULT_EMAIL, hash_password
+    from app.models import Group, User
+
+    with app.app_context():
+        group = Group(name="Household")
+        db.session.add(group)
+        db.session.flush()
+        db.session.add(User(name="Local", email=DEFAULT_EMAIL,
+                             password_hash=hash_password("unused"),
+                             is_owner=True, group_id=group.id))
+        db.session.commit()
+
+    client = app.test_client()
+    still_works = client.post(
+        "/api/v1/users/login",
+        json={"email": DEFAULT_EMAIL, "password": "unused"},
+    )
+    assert still_works.status_code == 200  # sanity: the seeded state is exploitable
+
+    from app.auth import _default_user
+    with app.app_context():
+        _default_user()  # e.g. the startup integration-token mint resolving it
+
+    healed = client.post(
+        "/api/v1/users/login",
+        json={"email": DEFAULT_EMAIL, "password": "unused"},
+    )
+    assert healed.status_code == 401
+
+
 def test_valid_jwt_authenticates_through_reordered_branch(client):
     client.post(
         "/api/v1/users/register",

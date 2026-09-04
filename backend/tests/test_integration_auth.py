@@ -184,6 +184,59 @@ def test_integration_token_binds_household_when_minted_first(app):
         assert ha_user.is_owner is True                      # first real HA user owns it
 
 
+def test_default_user_password_is_not_a_known_login_backdoor(app):
+    # Regression: the account _default_user()/_ingress_user() synthesize must
+    # NOT be reachable via a plain password login — it's minted at startup on
+    # every Supervisor-run install (open OR hardened) so the integration token
+    # has a household to bind to, and a fixed literal password would be a
+    # public, guessable owner login on every install.
+    ensure_integration_token(app)
+    client = app.test_client()
+
+    resp = client.post(
+        "/api/v1/users/login",
+        json={"email": "local@edibl", "password": "unused"},
+    )
+
+    assert resp.status_code == 401
+
+
+def test_preexisting_backdoor_password_is_rotated_on_upgrade(app):
+    # Installs that ran BEFORE this fix already have a local@edibl row with the
+    # literal "unused" password persisted in their database — rotating the
+    # password only in the create branch would leave every such upgrade
+    # exposed forever, since _default_user()/_ingress_user() just return the
+    # existing row. Simulate that pre-existing state and confirm it heals.
+    from app.auth import DEFAULT_EMAIL, hash_password
+    from app.models import Group, User
+
+    with app.app_context():
+        group = Group(name="Household")
+        db.session.add(group)
+        db.session.flush()
+        db.session.add(User(name="Local", email=DEFAULT_EMAIL,
+                             password_hash=hash_password("unused"),
+                             is_owner=True, group_id=group.id))
+        db.session.commit()
+
+    client = app.test_client()
+    still_works = client.post(
+        "/api/v1/users/login",
+        json={"email": DEFAULT_EMAIL, "password": "unused"},
+    )
+    assert still_works.status_code == 200  # sanity: the seeded state is exploitable
+
+    from app.auth import _default_user
+    with app.app_context():
+        _default_user()  # e.g. the startup integration-token mint resolving it
+
+    healed = client.post(
+        "/api/v1/users/login",
+        json={"email": DEFAULT_EMAIL, "password": "unused"},
+    )
+    assert healed.status_code == 401
+
+
 def test_valid_jwt_authenticates_through_reordered_branch(client):
     client.post(
         "/api/v1/users/register",
@@ -197,3 +250,92 @@ def test_valid_jwt_authenticates_through_reordered_branch(client):
     resp = client.get("/api/v1/users/self", headers={"Authorization": jwt})
 
     assert resp.status_code == 200
+
+
+# --- Group-bootstrap hardening (concurrency race + ambiguous-household IDOR) --
+
+def test_concurrent_group_bootstrap_creates_only_one_household(app):
+    # Two DIFFERENT HA users hitting different gunicorn workers for the first
+    # time could each observe zero households and both insert one — Group has
+    # no unique constraint to catch that, and unlike two callers racing to
+    # create the SAME shared local user, distinct ha_user_ids don't share a
+    # unique constraint that would incidentally roll one back. The fcntl lock
+    # in _group_bootstrap_lock() must serialize them.
+    #
+    # The probe fires AFTER the existing-households read, while (in
+    # production) still holding the lock. The first caller through pauses
+    # briefly so a second, concurrent caller gets a real chance to run its own
+    # read before either inserts — reproducing the actual race window. With
+    # the lock held, the second caller can't even reach the probe until the
+    # first releases it, so it naturally sees the first caller's new household
+    # and joins it instead. The pause has a timeout, so a correctly-serialized
+    # run never blocks on the second caller showing up.
+    import threading
+
+    from app import auth
+    from app.models import Group
+
+    calls = []
+    calls_lock = threading.Lock()
+    proceed = threading.Event()
+
+    def synced_probe():
+        with calls_lock:
+            is_first = not calls
+            calls.append(1)
+        if is_first:
+            proceed.wait(timeout=0.3)
+        else:
+            proceed.set()
+
+    orig_probe = auth._group_race_probe
+    auth._group_race_probe = synced_probe
+
+    errors = []
+
+    def worker(ha_id):
+        try:
+            with app.test_request_context(
+                headers={"X-Remote-User-Id": ha_id, "X-Remote-User-Display-Name": "A"},
+                environ_overrides=SUP,
+            ):
+                auth._ingress_user()
+                db.session.remove()
+        except Exception as exc:  # noqa: BLE001 - surfaced via `errors` below
+            errors.append(exc)
+
+    try:
+        t1 = threading.Thread(target=worker, args=("ha-1",))
+        t2 = threading.Thread(target=worker, args=("ha-2",))
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+    finally:
+        auth._group_race_probe = orig_probe
+
+    assert not errors
+    with app.app_context():
+        assert db.session.query(Group).count() == 1
+
+
+def test_synthetic_account_does_not_join_an_ambiguous_household(app):
+    # If self-registration already produced more than one household before any
+    # synthetic/service account exists, joining "the oldest" would make a
+    # machine-bound account (the HA integration token) or an open-mode user an
+    # owner inside a household that isn't the operator's. Isolate it instead.
+    from app.auth import _default_user
+    from app.models import Group
+
+    with app.app_context():
+        g1 = Group(name="Household")
+        g2 = Group(name="Household")
+        db.session.add_all([g1, g2])
+        db.session.commit()
+        g1_id, g2_id = g1.id, g2.id
+
+    with app.app_context():
+        user = _default_user()
+
+        assert user.group_id not in (g1_id, g2_id)
+        assert db.session.query(Group).count() == 3

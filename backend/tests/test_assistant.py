@@ -421,3 +421,44 @@ def test_reset_settings_clears_ui_override(auth_client, app):
     assert auth_client.get("/api/v1/assistant/settings").get_json()["source"] == "ui"
     r = auth_client.delete("/api/v1/assistant/settings").get_json()
     assert r["source"] == "none" and r["provider"] == ""  # fell back to add-on/env
+
+
+# --- Undo descriptors are client-supplied; ids must not smuggle paths --------
+
+def test_cross_app_undo_rejects_a_path_smuggling_id(app, monkeypatch):
+    """The descriptor arrives VERBATIM from the client body and the reversal
+    runs with the full-scope myMeal integration token — so "1/../recipes/2"
+    would steer an authenticated DELETE at an arbitrary myMeal endpoint. Must be
+    refused BEFORE any outbound call is made. (Ported from myMeal's _safe_id —
+    Edibl was the missed sibling.)"""
+    from app.services import assistant
+    from app.services import integrations
+
+    calls = []
+    monkeypatch.setattr(integrations, "mymeal_delete",
+                        lambda path: calls.append(path) or {"reachable": True})
+
+    with app.app_context():
+        for bad in ("1/../../admin/backup", "1/extra", "..", "1?force=true",
+                    "1#frag", "", None, "x" * 200):
+            msg = assistant.apply_undo(1, {"op": "delete_mymeal_recipe",
+                                           "recipeId": bad})
+            assert "not valid" in msg or "Nothing to undo" in msg
+
+    assert calls == []          # nothing ever left the process
+
+
+def test_cross_app_undo_still_works_for_a_plain_id(app, monkeypatch):
+    from app.services import assistant
+    from app.services import integrations
+
+    calls = []
+    monkeypatch.setattr(integrations, "mymeal_delete",
+                        lambda path: calls.append(path) or {"reachable": True})
+
+    with app.app_context():
+        msg = assistant.apply_undo(1, {"op": "delete_mymeal_recipe",
+                                       "recipeId": "a1b2-c3"})
+
+    assert calls == ["/api/v1/recipes/a1b2-c3"]
+    assert "Undone" in msg

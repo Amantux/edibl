@@ -958,6 +958,16 @@ def _owned(model, obj_id, gid):
     return obj if (obj and obj.group_id == gid) else None
 
 
+def _safe_undo_id(value):
+    """An id that goes into a sibling URL path segment must be a plain id —
+    never a path. Reject `/`, `..`, `?` and `#` so a client-supplied descriptor
+    cannot smuggle a different resource (or query) into the request."""
+    s = str(value or "")
+    if not s or len(s) > 64:
+        return None
+    return s if not any(c in s for c in ("/", "..", "?", "#", "\\")) else None
+
+
 def apply_undo(gid, undo):
     """Reverse one action. Returns a short human message."""
     op = (undo or {}).get("op")
@@ -1053,10 +1063,24 @@ def apply_undo(gid, undo):
     # Cross-app undo (myMeal) — reverse by DELETE through the sibling client.
     if op in ("delete_mymeal_mealplan", "delete_mymeal_recipe", "delete_mymeal_shopping"):
         from .integrations import mymeal_delete
+        raw_id = {
+            "delete_mymeal_mealplan": undo.get("entryId"),
+            "delete_mymeal_recipe": undo.get("recipeId"),
+            "delete_mymeal_shopping": undo.get("itemId"),
+        }[op]
+        # The descriptor arrives VERBATIM from the client body, and this request
+        # runs with the full-scope myMeal integration token — so the id must be
+        # a plain path segment, never a path. Without this, "1/../<anything>"
+        # steered an authenticated DELETE at any myMeal endpoint. Ported from
+        # myMeal's _safe_id (chat.py), which shipped with this guard from day
+        # one; Edibl was the missed sibling.
+        safe_id = _safe_undo_id(raw_id)
+        if safe_id is None:
+            return "Nothing to undo — that undo reference is not valid."
         path = {
-            "delete_mymeal_mealplan": f"/api/v1/mealplans/{undo.get('entryId')}",
-            "delete_mymeal_recipe": f"/api/v1/recipes/{undo.get('recipeId')}",
-            "delete_mymeal_shopping": f"/api/v1/shopping-lists/items/{undo.get('itemId')}",
+            "delete_mymeal_mealplan": f"/api/v1/mealplans/{safe_id}",
+            "delete_mymeal_recipe": f"/api/v1/recipes/{safe_id}",
+            "delete_mymeal_shopping": f"/api/v1/shopping-lists/items/{safe_id}",
         }[op]
         res = mymeal_delete(path)
         if res.get("reachable"):

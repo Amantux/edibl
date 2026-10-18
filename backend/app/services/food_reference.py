@@ -61,6 +61,16 @@ _SHIPPED_NAME = "usda-sr-legacy-2018-04.sqlite"
 # locking out the unprivileged server (the container starts as root and drops).
 _EXPANSION_DIR = "edibl-foodcore"
 
+# foodcore provenance methods a bare float may carry. "estimated" is excluded:
+# it means a convention stood in for a measurement, and a float cannot say so.
+# "inferred" likewise — Edibl has no way to show either as anything but a fact.
+_TRUSTED_METHODS = frozenset({"measured", "declared", "calculated"})
+
+# A bound on the resolution cache. Food names come from user-supplied product
+# text once there is a caller, so this must not be able to grow without limit;
+# the dataset has ~7,800 foods, so the cap is generous and the clear is cheap.
+_FOOD_CACHE_MAX = 2048
+
 _lock = threading.Lock()
 _dataset_cache: dict[str, object] = {}
 _food_cache: dict[str, object] = {}
@@ -89,8 +99,10 @@ def _expansion_dir() -> str:
     except FileExistsError:
         pass
     except OSError as exc:
-        _LOGGER.warning("could not create the food reference cache directory (%s); "
-                        "food-aware conversion is unavailable", exc)
+        # scrub: the path is composed from $TMPDIR, which is operator-supplied
+        # and must not be able to forge a log line.
+        _LOGGER.warning("could not create the food reference cache directory "
+                        "(%s); food-aware conversion is unavailable", scrub(exc))
         return ""
     try:
         # lstat, not stat: a symlink planted here must be seen as a symlink
@@ -120,6 +132,7 @@ def _shipped_dataset_path() -> str:
     import gzip
     import shutil
     import stat
+    import zlib
 
     try:
         import foodcore
@@ -159,16 +172,24 @@ def _shipped_dataset_path() -> str:
         with gzip.open(source, "rb") as src, open(tmp, "wb") as dst:
             shutil.copyfileobj(src, dst, 1024 * 1024)
         os.replace(tmp, target)
-    except OSError as exc:
+    # A truncated or corrupt asset raises EOFError or zlib.error, NEITHER of
+    # which is an OSError — only gzip.BadGzipFile is. Catching OSError alone
+    # made the docstring's "never raises" false, and left the cleanup below
+    # unreachable, so every boot leaked a ~10 MB partial into the temp dir.
+    except (OSError, EOFError, zlib.error) as exc:
         # scrub: an OSError carries the path, which is composed from $TMPDIR —
         # operator-supplied, so it must not be able to forge a log line.
-        _LOGGER.warning("could not expand the food reference dataset (%s); "
-                        "food-aware conversion is unavailable", scrub(exc))
+        _LOGGER.warning("could not expand the food reference dataset (%s: %s); "
+                        "food-aware conversion is unavailable",
+                        type(exc).__name__, scrub(exc))
+        return ""
+    finally:
+        # In `finally`, not in the error branch: os.replace already consumed
+        # `tmp` on success, and on failure it must go however we got here.
         try:
             os.unlink(tmp)
         except OSError:
             pass
-        return ""
     return target
 
 
@@ -187,27 +208,38 @@ def _dataset():
     with _lock:
         if key in _dataset_cache:
             return _dataset_cache[key]
-        ds = None
-        try:
-            import foodcore
 
-            if operator_owned:
-                # allow_minimal=False: an operator who named a file wants a
-                # loud failure here, not foodcore's definitional-facts-only
-                # fallback quietly standing in for it.
-                ds = foodcore.load_dataset(allow_minimal=False)
-            else:
-                path = _shipped_dataset_path()
-                ds = foodcore.load_dataset(path, allow_minimal=False) if path else None
-        except Exception as exc:  # noqa: BLE001 - a bad dataset must not break the app
-            # Named, not echoed: foodcore's messages are curated, but the path
-            # can come from operator config, so only the exception class is
-            # logged.
-            _LOGGER.warning("the food reference dataset could not be opened (%s); "
-                            "food-aware conversion is unavailable",
-                            type(exc).__name__)
-        _dataset_cache[key] = ds
-        return ds
+    # Outside the lock: the expansion is ~10 MB of I/O and opening the dataset
+    # touches the filesystem, and holding a module-global lock across that
+    # blocks every other thread in the worker on the first request. Two threads
+    # racing here cost one redundant expansion (os.replace makes it atomic) and
+    # one redundant handle, which is strictly cheaper.
+    ds = None
+    try:
+        import foodcore
+
+        if operator_owned:
+            # allow_minimal=False: an operator who named a file wants a loud
+            # failure here, not foodcore's definitional-facts-only fallback
+            # quietly standing in for it.
+            ds = foodcore.load_dataset(allow_minimal=False)
+        else:
+            path = _shipped_dataset_path()
+            ds = foodcore.load_dataset(path, allow_minimal=False) if path else None
+    except Exception as exc:  # noqa: BLE001 - a bad dataset must not break the app
+        # Named, not echoed: foodcore's messages are curated, but the path can
+        # come from operator config, so only the exception class is logged.
+        _LOGGER.warning("the food reference dataset could not be opened (%s); "
+                        "food-aware conversion is unavailable",
+                        type(exc).__name__)
+    if ds is None:
+        # A FAILURE is not cached. A full disk, a momentarily non-private temp
+        # dir or a half-written file at boot would otherwise disable food-aware
+        # conversion in that worker until someone restarted it, with no retry
+        # and nothing in the logs after the first line.
+        return None
+    with _lock:
+        return _dataset_cache.setdefault(key, ds)
 
 
 def _resolve_food(text: str):
@@ -239,6 +271,11 @@ def _resolve_food(text: str):
     except Exception as exc:  # noqa: BLE001 - a lookup must never break a caller
         _LOGGER.debug("food resolution failed for %r (%s)", name, type(exc).__name__)
     with _lock:
+        if len(_food_cache) >= _FOOD_CACHE_MAX:
+            # Clear rather than evict one entry: this is a memo of a pure
+            # lookup over an immutable dataset, so losing it costs a repeat
+            # query and nothing else — an LRU's bookkeeping is not worth it.
+            _food_cache.clear()
         _food_cache[name] = record
     return record
 
@@ -255,11 +292,16 @@ def convert_amount(value: float, from_unit: str, to_unit: str,
     not know", and the only safe thing to do with "we do not know" is what
     Edibl did before this module existed.
 
-    The provenance foodcore returns is deliberately dropped here. This value is
-    an arithmetic intermediate in a planning calculation and is not stored, so
-    there is nothing for a licence or a source id to travel with. The first
-    caller that persists or displays a converted weight should widen this seam
-    to return the ``Outcome`` rather than re-derive the provenance elsewhere.
+    The provenance foodcore returns is deliberately dropped here, so the one
+    part of it a bare float cannot carry is turned into a REFUSAL instead:
+    ``method="estimated"`` means foodcore applied a convention rather than a
+    published measurement (a garlic clove at 0.55 confidence), and ADR-0002's
+    whole premise is that Edibl distinguishes exact from estimated. Handing an
+    estimate back as a float indistinguishable from `convert`'s exact
+    arithmetic would erase that distinction, so this returns only answers
+    foodcore measured, declared or calculated. The first caller that can
+    actually represent an estimate should widen this seam to return the
+    ``Outcome`` — not relax the check.
     """
     record = _resolve_food(food)
     if record is None:
@@ -276,6 +318,11 @@ def convert_amount(value: float, from_unit: str, to_unit: str,
     if not outcome.resolved:
         _LOGGER.debug("food-aware conversion refused: %s", outcome.reason)
         return None
+    method = getattr(outcome.provenance, "method", "")
+    if method not in _TRUSTED_METHODS:
+        _LOGGER.debug("food-aware conversion was %s, not a measurement; refused",
+                      method)
+        return None
     return float(outcome.value)
 
 
@@ -290,28 +337,62 @@ def convert_amount(value: float, from_unit: str, to_unit: str,
 _DECLARED, _TRACES = "allergens_tags", "traces_tags"
 
 
-def _off_allergen_key(tag: str) -> tuple[str, str]:
-    """An OFF allergen tag as (foodcore allergen key, cleaned term).
+def _off_tag_term(tag: str) -> str:
+    """An OFF allergen tag's bare term, or "" when there is nothing in it.
 
-    Returns ("", term) when foodcore's ruleset has no key for it. OFF tags are
-    language-prefixed (``en:milk``, ``fr:lait``); only the prefix is stripped,
-    and a non-English term then simply fails to resolve and is reported as
-    unmapped rather than guessed at.
+    OFF tags are language-prefixed (``en:milk``, ``fr:lait``). "" means the tag
+    carried no term at all (``""``, ``"en:"``) — community-entered noise, not a
+    declaration, and it must not be reported as an unkeyed allergen.
     """
-    from foodcore.allergens import resolve_allergen_key
-
     term = (tag or "").strip().lower()
     if len(term) >= 3 and term[2] == ":" and term[:2].isalpha():
         term = term[3:]
+    return term.replace("-", " ").strip()
+
+
+def _off_allergen_states(term: str) -> tuple[tuple[str, object], ...]:
+    """An OFF allergen term as ((foodcore key, state), …). Empty = not keyable.
+
+    Resolved by **screening the tag's term through foodcore's own phrase rules**
+    rather than ``resolve_allergen_key``. That distinction is load-bearing:
+    ``resolve_allergen_key`` is an alias table for what a *person* types into a
+    profile ("nuts", "dairy"), and it has no spelling for most of what OFF
+    actually publishes. Screening keys the whole taxonomy and every sub-tag
+    through one ruleset:
+
+    * ``en:sulphur-dioxide-and-sulphites`` → ``sulfites``, where the alias table
+      had nothing — so a wine that explicitly declares sulphites used to come
+      back "unknown". A *declaration* downgraded to unknown is worse than the
+      absence case this feature exists to be honest about, because `unknown` is
+      permitted under a PREFERENCE policy.
+    * ``en:almonds``, ``en:hazelnuts``, ``en:cashew-nuts`` → ``tree_nuts``;
+      ``en:barley``, ``en:rye``, ``en:spelt`` → ``gluten``; ``en:lactose`` and
+      ``en:milk-proteins`` → ``milk``. The alias table keyed none of them.
+    * One tag can map to several allergens, and the implication rules come with
+      it (``en:wheat`` → wheat AND gluten), so there is no second table of ours
+      to drift.
+    * ``en:oats`` → wheat/gluten ``may_contain``, not ``contains``, because
+      foodcore's rule says the link is precautionary even though the
+      declaration is certain.
+
+    OFF tags are language-prefixed (``en:milk``, ``fr:lait``); the prefix is
+    stripped and a non-English term then screens to nothing and is reported as
+    unmapped rather than guessed at. Celery, mustard and lupin are declarable
+    in the EU and genuinely outside foodcore's ruleset — they screen to nothing
+    too, and the caller surfaces them.
+    """
+    from foodcore.allergens import (AllergenState, SensitivityProfile,
+                                    allergen_ruleset, screen_text)
+
     if not term:
-        return "", ""
-    try:
-        return resolve_allergen_key(term), term
-    except ValueError:
-        # Not a guess-and-move-on: celery, mustard and lupin are declarable in
-        # the EU and foodcore's ruleset has no key for them. Reported verbatim
-        # by the caller so a declared allergen is never silently dropped.
-        return "", term
+        return ()
+    # Every ruleset key, not the US-major default: screening against the
+    # default profile silently cannot see sulfites, gluten or molluscs.
+    ruleset = allergen_ruleset()
+    profile = SensitivityProfile(allergens=tuple(ruleset.keys))
+    screening = screen_text(term, profile)
+    return tuple((v.allergen, v.state) for v in screening.verdicts
+                 if v.state in (AllergenState.CONTAINS, AllergenState.MAY_CONTAIN))
 
 
 def allergens_from_declarations(declared, traces, *, source_id: str) -> dict | None:
@@ -379,26 +460,32 @@ def allergens_from_declarations(declared, traces, *, source_id: str) -> dict | N
             for tag in tags if isinstance(tags, (list, tuple)) else ():
                 if not isinstance(tag, str):
                     continue
-                key, term = _off_allergen_key(tag)
-                if not key:
-                    if term:
-                        unmapped.append({"tag": tag, "declaredIn": field})
+                term = _off_tag_term(tag)
+                if not term:
                     continue
-                evidence.setdefault(key, []).append(Evidence(
-                    ingredient="", matched_term=tag, rule_id=f"off:{field}",
-                    rule_version=ruleset.version, match_kind="declared_tag",
-                    contributes=state, note=f"declared in Open Food Facts {field}",
-                    provenance=provenance(method, confidence)))
-                # foodcore's own implication rules, not ours: wheat implies
-                # gluten. Applying them here keeps the one ruleset authoritative
-                # instead of hand-rolling a second, divergent mapping.
-                for implied in ruleset.implies.get(key, ()):
-                    evidence.setdefault(implied, []).append(Evidence(
-                        ingredient="", matched_term=tag, rule_id=f"off:{field}+implies",
-                        rule_version=ruleset.version, match_kind="implied",
-                        contributes=state,
-                        note=f"implied by declared {key}",
-                        provenance=provenance("inferred", confidence * 0.9)))
+                keyed = _off_allergen_states(term)
+                if not keyed:
+                    unmapped.append({"tag": tag, "declaredIn": field})
+                    continue
+                for key, rule_state in keyed:
+                    # The declaration and the rule each carry their own
+                    # certainty, and the weaker one wins: `en:oats` in
+                    # allergens_tags is a certain declaration of oats, but
+                    # foodcore's rule says the gluten link is precautionary, so
+                    # the answer is may_contain. Only a certain declaration of a
+                    # certain rule is `contains`.
+                    combined = (state if state is rule_state
+                                else AllergenState.MAY_CONTAIN)
+                    certain = combined is rule_state is state
+                    evidence.setdefault(key, []).append(Evidence(
+                        ingredient="", matched_term=tag,
+                        rule_id=f"off:{field}", rule_version=ruleset.version,
+                        match_kind="declared_tag" if certain else "declared_tag_rule",
+                        contributes=combined,
+                        note=f"declared in Open Food Facts {field}",
+                        provenance=provenance(
+                            method if certain else "inferred",
+                            confidence if certain else confidence * 0.9)))
 
         # CONTAINS before MAY_CONTAIN: an allergen in both lists is present, and
         # the precautionary note adds nothing to that.
@@ -428,6 +515,30 @@ def allergens_from_declarations(declared, traces, *, source_id: str) -> dict | N
             verdicts.append(AllergenVerdict(
                 allergen=key, label=ruleset.label(key), state=state,
                 evidence=tuple(found), ruleset_version=ruleset.version))
+
+        # A declared allergen foodcore cannot key goes in `verdicts` too, not
+        # only in `unmappedTags`. The twelve ruleset rows render as a complete
+        # allergen picture, so a consumer looping them — the obvious shape —
+        # would drop a declared celery or lupin silently. The `off:` prefix and
+        # `rulesetKeyed: false` say these came from the label rather than the
+        # ruleset; they are still a declaration, and a declaration must never be
+        # reachable only by reading a second array.
+        for entry in unmapped:
+            field = entry["declaredIn"]
+            state = (AllergenState.CONTAINS if field == _DECLARED
+                     else AllergenState.MAY_CONTAIN)
+            verdicts.append(AllergenVerdict(
+                allergen=f"off:{entry['tag']}",
+                label=entry["tag"].split(":")[-1].replace("-", " ").capitalize(),
+                state=state,
+                evidence=(Evidence(
+                    ingredient="", matched_term=entry["tag"],
+                    rule_id=f"off:{field}", rule_version=ruleset.version,
+                    match_kind="declared_tag_unkeyed", contributes=state,
+                    note=("declared in Open Food Facts but outside foodcore's "
+                          "ruleset, so no rule was applied to it"),
+                    provenance=provenance("declared", 0.8)),),
+                ruleset_version=ruleset.version))
     except Exception as exc:  # noqa: BLE001 - a label read must not fail a scan
         _LOGGER.info("allergen declarations could not be read (%s)",
                      type(exc).__name__)
@@ -436,7 +547,7 @@ def allergens_from_declarations(declared, traces, *, source_id: str) -> dict | N
     return {"source": "openfoodfacts", "license": "ODbL-1.0",
             "rulesetVersion": ruleset.version,
             "verdicts": [_verdict_out(v) for v in verdicts],
-            "unmappedTags": unmapped}
+            "unmappedTags": unmapped, "unmappedCount": len(unmapped)}
 
 
 def _verdict_out(verdict) -> dict:
@@ -452,6 +563,7 @@ def _verdict_out(verdict) -> dict:
         "label": verdict.label,
         "state": verdict.state.value,
         "needsReview": verdict.needs_review,
+        "rulesetKeyed": not verdict.allergen.startswith("off:"),
         "evidence": [{"matchedTerm": e.matched_term, "ruleId": e.rule_id,
                       "kind": e.match_kind, "contributes": e.contributes.value,
                       "note": e.note,

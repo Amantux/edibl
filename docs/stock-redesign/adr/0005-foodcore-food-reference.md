@@ -1,6 +1,7 @@
 # ADR-0005: foodcore is the shared food-reference source; its verdicts stay beside Edibl's lexicon, not inside it
 
-**Status:** accepted · **Date:** 2026-10-18 · **Implemented:** conversion + barcode allergens
+**Status:** accepted · **Date:** 2026-10-18 · **Implemented:** the seam only — see
+*Reachability* below. Neither half has a production consumer yet.
 
 ## Context
 Edibl could not answer two food questions. `quantity.convert` refuses mass↔volume because it
@@ -40,11 +41,28 @@ that logic now lives in `foodcore`, a dependency-free library both apps install.
   reconciling them means ranking an ODbL-licensed declared label value against a CC0-licensed
   measured one. That is a licence and precedence judgement, not an integration; its own task.
 
+## Reachability — what this does NOT yet do
+State this plainly, because the code reads as a shipped feature and is not one:
+- **`convert_for_food` has no caller.** The only references are its definition, its tests and
+  the comment in `inventory/selection.py` explaining why selection does not use it. It is the
+  seam the first real caller will use, not a change to any current answer.
+- **The allergen block reaches the barcode *suggestion* only.** `GET /products/barcode/<code>`
+  returns it for a code you do **not** already own; the `found: true` branch serialises a
+  `Product`, which has no allergen column, so the first scan of a barcode carries the
+  declaration and every scan after you have added the product carries nothing. No frontend,
+  MCP or HA surface reads it. Persisting it is a schema change and gets its own review — and
+  that asymmetry is the reason to do it rather than leave this as is.
+- **Only `measured`/`declared`/`calculated` conversions are returned.** foodcore labels every
+  per-item count weight (a clove, a slice) `estimated`, and a bare float cannot say so, so
+  those refuse. Lifting that means returning the `Outcome`, together with the unit allow-list.
+
 ## Consequences
-- **+** "A cup of honey" is 339 g, with provenance, instead of a refusal — and "rice" is still
-  a refusal, because raw and cooked differ by 17% per cup.
-- **+** A scan now carries declared allergens *and* the precautionary traces line, with the
-  gaps visible rather than implied.
-- **−** Nothing persists the allergen block yet; it reaches the scan suggestion only. Storing
-  it is a schema change and gets its own review.
-- **−** A ~2.5 MB asset expands to ~10 MB in the container's temp dir on first use.
+- **+** "A cup of honey" is 339 g instead of a refusal — and "rice" is still a refusal,
+  because raw and cooked differ by 17% per cup.
+- **+** A scan now reads declared allergens *and* the precautionary traces line, keyed through
+  foodcore's phrase rules so OFF's whole taxonomy lands (`en:almonds` → tree nuts,
+  `en:sulphur-dioxide-and-sulphites` → sulfites), with the gaps stated rather than implied.
+- **−** A ~2.5 MB asset expands to ~10 MB in a private 0700 temp directory on first use.
+- **−** The commit pin is enforceable only on Edibl's side while foodcore's source lives in
+  myMeal's tree (see `backend/requirements.txt`). Extracting foodcore to its own repository is
+  what would make the lockstep a mechanism instead of a convention.

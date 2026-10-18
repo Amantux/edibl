@@ -54,11 +54,8 @@ def test_cross_dimension_round_trip_returns_the_original_amount():
     assert convert_for_food(as_cups, "cup", "g", "honey") == pytest.approx(1000.0)
 
 
-def test_food_specific_count_unit_resolves():
-    """A clove is a garlic measure, not a unit — only a food can price it."""
-    assert convert(2, "clove", "g") is None
-
-    assert convert_for_food(2, "clove", "g", "garlic") == pytest.approx(6.0)
+def test_volume_to_mass_resolves_for_a_small_measure_too():
+    assert convert_for_food(1, "tsp", "g", "garlic") == pytest.approx(2.8)
 
 
 # ---- the conversions it still refuses -------------------------------------- #
@@ -72,20 +69,31 @@ def test_no_usable_food_means_no_cross_dimension_answer(food):
     assert convert_for_food(1, "cup", "g", food) is None
 
 
-def test_unknown_unit_pair_refuses_even_with_a_good_food():
-    assert convert_for_food(1, "gizmo", "widget", "honey") is None
+def test_an_estimated_conversion_is_refused_rather_than_passed_off_as_a_weight():
+    """A garlic clove comes back method="estimated", confidence 0.55 — foodcore
+    applied a convention. Edibl distinguishes exact from estimated (ADR-0002)
+    and a bare float cannot carry that, so the answer is refused rather than
+    returned as if it were the published 339 g of a cup of honey."""
+    assert food_reference.convert_amount(2, "clove", "g", "garlic") is None
+    assert convert_for_food(2, "clove", "g", "garlic") is None
 
 
-@pytest.mark.parametrize("unit", ["can", "pack", "bottle", "serving",
-                                  "half", "low", "full", "presence"])
-def test_package_and_qualitative_units_never_reach_the_reference_data(unit, monkeypatch):
+@pytest.mark.parametrize("unit", [
+    # Edibl's non-measurement dimensions.
+    "can", "pack", "bottle", "jar", "serving", "half", "low", "full", "presence",
+    # Units Edibl does NOT register, which foodcore WOULD reinterpret: "c" as
+    # cup (as likely to be a can here), "t" as tsp, "#" as lb, "gr" as gram.
+    # A block-list of dimensions let every one of these through.
+    "c", "t", "#", "gr", "container", "pouch", "envelope", "gizmo",
+])
+def test_a_unit_edibl_does_not_measure_in_never_reaches_the_reference_data(
+        unit, monkeypatch):
     """The guard, not foodcore, is what refuses these.
 
-    foodcore declines them today too, but as *unit lookups* — the day it learns
-    a unit spelled "half" this guard is the only thing stopping "half a jar"
-    being read as half a cup. Asserting the seam is never consulted is what
-    makes the test fail if the guard is deleted; asserting None would pass
-    with no guard at all."""
+    Asserting the seam is never consulted is what makes the test fail if the
+    guard is weakened; asserting None would pass with no guard at all — and for
+    "c", "t" and "#" it would have passed while foodcore quietly answered in a
+    unit the user did not mean."""
     spy = _Spy()
     monkeypatch.setattr(food_reference, "convert_amount", spy)
 
@@ -180,6 +188,53 @@ def test_a_symlink_where_the_dataset_belongs_is_not_opened(monkeypatch, tmp_path
     assert planted.read_text() == "not the reference dataset"   # untouched
     food_reference.reset_cache()
     assert convert_for_food(1, "cup", "g", "honey") == pytest.approx(339.0)
+
+
+def test_a_corrupt_shipped_asset_does_not_raise_and_leaves_no_partial(
+        monkeypatch, tmp_path):
+    """A truncated gzip raises EOFError or zlib.error, NEITHER of which is an
+    OSError — so catching OSError alone both broke "never raises" and skipped
+    the cleanup, leaking a near-10 MB partial on every worker boot."""
+    import gzip
+
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    fake_package = tmp_path / "pkg"
+    (fake_package / "data").mkdir(parents=True)
+    asset = fake_package / "data" / "usda-sr-legacy-2018-04.sqlite.gz"
+    asset.write_bytes(gzip.compress(b"x" * 4096)[:20])        # truncated mid-stream
+    monkeypatch.setattr("foodcore.__file__", str(fake_package / "__init__.py"))
+    food_reference.reset_cache()
+
+    assert food_reference._shipped_dataset_path() == ""
+    leftovers = os.listdir(tmp_path / f"edibl-foodcore-{os.geteuid()}")
+    assert leftovers == []
+    assert convert_for_food(1, "cup", "g", "honey") is None
+
+
+def test_a_transient_failure_is_not_cached_forever(monkeypatch):
+    """A boot-time ENOSPC used to disable food-aware conversion in that worker
+    until someone restarted it — the None was cached with no retry."""
+    monkeypatch.setattr(food_reference, "_shipped_dataset_path", lambda: "")
+    monkeypatch.delenv("FOODCORE_DATASET", raising=False)
+    food_reference.reset_cache()
+    assert food_reference._dataset() is None
+
+    monkeypatch.undo()
+    monkeypatch.delenv("FOODCORE_DATASET", raising=False)
+
+    assert food_reference._dataset() is not None       # recovers without a reset
+
+
+def test_the_resolution_cache_is_bounded(monkeypatch):
+    """Food names come from user-supplied product text, so this cannot grow
+    without limit once there is a caller."""
+    monkeypatch.setattr(food_reference, "_FOOD_CACHE_MAX", 8)
+    food_reference.reset_cache()
+
+    for i in range(40):
+        food_reference._resolve_food(f"not a food {i}")
+
+    assert len(food_reference._food_cache) <= 8
 
 
 def test_an_unopenable_dataset_is_reported_not_raised(monkeypatch, tmp_path):

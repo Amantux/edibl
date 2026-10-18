@@ -36,9 +36,49 @@ def test_declared_wheat_also_declares_gluten_via_the_shared_ruleset():
     block = _allergens_from_off({"allergens_tags": ["en:wheat"]}, "1")
 
     assert _states(block)["gluten"] == "contains"
-    implied = _verdict(block, "gluten")["evidence"][0]
-    assert implied["kind"] == "implied"
-    assert implied["provenance"]["method"] == "inferred"
+    assert _states(block)["wheat"] == "contains"
+
+
+# Open Food Facts' own allergen taxonomy: the EU 14 as OFF spells them, plus the
+# sub-tags real products carry. Every one of these is a DECLARATION, and a
+# declaration reported as `unknown` is worse than the absence case this feature
+# exists to be honest about — `unknown` is permitted under a PREFERENCE policy,
+# so a consumer reads it as "not containing". Testing only the three tags
+# foodcore genuinely cannot key (celery/mustard/lupin) hid exactly that bug:
+# `en:sulphur-dioxide-and-sulphites` and `en:almonds` both came back unknown.
+OFF_TAXONOMY = [
+    ("en:gluten", "gluten"), ("en:milk", "milk"), ("en:eggs", "egg"),
+    ("en:nuts", "tree_nuts"), ("en:peanuts", "peanuts"),
+    ("en:sesame-seeds", "sesame"), ("en:soybeans", "soybeans"),
+    ("en:fish", "fish"), ("en:crustaceans", "crustacean_shellfish"),
+    ("en:molluscs", "molluscs"),
+    ("en:sulphur-dioxide-and-sulphites", "sulfites"),
+    ("en:tree-nuts", "tree_nuts"), ("en:almonds", "tree_nuts"),
+    ("en:hazelnuts", "tree_nuts"), ("en:walnuts", "tree_nuts"),
+    ("en:cashew-nuts", "tree_nuts"), ("en:pistachio", "tree_nuts"),
+    ("en:lactose", "milk"), ("en:milk-proteins", "milk"),
+    ("en:soya", "soybeans"), ("en:wheat", "wheat"),
+    ("en:barley", "gluten"), ("en:rye", "gluten"), ("en:spelt", "gluten"),
+    ("en:shellfish", "crustacean_shellfish"), ("en:sulphites", "sulfites"),
+]
+
+
+@pytest.mark.parametrize("tag,allergen", OFF_TAXONOMY)
+def test_every_tag_open_food_facts_publishes_is_keyed_not_dropped(tag, allergen):
+    block = _allergens_from_off({"allergens_tags": [tag]}, "1")
+
+    assert _states(block)[allergen] == "contains", f"{tag} was not keyed"
+    assert block["unmappedCount"] == 0
+
+
+def test_a_rule_that_is_only_precautionary_downgrades_a_certain_declaration():
+    """`en:oats` is a certain declaration of oats; foodcore's rule says the
+    gluten link is precautionary. The weaker certainty wins — reporting
+    `contains` would be a different lie from reporting `unknown`."""
+    block = _allergens_from_off({"allergens_tags": ["en:oats"]}, "1")
+
+    assert _states(block)["gluten"] == "may_contain"
+    assert _verdict(block, "gluten")["evidence"][0]["provenance"]["method"] == "inferred"
 
 
 # ---- traces ("may contain") ------------------------------------------------- #
@@ -107,10 +147,14 @@ def test_the_payload_exposes_no_safety_boolean():
 
     banned = {"safe", "free", "freeFrom", "free_from", "contains", "allowed",
               "ok", "clear", "permitted"}
+    # The only two booleans, and neither can stand in for safety: `needsReview`
+    # is true for `may_contain` AND `unknown` (and false for `contains`), and
+    # `rulesetKeyed` is false for a declared celery, i.e. the opposite of safe.
+    allowed_bools = {"needsReview", "rulesetKeyed"}
     for verdict in block["verdicts"]:
         assert banned.isdisjoint(verdict)
-        for value in verdict.values():
-            assert not isinstance(value, bool) or value is verdict["needsReview"]
+        for key, value in verdict.items():
+            assert not isinstance(value, bool) or key in allowed_bools
 
 
 def test_needs_review_is_true_for_both_uncertain_states_and_not_a_safety_flag():
@@ -136,6 +180,22 @@ def test_an_allergen_foodcore_cannot_key_is_reported_not_dropped():
         {"tag": "en:mustard", "declaredIn": "allergens_tags"},
         {"tag": "en:lupin", "declaredIn": "traces_tags"},
     ]
+    assert block["unmappedCount"] == 3
+
+
+def test_an_unkeyable_declaration_also_appears_among_the_verdicts():
+    """The twelve ruleset rows look like a complete allergen picture, so a
+    consumer looping `verdicts` — the obvious shape — must not be able to miss
+    a declared celery by not knowing to read a second array."""
+    block = _allergens_from_off({"allergens_tags": ["en:celery"],
+                                 "traces_tags": ["en:lupin"]}, "1")
+
+    states = _states(block)
+    assert states["off:en:celery"] == "contains"
+    assert states["off:en:lupin"] == "may_contain"
+    assert _verdict(block, "off:en:celery")["rulesetKeyed"] is False
+    assert _verdict(block, "milk")["rulesetKeyed"] is True
+    assert _verdict(block, "off:en:celery")["label"] == "Celery"
 
 
 def test_a_non_english_tag_is_reported_unmapped_rather_than_guessed():

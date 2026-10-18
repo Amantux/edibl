@@ -147,15 +147,27 @@ def convert_for_food(value, from_unit, to_unit, food) -> Optional[float]:
         return direct
     fu = (from_unit or "count").strip().lower()
     tu = (to_unit or "count").strip().lower()
-    # Never put a non-measurement unit to a food question. A "pack" or a "can"
-    # has no standard size (that is why they get their own dimension), and
-    # "half"/"low"/"presence" are not amounts at all. foodcore refuses these
-    # today, but it refuses them as *unit* lookups — the day it learns a unit
-    # spelled "half" this guard is what stops "half a jar" being read as half a
-    # cup. Food-specific count units ("clove", "slice") are deliberately NOT
-    # blocked: a clove of garlic weighing 3 g is exactly what this is for.
+    # An ALLOW-list of the dimensions Edibl itself treats as measurements —
+    # NOT a block-list of the ones it doesn't. `dimension_of` gives every
+    # unregistered unit its own `other:` dimension, so a block-list hands all
+    # of them to a library with a wider unit vocabulary than ours, which is not
+    # theoretical: foodcore reads "c" as cup (in a pantry it is at least as
+    # likely to be a can), "t" as tsp (the classic tsp/tbsp ambiguity, a 3x
+    # error) and "#" as lb. A "pack" or a "can" has no standard size, and
+    # "half"/"low"/"presence" are not amounts at all.
+    #
+    # Food-count measures ("clove", "slice") are therefore NOT reachable, which
+    # is deliberate rather than an oversight: every one of them comes back from
+    # foodcore as method="estimated" — a convention, not a published weight —
+    # and `convert_amount` refuses those, because a float cannot say it is an
+    # estimate (ADR-0002). Allowing the unit while refusing the answer would
+    # just be two rules disagreeing. Both move together when a caller can carry
+    # an estimate.
+    #
+    # The test asserts the seam is never consulted for a rejected unit, so this
+    # cannot decay into a refusal that merely happens to come from foodcore.
     for unit in (fu, tu):
-        if dimension_of(unit) in (PACKAGE, SERVING, LEVEL, PRESENCE_DIM):
+        if dimension_of(unit) not in (COUNT, MASS, VOLUME):
             return None
     v = _to_decimal(value)
     if v is None or not (food or "").strip():

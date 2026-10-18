@@ -122,6 +122,48 @@ def convert(value, from_unit, to_unit) -> Optional[float]:
     return float(v * ff / ft)
 
 
+def convert_for_food(value, from_unit, to_unit, food) -> Optional[float]:
+    """`convert`, but allowed to cross a dimension when a SPECIFIC food is named.
+
+    `convert` returns None across dimensions because it has no food, and
+    therefore no density — that contract is unchanged and callers that convert
+    into a generic display or target unit must keep using it. This variant is
+    for the sites that know *which* food they are converting: with "honey" in
+    hand, a cup weighs 339 g, and that is a fact rather than a guess.
+
+    `food` is a free-text name, resolved in foodcore's reference dataset by its
+    own confidence-tiered policy, which refuses rather than guesses ("rice" is
+    ambiguous between raw and cooked at 185 g vs 158 g per cup). None on **any**
+    refusal — no food, an ambiguous name, no published weight for the measure,
+    disagreeing preparations, foodcore not installed — so every uncertain case
+    degrades to exactly what `convert` would have returned.
+
+    Within a dimension this is `convert` verbatim: g→kg must stay exact Decimal
+    arithmetic and must not start depending on whether a dataset recognises the
+    food.
+    """
+    direct = convert(value, from_unit, to_unit)
+    if direct is not None:
+        return direct
+    fu = (from_unit or "count").strip().lower()
+    tu = (to_unit or "count").strip().lower()
+    # Never put a non-measurement unit to a food question. A "pack" or a "can"
+    # has no standard size (that is why they get their own dimension), and
+    # "half"/"low"/"presence" are not amounts at all. foodcore refuses these
+    # today, but it refuses them as *unit* lookups — the day it learns a unit
+    # spelled "half" this guard is what stops "half a jar" being read as half a
+    # cup. Food-specific count units ("clove", "slice") are deliberately NOT
+    # blocked: a clove of garlic weighing 3 g is exactly what this is for.
+    for unit in (fu, tu):
+        if dimension_of(unit) in (PACKAGE, SERVING, LEVEL, PRESENCE_DIM):
+            return None
+    v = _to_decimal(value)
+    if v is None or not (food or "").strip():
+        return None
+    from .food_reference import convert_amount  # local: the only foodcore importer
+    return convert_amount(float(v), fu, tu, food)
+
+
 @dataclass(frozen=True)
 class Quantity:
     value: Optional[Decimal]

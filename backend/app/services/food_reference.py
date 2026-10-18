@@ -47,7 +47,17 @@ _LOGGER = logging.getLogger("edibl.food_reference")
 # regenerable from a 2.5 MB asset already inside the image. Paying the
 # expansion once per container start is plainly better than adding 10 MB to
 # every snapshot a user ever takes of data they already have.
-_SHIPPED_NAME = "edibl-foodcore-usda-sr-legacy-2018-04.sqlite"
+_SHIPPED_NAME = "usda-sr-legacy-2018-04.sqlite"
+# A private directory, per euid, inside the system temp dir. The path has to be
+# PREDICTABLE so gunicorn's workers share one expansion instead of paying the
+# 10 MB each — but a predictable name in a world-writable directory is also
+# somewhere another local user can leave a file, or a symlink, for us to open as
+# our reference data, which would quietly change every weight the app reports.
+# In the add-on /tmp belongs to the container; a standalone install shares the
+# host's. So: 0700, and used only while it is still a directory we own that
+# nobody else can reach. The euid suffix keeps a root-created directory from
+# locking out the unprivileged server (the container starts as root and drops).
+_EXPANSION_DIR = "edibl-foodcore"
 
 _lock = threading.Lock()
 _dataset_cache: dict[str, object] = {}
@@ -59,6 +69,39 @@ def reset_cache() -> None:
     with _lock:
         _dataset_cache.clear()
         _food_cache.clear()
+
+
+def _expansion_dir() -> str:
+    """Our private 0700 expansion directory, or "" when it is not ours alone.
+
+    Refuses rather than repairs: a directory at this path that we do not own, or
+    that anyone else can write, is not a situation to silently take over. ""
+    costs the conversion refinement, which is the behaviour that preceded it.
+    """
+    import stat
+    import tempfile
+
+    path = os.path.join(tempfile.gettempdir(), f"{_EXPANSION_DIR}-{os.geteuid()}")
+    try:
+        os.mkdir(path, 0o700)
+    except FileExistsError:
+        pass
+    except OSError as exc:
+        _LOGGER.warning("could not create the food reference cache directory (%s); "
+                        "food-aware conversion is unavailable", exc)
+        return ""
+    try:
+        # lstat, not stat: a symlink planted here must be seen as a symlink
+        # rather than followed to whatever it points at.
+        st = os.lstat(path)
+    except OSError:
+        return ""
+    if (not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid()
+            or st.st_mode & (stat.S_IRWXG | stat.S_IRWXO)):
+        _LOGGER.warning("the food reference cache directory is not private to this "
+                        "user; food-aware conversion is unavailable")
+        return ""
+    return path
 
 
 def _shipped_dataset_path() -> str:
@@ -74,7 +117,7 @@ def _shipped_dataset_path() -> str:
     """
     import gzip
     import shutil
-    import tempfile
+    import stat
 
     try:
         import foodcore
@@ -89,9 +132,24 @@ def _shipped_dataset_path() -> str:
     if not os.path.isfile(source):
         return ""
 
-    target = os.path.join(tempfile.gettempdir(), _SHIPPED_NAME)
-    if os.path.isfile(target) and os.path.getsize(target) > 0:
-        return target
+    directory = _expansion_dir()
+    if not directory:
+        return ""
+
+    target = os.path.join(directory, _SHIPPED_NAME)
+    try:
+        st = os.lstat(target)
+        if stat.S_ISREG(st.st_mode) and st.st_size > 0:
+            return target
+        # Anything else at this path (a symlink, a directory, a truncated file)
+        # is removed rather than opened — see the note on _EXPANSION_DIR.
+        if stat.S_ISDIR(st.st_mode):
+            return ""
+        os.unlink(target)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return ""
     # Expand to a temporary name and rename into place, so a container killed
     # mid-write leaves no truncated database for the next boot to open.
     tmp = f"{target}.partial-{os.getpid()}"

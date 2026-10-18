@@ -6,6 +6,8 @@ must refuse in exactly the same way whenever the reference data cannot justify
 an answer. These tests pin both halves — the answers it now gives AND the ones
 it still declines to give.
 """
+import os
+
 import pytest
 
 from app.services import food_reference
@@ -129,6 +131,55 @@ def test_no_reference_dataset_degrades_to_the_plain_conversion(monkeypatch):
     assert food_reference._dataset() is None
     assert convert_for_food(1, "cup", "g", "honey") is None
     assert convert_for_food(1500, "g", "kg", "honey") == 1.5
+
+
+def test_the_expansion_directory_is_private_to_this_user(monkeypatch, tmp_path):
+    """The path is predictable so gunicorn's workers share one expansion. That
+    makes it somewhere another local user could plant a file for us to open as
+    reference data, so it must be ours and 0700."""
+    import stat
+
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+
+    directory = food_reference._expansion_dir()
+
+    assert directory.startswith(str(tmp_path))
+    mode = os.lstat(directory).st_mode
+    assert stat.S_ISDIR(mode)
+    assert not mode & (stat.S_IRWXG | stat.S_IRWXO)
+
+
+def test_a_world_writable_expansion_directory_is_refused(monkeypatch, tmp_path):
+    """Refuses rather than takes over: a directory anyone can write is not a
+    situation to silently adopt, and "" is just today's behaviour."""
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    hostile = tmp_path / f"edibl-foodcore-{os.geteuid()}"
+    hostile.mkdir(mode=0o777)
+    os.chmod(hostile, 0o777)
+
+    assert food_reference._expansion_dir() == ""
+    assert food_reference._shipped_dataset_path() == ""
+    assert convert_for_food(1, "cup", "g", "honey") is None
+
+
+def test_a_symlink_where_the_dataset_belongs_is_not_opened(monkeypatch, tmp_path):
+    """lstat, not stat: a planted symlink is replaced, never followed to
+    whatever it points at — otherwise every weight the app reports could be
+    swapped out from under it."""
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    directory = tmp_path / f"edibl-foodcore-{os.geteuid()}"
+    directory.mkdir(mode=0o700)
+    planted = tmp_path / "attacker-owned.sqlite"
+    planted.write_text("not the reference dataset")
+    link = directory / "usda-sr-legacy-2018-04.sqlite"
+    link.symlink_to(planted)
+
+    path = food_reference._shipped_dataset_path()
+
+    assert path and not os.path.islink(path)
+    assert planted.read_text() == "not the reference dataset"   # untouched
+    food_reference.reset_cache()
+    assert convert_for_food(1, "cup", "g", "honey") == pytest.approx(339.0)
 
 
 def test_an_unopenable_dataset_is_reported_not_raised(monkeypatch, tmp_path):

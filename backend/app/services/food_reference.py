@@ -239,7 +239,7 @@ def _off_allergen_key(tag: str) -> tuple[str, str]:
     from foodcore.allergens import resolve_allergen_key
 
     term = (tag or "").strip().lower()
-    if len(term) > 3 and term[2] == ":" and term[:2].isalpha():
+    if len(term) >= 3 and term[2] == ":" and term[:2].isalpha():
         term = term[3:]
     if not term:
         return "", ""
@@ -312,7 +312,9 @@ def allergens_from_declarations(declared, traces, *, source_id: str) -> dict | N
         unmapped: list[dict] = []
 
         def declare(tags, field: str, state, method: str, confidence: float) -> None:
-            for tag in tags or []:
+            # A non-list is community-entered garbage, not one tag: iterating a
+            # string would report each character as an unmapped allergen.
+            for tag in tags if isinstance(tags, (list, tuple)) else ():
                 if not isinstance(tag, str):
                     continue
                 key, term = _off_allergen_key(tag)
@@ -357,7 +359,10 @@ def allergens_from_declarations(declared, traces, *, source_id: str) -> dict | N
                     note=("Open Food Facts declares nothing about this allergen for "
                           "this product; absence from allergens_tags is not a "
                           "clearance"),
-                    provenance=provenance("declared", 0.0))]
+                    # "inferred" at confidence 0.0, not "declared": nothing was
+                    # declared. The only thing inferred is that we do not know,
+                    # and the zero says how much weight that carries.
+                    provenance=provenance("inferred", 0.0))]
             verdicts.append(AllergenVerdict(
                 allergen=key, label=ruleset.label(key), state=state,
                 evidence=tuple(found), ruleset_version=ruleset.version))

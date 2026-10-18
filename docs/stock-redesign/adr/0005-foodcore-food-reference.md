@@ -51,7 +51,10 @@ State this plainly, because the code reads as a shipped feature and is not one:
   `Product`, which has no allergen column, so the first scan of a barcode carries the
   declaration and every scan after you have added the product carries nothing. No frontend,
   MCP or HA surface reads it. Persisting it is a schema change and gets its own review — and
-  that asymmetry is the reason to do it rather than leave this as is.
+  that asymmetry is the reason to do it rather than leave this as is. **No UI may be built
+  against this block until the `found: true` branch carries it** — a block that appears only
+  for products you do *not* own is the one shape that makes `unknown` read as "nothing to
+  worry about".
 - **Only `measured`/`declared`/`calculated` conversions are returned.** foodcore labels every
   per-item count weight (a clove, a slice) `estimated`, and a bare float cannot say so, so
   those refuse. Lifting that means returning the `Outcome`, together with the unit allow-list.

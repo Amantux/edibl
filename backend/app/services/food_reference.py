@@ -36,7 +36,9 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from datetime import datetime, timezone
+from functools import lru_cache
 
 from ..logsafe import scrub
 
@@ -71,16 +73,24 @@ _TRUSTED_METHODS = frozenset({"measured", "declared", "calculated"})
 # the dataset has ~7,800 foods, so the cap is generous and the clear is cheap.
 _FOOD_CACHE_MAX = 2048
 
+# How long a failed dataset open is remembered before it is retried. Long
+# enough that a permanent failure costs one attempt a minute instead of one per
+# call, short enough that a transient one heals without a restart.
+_RETRY_AFTER_S = 60.0
+
 _lock = threading.Lock()
 _dataset_cache: dict[str, object] = {}
+_dataset_failed_at: dict[str, float] = {}
 _food_cache: dict[str, object] = {}
 
 
 def reset_cache() -> None:
-    """Drop the cached dataset handle and resolutions (tests)."""
+    """Drop the cached dataset handle, failures and resolutions (tests)."""
     with _lock:
         _dataset_cache.clear()
+        _dataset_failed_at.clear()
         _food_cache.clear()
+    _off_allergen_states.cache_clear()
 
 
 def _expansion_dir() -> str:
@@ -208,6 +218,9 @@ def _dataset():
     with _lock:
         if key in _dataset_cache:
             return _dataset_cache[key]
+        failed_at = _dataset_failed_at.get(key)
+        if failed_at is not None and time.monotonic() - failed_at < _RETRY_AFTER_S:
+            return None
 
     # Outside the lock: the expansion is ~10 MB of I/O and opening the dataset
     # touches the filesystem, and holding a module-global lock across that
@@ -233,12 +246,17 @@ def _dataset():
                         "food-aware conversion is unavailable",
                         type(exc).__name__)
     if ds is None:
-        # A FAILURE is not cached. A full disk, a momentarily non-private temp
-        # dir or a half-written file at boot would otherwise disable food-aware
-        # conversion in that worker until someone restarted it, with no retry
-        # and nothing in the logs after the first line.
+        # A failure is remembered, but only for _RETRY_AFTER_S. Caching it
+        # forever meant a full disk or a half-written file at boot disabled
+        # food-aware conversion in that worker until someone restarted it;
+        # caching it not at all meant a PERMANENT failure (a corrupt asset, a
+        # hostile temp dir) re-ran the whole path — a ~10 MB write and a WARNING
+        # — on every single call, which a per-item loop turns into a log flood.
+        with _lock:
+            _dataset_failed_at[key] = time.monotonic()
         return None
     with _lock:
+        _dataset_failed_at.pop(key, None)
         return _dataset_cache.setdefault(key, ds)
 
 
@@ -337,19 +355,37 @@ def convert_amount(value: float, from_unit: str, to_unit: str,
 _DECLARED, _TRACES = "allergens_tags", "traces_tags"
 
 
+# Leading negations that turn a tag into a CLAIM of absence. foodcore's claim
+# rule reads the suffix form ("gluten free") and nothing else, so these are
+# rewritten into it rather than judged here: the spelling of an OFF tag is this
+# adapter's problem, but what a claim is worth is the shared ruleset's, and it
+# says a claim downgrades to may_contain because it has been read, not verified.
+# Without this, "en:no-gluten" matched the bare phrase and read `contains` — the
+# opposite answer, from community-editable data.
+_TAG_NEGATIONS = ("no ", "non ", "not ", "without ", "free from ", "free of ",
+                  "zero ", "sans ", "sin ", "senza ", "ohne ")
+
+# A tag is a taxonomy term, not prose. Cap it before it is reflected into a
+# response as an allergen label.
+_TAG_MAX = 64
+
+
 def _off_tag_term(tag: str) -> str:
     """An OFF allergen tag's bare term, or "" when there is nothing in it.
 
-    OFF tags are language-prefixed (``en:milk``, ``fr:lait``). "" means the tag
-    carried no term at all (``""``, ``"en:"``) — community-entered noise, not a
-    declaration, and it must not be reported as an unkeyed allergen.
+    Also the DEDUPE key: OFF tags arrive language-prefixed (``en:milk``,
+    ``fr:lait``), sometimes repeated, and sometimes in a different case, and
+    ``en:celery`` / ``EN:CELERY`` are one declaration, not three. "" means the
+    tag carried no term at all (``""``, ``"en:"``) — community-entered noise,
+    not a declaration, and it must not be reported as an unkeyed allergen.
     """
-    term = (tag or "").strip().lower()
+    term = (tag or "").strip().lower()[:_TAG_MAX]
     if len(term) >= 3 and term[2] == ":" and term[:2].isalpha():
         term = term[3:]
     return term.replace("-", " ").strip()
 
 
+@lru_cache(maxsize=256)
 def _off_allergen_states(term: str) -> tuple[tuple[str, object], ...]:
     """An OFF allergen term as ((foodcore key, state), …). Empty = not keyable.
 
@@ -394,6 +430,10 @@ def _off_allergen_states(term: str) -> tuple[tuple[str, object], ...]:
 
     if not term:
         return ()
+    for negation in _TAG_NEGATIONS:
+        if term.startswith(negation):
+            term = f"{term[len(negation):].strip()} free"
+            break
     # Every ruleset key, not the US-major default: screening against the
     # default profile silently cannot see sulfites, gluten or molluscs.
     ruleset = allergen_ruleset()
@@ -460,7 +500,15 @@ def allergens_from_declarations(declared, traces, *, source_id: str) -> dict | N
                               license="ODbL-1.0")
 
         evidence: dict[str, list] = {}
-        unmapped: list[dict] = []
+        # Keyed on the NORMALISED term, so `en:celery` listed in both OFF fields
+        # — which it routinely is — is one declaration rather than two rows for
+        # the same allergen. Two rows is not cosmetic: anything that keys on
+        # `allergen` (a dict, a template loop, this module's own test helper)
+        # keeps the LAST one, which is the weaker `may_contain`, silently losing
+        # a certain declaration. Insertion order gives the precedence for free:
+        # the declared pass runs before the traces pass, so the first writer is
+        # always the stronger state.
+        unmapped: dict[str, dict] = {}
 
         def declare(tags, field: str, state, method: str, confidence: float) -> None:
             # A non-list is community-entered garbage, not one tag: iterating a
@@ -473,7 +521,8 @@ def allergens_from_declarations(declared, traces, *, source_id: str) -> dict | N
                     continue
                 keyed = _off_allergen_states(term)
                 if not keyed:
-                    unmapped.append({"tag": tag, "declaredIn": field})
+                    unmapped.setdefault(term, {"tag": tag[:_TAG_MAX],
+                                               "declaredIn": field})
                     continue
                 for key, rule_state in keyed:
                     # The declaration and the rule each carry their own
@@ -482,6 +531,14 @@ def allergens_from_declarations(declared, traces, *, source_id: str) -> dict | N
                     # foodcore's rule says the gluten link is precautionary, so
                     # the answer is may_contain. Only a certain declaration of a
                     # certain rule is `contains`.
+                    #
+                    # Note what this does NOT do: it never weakens a tag's own
+                    # named allergen, only an implied one (oats → oats stays
+                    # out of it; oats → gluten softens). The EU treats oats as a
+                    # gluten cereal, so a coeliac reading this under a
+                    # PREFERENCE policy would not be blocked by `may_contain` —
+                    # STRICT does block it, and STRICT is foodcore's default for
+                    # a profile that exists to avoid an allergen.
                     combined = (state if state is rule_state
                                 else AllergenState.MAY_CONTAIN)
                     certain = combined is rule_state is state
@@ -531,13 +588,16 @@ def allergens_from_declarations(declared, traces, *, source_id: str) -> dict | N
         # `rulesetKeyed: false` say these came from the label rather than the
         # ruleset; they are still a declaration, and a declaration must never be
         # reachable only by reading a second array.
-        for entry in unmapped:
+        for term, entry in unmapped.items():
             field = entry["declaredIn"]
             state = (AllergenState.CONTAINS if field == _DECLARED
                      else AllergenState.MAY_CONTAIN)
             verdicts.append(AllergenVerdict(
-                allergen=f"off:{entry['tag']}",
-                label=entry["tag"].split(":")[-1].replace("-", " ").capitalize(),
+                # The normalised term, not the raw tag: the key has to be one
+                # value per declaration, and the raw spelling is already in the
+                # evidence and in `unmappedTags`.
+                allergen=f"off:{term}",
+                label=term.capitalize(),
                 state=state,
                 evidence=(Evidence(
                     ingredient="", matched_term=entry["tag"],
@@ -555,7 +615,8 @@ def allergens_from_declarations(declared, traces, *, source_id: str) -> dict | N
     return {"source": "openfoodfacts", "license": "ODbL-1.0",
             "rulesetVersion": ruleset.version,
             "verdicts": [_verdict_out(v) for v in verdicts],
-            "unmappedTags": unmapped, "unmappedCount": len(unmapped)}
+            "unmappedTags": list(unmapped.values()),
+            "unmappedCount": len(unmapped)}
 
 
 def _verdict_out(verdict) -> dict:

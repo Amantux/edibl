@@ -183,6 +183,29 @@ def test_an_allergen_foodcore_cannot_key_is_reported_not_dropped():
     assert block["unmappedCount"] == 3
 
 
+def test_an_unkeyable_allergen_declared_twice_is_one_verdict_at_the_stronger_state():
+    """OFF routinely lists the same allergen in both fields, and tags repeat in
+    different cases. Two rows for one allergen is not cosmetic: anything keying
+    on `allergen` — a dict, a template loop, `_states` below — keeps the last,
+    which was the weaker `may_contain`, silently losing a certain declaration."""
+    block = _allergens_from_off(
+        {"allergens_tags": ["en:celery", "en:celery", "EN:CELERY"],
+         "traces_tags": ["en:celery"]}, "1")
+
+    rows = [v for v in block["verdicts"] if v["allergen"].startswith("off:")]
+    assert [(v["allergen"], v["state"]) for v in rows] == [("off:celery", "contains")]
+    assert block["unmappedCount"] == 1
+
+
+def test_a_declared_tag_is_not_reflected_unbounded_into_the_response():
+    """Community-entered text, so cap it before it becomes an allergen label."""
+    block = _allergens_from_off({"allergens_tags": ["en:" + "z" * 500]}, "1")
+
+    row = next(v for v in block["verdicts"] if v["allergen"].startswith("off:"))
+    assert len(row["allergen"]) <= 80
+    assert len(block["unmappedTags"][0]["tag"]) <= 80
+
+
 def test_an_unkeyable_declaration_also_appears_among_the_verdicts():
     """The twelve ruleset rows look like a complete allergen picture, so a
     consumer looping `verdicts` — the obvious shape — must not be able to miss
@@ -191,16 +214,24 @@ def test_an_unkeyable_declaration_also_appears_among_the_verdicts():
                                  "traces_tags": ["en:lupin"]}, "1")
 
     states = _states(block)
-    assert states["off:en:celery"] == "contains"
-    assert states["off:en:lupin"] == "may_contain"
-    assert _verdict(block, "off:en:celery")["rulesetKeyed"] is False
+    assert states["off:celery"] == "contains"
+    assert states["off:lupin"] == "may_contain"
+    assert _verdict(block, "off:celery")["rulesetKeyed"] is False
     assert _verdict(block, "milk")["rulesetKeyed"] is True
-    assert _verdict(block, "off:en:celery")["label"] == "Celery"
+    assert _verdict(block, "off:celery")["label"] == "Celery"
+    assert _verdict(block, "off:celery")["evidence"][0]["matchedTerm"] == "en:celery"
 
 
-@pytest.mark.parametrize("tag,allergen", [("en:gluten-free", "gluten"),
-                                           ("en:nut-free", "tree_nuts"),
-                                           ("en:dairy-free", "milk")])
+@pytest.mark.parametrize("tag,allergen", [
+    # suffix form, which foodcore's claim rule reads directly
+    ("en:gluten-free", "gluten"), ("en:nut-free", "tree_nuts"),
+    ("en:dairy-free", "milk"),
+    # prefix negations, which matched the bare allergen phrase and read
+    # `contains` — the opposite answer — until the term was normalised
+    ("en:no-gluten", "gluten"), ("en:without-gluten", "gluten"),
+    ("en:free-from-milk", "milk"), ("en:no-nuts", "tree_nuts"),
+    ("en:zero-gluten", "gluten"), ("en:sans-gluten", "gluten"),
+])
 def test_a_free_from_claim_in_an_allergen_field_errs_toward_may_contain(tag, allergen):
     """Pinning a known over-caution as deliberate. foodcore downgrades an
     unverifiable claim rather than trusting it, so a claim that lands in an

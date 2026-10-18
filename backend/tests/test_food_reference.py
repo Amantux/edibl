@@ -85,6 +85,9 @@ def test_an_estimated_conversion_is_refused_rather_than_passed_off_as_a_weight()
     # cup (as likely to be a can here), "t" as tsp, "#" as lb, "gr" as gram.
     # A block-list of dimensions let every one of these through.
     "c", "t", "#", "gr", "container", "pouch", "envelope", "gizmo",
+    # Count units: they pass dimension checks but every count→weight path is
+    # `estimated`, which is refused, so consulting the seam is pure waste.
+    "count", "each", "dozen", "egg", "clove", "slice",
 ])
 def test_a_unit_edibl_does_not_measure_in_never_reaches_the_reference_data(
         unit, monkeypatch):
@@ -211,18 +214,42 @@ def test_a_corrupt_shipped_asset_does_not_raise_and_leaves_no_partial(
     assert convert_for_food(1, "cup", "g", "honey") is None
 
 
-def test_a_transient_failure_is_not_cached_forever(monkeypatch):
+def test_a_transient_failure_is_retried_after_the_backoff(monkeypatch):
     """A boot-time ENOSPC used to disable food-aware conversion in that worker
     until someone restarted it — the None was cached with no retry."""
+    monkeypatch.setattr(food_reference, "_RETRY_AFTER_S", 0.0)
     monkeypatch.setattr(food_reference, "_shipped_dataset_path", lambda: "")
     monkeypatch.delenv("FOODCORE_DATASET", raising=False)
     food_reference.reset_cache()
     assert food_reference._dataset() is None
 
     monkeypatch.undo()
+    monkeypatch.setattr(food_reference, "_RETRY_AFTER_S", 0.0)
     monkeypatch.delenv("FOODCORE_DATASET", raising=False)
 
     assert food_reference._dataset() is not None       # recovers without a reset
+
+
+def test_a_permanent_failure_is_attempted_once_per_backoff_not_once_per_call():
+    """The other half: re-running the whole path per call means a ~10 MB write
+    and a WARNING each time, which a per-item loop turns into a log flood."""
+    attempts = []
+
+    def failing():
+        attempts.append(1)
+        return ""
+
+    food_reference.reset_cache()
+    original = food_reference._shipped_dataset_path
+    food_reference._shipped_dataset_path = failing
+    try:
+        for _ in range(20):
+            assert food_reference._dataset() is None
+    finally:
+        food_reference._shipped_dataset_path = original
+        food_reference.reset_cache()
+
+    assert len(attempts) == 1
 
 
 def test_the_resolution_cache_is_bounded(monkeypatch):

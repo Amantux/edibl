@@ -156,18 +156,19 @@ def convert_for_food(value, from_unit, to_unit, food) -> Optional[float]:
     # error) and "#" as lb. A "pack" or a "can" has no standard size, and
     # "half"/"low"/"presence" are not amounts at all.
     #
-    # Food-count measures ("clove", "slice") are therefore NOT reachable, which
-    # is deliberate rather than an oversight: every one of them comes back from
-    # foodcore as method="estimated" — a convention, not a published weight —
-    # and `convert_amount` refuses those, because a float cannot say it is an
-    # estimate (ADR-0002). Allowing the unit while refusing the answer would
-    # just be two rules disagreeing. Both move together when a caller can carry
-    # an estimate.
+    # MASS and VOLUME only — COUNT is deliberately absent, for the same reason
+    # food-count measures ("clove", "slice") are: every path from a count to a
+    # weight comes back from foodcore as method="estimated", a convention rather
+    # than a published weight, and `convert_amount` refuses those because a
+    # float cannot say it is an estimate (ADR-0002). Listing a unit whose answer
+    # is always refused would just be two rules disagreeing, and it costs a
+    # pointless food resolution per call. Both move together when a caller can
+    # carry an estimate.
     #
     # The test asserts the seam is never consulted for a rejected unit, so this
     # cannot decay into a refusal that merely happens to come from foodcore.
     for unit in (fu, tu):
-        if dimension_of(unit) not in (COUNT, MASS, VOLUME):
+        if dimension_of(unit) not in (MASS, VOLUME):
             return None
     v = _to_decimal(value)
     if v is None or not (food or "").strip():

@@ -198,6 +198,20 @@ def test_an_unkeyable_declaration_also_appears_among_the_verdicts():
     assert _verdict(block, "off:en:celery")["label"] == "Celery"
 
 
+@pytest.mark.parametrize("tag,allergen", [("en:gluten-free", "gluten"),
+                                           ("en:nut-free", "tree_nuts"),
+                                           ("en:dairy-free", "milk")])
+def test_a_free_from_claim_in_an_allergen_field_errs_toward_may_contain(tag, allergen):
+    """Pinning a known over-caution as deliberate. foodcore downgrades an
+    unverifiable claim rather than trusting it, so a claim that lands in an
+    allergen field (they belong in OFF's labels_tags) reads `may_contain`. The
+    error points the safe way; what must never happen is it reading as a
+    clearance, or flipping to `contains`."""
+    block = _allergens_from_off({"allergens_tags": [tag]}, "1")
+
+    assert _states(block)[allergen] == "may_contain"
+
+
 def test_a_non_english_tag_is_reported_unmapped_rather_than_guessed():
     block = _allergens_from_off({"allergens_tags": ["fr:lait"]}, "1")
 

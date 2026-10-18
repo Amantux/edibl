@@ -380,6 +380,14 @@ def _off_allergen_states(term: str) -> tuple[tuple[str, object], ...]:
     unmapped rather than guessed at. Celery, mustard and lupin are declarable
     in the EU and genuinely outside foodcore's ruleset — they screen to nothing
     too, and the caller surfaces them.
+
+    One known over-caution, left as it is on purpose: a *claim* of absence that
+    somehow lands in an allergen field (``en:gluten-free``, ``en:nut-free``)
+    screens to ``may_contain``, because foodcore downgrades an unverifiable
+    claim rather than trusting it. Those belong in OFF's ``labels_tags``, not
+    here, and the error points the safe way — over-cautious, not falsely clear.
+    Overriding foodcore's claim policy from this side would be a second opinion
+    on exactly the judgement the shared ruleset exists to hold.
     """
     from foodcore.allergens import (AllergenState, SensitivityProfile,
                                     allergen_ruleset, screen_text)

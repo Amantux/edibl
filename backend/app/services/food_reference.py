@@ -38,6 +38,8 @@ import os
 import threading
 from datetime import datetime, timezone
 
+from ..logsafe import scrub
+
 _LOGGER = logging.getLogger("edibl.food_reference")
 
 # Where the dataset foodcore ships is expanded to.
@@ -158,8 +160,10 @@ def _shipped_dataset_path() -> str:
             shutil.copyfileobj(src, dst, 1024 * 1024)
         os.replace(tmp, target)
     except OSError as exc:
+        # scrub: an OSError carries the path, which is composed from $TMPDIR —
+        # operator-supplied, so it must not be able to forge a log line.
         _LOGGER.warning("could not expand the food reference dataset (%s); "
-                        "food-aware conversion is unavailable", exc)
+                        "food-aware conversion is unavailable", scrub(exc))
         try:
             os.unlink(tmp)
         except OSError:

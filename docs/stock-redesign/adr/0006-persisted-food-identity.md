@@ -64,29 +64,44 @@ implies 48 g. foodcore answers `tbsp→g` from the tbsp row and `g→tbsp` from 
 density, so round-tripping compounds the gap. Errors concentrate in exactly the units recipes
 use — `tbsp` 15.9% of foods, `tsp` 6.6%, `cup` 2.0% — while `ml`/`l`/`fl oz`/`kg` are clean.
 
-**So the round-trip was removed, not bounded.** `plan_consumption` converted a lot into the
-demand unit and then converted the take back again. That second conversion only existed for
-the *full-draw* case — where the answer is already known exactly, because the take simply
-*is* the lot's own quantity. Taking `avail` directly eliminates the error class rather than
-tolerating it, and is exactly equivalent under plain `convert`, whose round-trip was already
-exact. A **partial** draw remains a single forward conversion (never a round-trip) and is
-**clamped to the lot's quantity**, because the availability figure came from the opposite
-direction and the two can disagree.
+**So the planner stopped using two directions at all.** It converted a lot into the demand
+unit to decide what the lot covered, and converted the demand into lot units to decide the
+take. Those are opposite directions, and mixing them does not merely lose precision — **it
+silently loses stock**: a 6 tbsp demand against a 10 g alfalfa lot credited itself 4.85 tbsp
+(the reverse scale) for a lot actually worth 3.33 tbsp, so it reported `shortfall = 0`, drew
+13.4 g of the 18 g owed, and never touched the next lot.
 
-**A clamp must reduce what it credits, not just what it takes.** Clamping the take while
-still crediting the full outstanding demand drives `remaining` to zero, so the planner
-reports `shortfall = 0` and stops spilling — a 4 tbsp request took 10 g from a lot that owed
-12 g, left a 1 kg lot untouched, and told the user nothing was short. **A silent under-draw
-is as wrong as an over-draw**, and it is the failure mode "skip the lot → visible shortfall"
-was supposed to rule out. The credit is therefore the forward conversion *inverted for the
-clamped amount* (`remaining × avail ÷ take_lot`), which is exact because the conversion is
-linear, and which keeps the take and its credit on one consistent scale rather than mixing in
-the direction we just decided not to trust. Caught in adversarial review; the original test
-asserted only the take and was green while the bug shipped.
+`plan_consumption` now probes the conversion **once per lot** —
+`per_demand_unit = convert_(1, demand_unit, lot_unit)` — and derives *both* availability
+(`avail / factor`) and take (`remaining × factor`) from that single factor. The conversion is
+linear (`grams = amount × a per-food factor`), verified dataset-wide with zero non-linear
+conversions, so one probe characterises it exactly.
+
+Three things fall out, which is why this is the right shape rather than another correction
+term:
+- **Over-drawing becomes structurally impossible**, not clamped: `remaining < avail / factor`
+  implies `remaining × factor < avail`. Both the clamp and its credit correction are deleted.
+- **A full draw takes the lot's own quantity** — a fact, not a conversion — credited with
+  what that quantity is worth *on the same scale*.
+- **The two branches can no longer disagree.** They did: one 10 g alfalfa lot reported a
+  0.6667 tbsp shortfall at a 4 tbsp demand (right) and 1.1515 at 6 tbsp (should be 2.6667).
+
+**A silent under-draw is as wrong as an over-draw**, and it is precisely the failure mode
+that "skip the lot → visible shortfall" was supposed to rule out. Both halves of this were
+caught in adversarial review, the second after a first fix addressed only the partial branch
+while leaving the identical mistake in the full-draw branch one line away. The tests now
+parametrise *both* demands over *both* branches, because a single case is what let the
+inconsistency hide.
 
 Concretely: a 10 g lot of alfalfa against a large tbsp demand used to compute a take of
 **14.5 g from a 10 g lot** — a 45% over-draw, caught only by `consume_lot`'s own clamp. It is
 now 10 g.
+
+**Migration parent.** `0014` names `0012_api_token_access` while
+`0013_product_allergens` is in flight on a sibling branch, and is re-pointed to `0013` at
+merge. A revision naming a parent that does not exist yet is not a cosmetic problem: Alembic
+raises resolving the graph and `app/__init__.py` upgrades in-process at startup, so the
+container never serves a request. A branch must be bootable on its own.
 
 ## Consequences
 - **+** "Use 2 cups of honey" draws 678 g from a 1 kg jar instead of reporting a shortfall.

@@ -26,14 +26,14 @@ startup, so the container dies before serving a request. So this points at 0012
 to stay green and bootable on its own, and is re-pointed to 0013 at merge.
 
 Revision ID: 0014_product_food_identity
-Revises: 0012_api_token_access (see the note above)
+Revises: 0013_product_allergens (see the note above)
 Create Date: 2026-10-19
 """
 import sqlalchemy as sa
 from alembic import op
 
 revision = "0014_product_food_identity"
-down_revision = "0012_api_token_access"
+down_revision = "0013_product_allergens"
 branch_labels = None
 depends_on = None
 

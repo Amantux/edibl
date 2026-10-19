@@ -116,7 +116,12 @@ def plan_consumption(lots, amount, demand_unit=None, policy=PREFER_OPEN_FEFO):
             # the take puts both on one scale, makes the planner's arithmetic
             # self-consistent, and makes over-drawing structurally impossible:
             # `remaining < avail / factor` implies `remaining * factor < avail`,
-            # so the take can never exceed the lot and needs no clamp.
+            # so the take can never exceed the lot BEFORE ROUNDING and needs no
+            # clamp. The qualifier is load-bearing: `round(take_lot, 4)` below
+            # can land ~6e-6 above `avail` (measured over 3M boundary trials),
+            # which `consume_lot` clamps — as it always has for the same-unit
+            # branch. The arithmetic is exact; the emitted Pick is rounded, and
+            # a comment should not promise more than the code delivers.
             #
             # The factor is `convert_(1, ...)` because the conversion is linear
             # (grams = amount x a per-food factor) — verified over the whole

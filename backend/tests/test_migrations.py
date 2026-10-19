@@ -31,6 +31,25 @@ def _head():
     return ScriptDirectory.from_config(cfg).get_current_head()
 
 
+def test_the_migration_graph_has_exactly_one_head():
+    """Two heads is a BOOT failure, not a CI nag.
+
+    `app/__init__.py` runs `command.upgrade(cfg, "head")` in-process at startup,
+    and Alembic raises on an ambiguous head — so a branched graph means the
+    container does not come up at all. The way it happens is mundane: two
+    migrations authored in parallel off the same parent, each correct on its own
+    branch and only broken once both land. `get_current_head()` itself raises on
+    a branch, so assert the count rather than trusting it to return something.
+    """
+    backend = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cfg = AlembicConfig(os.path.join(backend, "alembic.ini"))
+    cfg.set_main_option("script_location", os.path.join(backend, "migrations"))
+
+    heads = ScriptDirectory.from_config(cfg).get_heads()
+
+    assert len(heads) == 1, f"migration graph has branched: {heads}"
+
+
 def test_fresh_db_is_at_head(app):
     # create_app already migrated the fresh temp DB.
     with app.app_context():

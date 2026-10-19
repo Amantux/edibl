@@ -1,7 +1,10 @@
 # ADR-0005: foodcore is the shared food-reference source; its verdicts stay beside Edibl's lexicon, not inside it
 
-**Status:** accepted · **Date:** 2026-10-18 · **Implemented:** the seam only — see
-*Reachability* below. Neither half has a production consumer yet.
+**Status:** accepted · **Date:** 2026-10-18 · **Updated:** 2026-10-19 (allergen
+persistence — see that section; the UI prohibition in *Reachability* is lifted).
+**Implemented:** the allergen half end-to-end (stored on `Product`, served on
+`product_out`, rendered on the product sheet). `convert_for_food` is still the
+seam only and has no production consumer.
 
 ## Context
 Edibl could not answer two food questions. `quantity.convert` refuses mass↔volume because it
@@ -46,18 +49,46 @@ State this plainly, because the code reads as a shipped feature and is not one:
 - **`convert_for_food` has no caller.** The only references are its definition, its tests and
   the comment in `inventory/selection.py` explaining why selection does not use it. It is the
   seam the first real caller will use, not a change to any current answer.
-- **The allergen block reaches the barcode *suggestion* only.** `GET /products/barcode/<code>`
-  returns it for a code you do **not** already own; the `found: true` branch serialises a
-  `Product`, which has no allergen column, so the first scan of a barcode carries the
-  declaration and every scan after you have added the product carries nothing. No frontend,
-  MCP or HA surface reads it. Persisting it is a schema change and gets its own review — and
-  that asymmetry is the reason to do it rather than leave this as is. **No UI may be built
-  against this block until the `found: true` branch carries it** — a block that appears only
-  for products you do *not* own is the one shape that makes `unknown` read as "nothing to
-  worry about".
+- ~~**The allergen block reaches the barcode *suggestion* only.**~~ **RESOLVED** — see
+  *Allergen persistence* below. The block reached `GET /products/barcode/<code>` only for a
+  code you did **not** already own, because the `found: true` branch serialises a `Product`
+  and `Product` had no allergen column. The prohibition this bullet carried ("no UI until the
+  `found: true` branch carries it") is **lifted**: the branch now carries it.
 - **Only `measured`/`declared`/`calculated` conversions are returned.** foodcore labels every
   per-item count weight (a clove, a slice) `estimated`, and a bare float cannot say so, so
   those refuse. Lifting that means returning the `Outcome`, together with the unit allow-list.
+
+## Allergen persistence (added 2026-10-19, migration `0013_product_allergens`)
+The asymmetry above is fixed; this section records the decisions that fixing it forced.
+
+- **Stored on `Product`, in three columns.** `label_allergens` (JSON) holds the verdicts,
+  `allergen_ruleset_version` and `allergen_source` record what produced them and where they
+  came from. The version is denormalised out of the blob so a ruleset bump can *find* the
+  rows it stranded without parsing every product's JSON.
+- **`NULL` means never screened, and that is not "screened, nothing found".** A screened
+  product stores an explicit verdict for every ruleset key, so a label declaring nothing is
+  twelve `unknown` verdicts — never an empty list. Both states stay expressible in storage
+  *and* render differently: never-screened gets a notice and no verdict rows, a label that
+  declared nothing gets a caveat paragraph, the rows, and the date it was read.
+- **A verdict with no ruleset version is refused on write and read as never-screened.** It
+  cannot be re-interpreted against the rules that produced it, which makes it worse than no
+  verdict: it looks like data and cannot be checked.
+- **Named `label_allergens`, not `allergens`.** `FoodConcept.allergens` is Edibl's material
+  lexicon and the two must not be merged (the coconut case above). The column name is the
+  cheapest place to keep that boundary visible.
+- **Served inline on `product_out`, NOT from a dedicated endpoint.** myMeal splits recipe
+  safety out for four reasons; three are consequences of myMeal screening ON READ while Edibl
+  captures AT SCAN, so they do not transfer — Edibl has no Product versioning to poison, no
+  per-render CPU cost (the verdicts are stored), and no live engine that can be "unavailable"
+  at read time (a `NULL` column says "never screened" as a value, not an error). The fourth,
+  a stale verdict travelling in an export, is answered by the block carrying its own
+  `rulesetVersion` and `screenedAt`. Inline is also the more consistent choice *within* Edibl:
+  `nutrition` is already an OFF-derived, stored, provenance-carrying blob served this way.
+- **The backfill's "already attempted" marker lives on `allergen_source`, not in the verdict
+  column.** Nutrition marks a fruitless lookup with a `{}` sentinel; allergens cannot, because
+  a record that exists and says nothing renders as a screened product with nothing found.
+- **Still not reconciled with nutrition.** The licence-and-precedence judgement below is
+  untouched by this change.
 
 ## Consequences
 - **+** "A cup of honey" is 339 g instead of a refusal — and "rice" is still a refusal,

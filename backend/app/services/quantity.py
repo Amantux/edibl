@@ -147,34 +147,81 @@ def convert_for_food(value, from_unit, to_unit, food) -> Optional[float]:
         return direct
     fu = (from_unit or "count").strip().lower()
     tu = (to_unit or "count").strip().lower()
-    # An ALLOW-list of the dimensions Edibl itself treats as measurements —
-    # NOT a block-list of the ones it doesn't. `dimension_of` gives every
-    # unregistered unit its own `other:` dimension, so a block-list hands all
-    # of them to a library with a wider unit vocabulary than ours, which is not
-    # theoretical: foodcore reads "c" as cup (in a pantry it is at least as
-    # likely to be a can), "t" as tsp (the classic tsp/tbsp ambiguity, a 3x
-    # error) and "#" as lb. A "pack" or a "can" has no standard size, and
-    # "half"/"low"/"presence" are not amounts at all.
-    #
-    # MASS and VOLUME only — COUNT is deliberately absent, for the same reason
-    # food-count measures ("clove", "slice") are: every path from a count to a
-    # weight comes back from foodcore as method="estimated", a convention rather
-    # than a published weight, and `convert_amount` refuses those because a
-    # float cannot say it is an estimate (ADR-0002). Listing a unit whose answer
-    # is always refused would just be two rules disagreeing, and it costs a
-    # pointless food resolution per call. Both move together when a caller can
-    # carry an estimate.
-    #
-    # The test asserts the seam is never consulted for a rejected unit, so this
-    # cannot decay into a refusal that merely happens to come from foodcore.
+    if not (food or "").strip():
+        return None
+    operands = _reference_operands(value, fu, tu)
+    if operands is None:
+        return None
+    from .food_reference import convert_amount  # local: the only foodcore importer
+    return convert_amount(operands[2], operands[0], operands[1], food)
+
+
+def _reference_operands(value, fu, tu):
+    """Normalised ``(fu, tu, value)`` when the reference data MAY be consulted
+    for this conversion, else None.
+
+    This lives in ONE place because `convert_for_food` and
+    `convert_for_food_key` differ only in how they name the food and must not
+    differ in which units they are willing to cross. Two copies is how "a can is
+    not a cup" ends up enforced on one entry point only.
+
+    An ALLOW-list of the dimensions Edibl itself treats as measurements — NOT a
+    block-list of the ones it doesn't. `dimension_of` gives every unregistered
+    unit its own `other:` dimension, so a block-list hands all of them to a
+    library with a wider unit vocabulary than ours, which is not theoretical:
+    foodcore reads "c" as cup (in a pantry it is at least as likely to be a
+    can), "t" as tsp (the classic tsp/tbsp ambiguity, a 3x error) and "#" as lb.
+    A "pack" or a "can" has no standard size, and "half"/"low"/"presence" are
+    not amounts at all.
+
+    MASS and VOLUME only — COUNT is deliberately absent, for the same reason
+    food-count measures ("clove", "slice") are: every path from a count to a
+    weight comes back from foodcore as method="estimated", a convention rather
+    than a published weight, and `convert_amount` refuses those because a float
+    cannot say it is an estimate (ADR-0002). Listing a unit whose answer is
+    always refused would just be two rules disagreeing, and it costs a pointless
+    food resolution per call. Both move together when a caller can carry an
+    estimate.
+
+    The test asserts the seam is never consulted for a rejected unit, so this
+    cannot decay into a refusal that merely happens to come from foodcore.
+    """
     for unit in (fu, tu):
         if dimension_of(unit) not in (MASS, VOLUME):
             return None
     v = _to_decimal(value)
-    if v is None or not (food or "").strip():
+    return None if v is None else (fu, tu, float(v))
+
+
+def convert_for_food_key(value, from_unit, to_unit, food_key) -> Optional[float]:
+    """`convert_for_food`, but for a food identity that was PERSISTED earlier.
+
+    Same contract, same refusals, one difference that is the entire point:
+    `food_key` is a foodcore dataset key stored on the product (see
+    `Product.food_key`), so the food is found by exact lookup rather than by
+    matching free text. That is what makes a density-aware conversion legal in a
+    consumption path — ADR-0005's obstacle was never the arithmetic, it was
+    resolving a name at the moment of a deduction (the guess ADR-0003 reserves
+    for the matching service). With the identity already chosen, no guess is
+    made here at all.
+
+    An empty key, or one the current dataset no longer knows, returns None —
+    i.e. exactly what `convert` would have returned, which is a refusal across
+    dimensions. A dataset that stopped recognising a key is a reason to stop
+    answering, not to fall back to a name match.
+    """
+    direct = convert(value, from_unit, to_unit)
+    if direct is not None:
+        return direct
+    if not (food_key or "").strip():
         return None
-    from .food_reference import convert_amount  # local: the only foodcore importer
-    return convert_amount(float(v), fu, tu, food)
+    fu = (from_unit or "count").strip().lower()
+    tu = (to_unit or "count").strip().lower()
+    operands = _reference_operands(value, fu, tu)
+    if operands is None:
+        return None
+    from .food_reference import convert_amount_for_key  # local: the only importer
+    return convert_amount_for_key(operands[2], operands[0], operands[1], food_key)
 
 
 @dataclass(frozen=True)

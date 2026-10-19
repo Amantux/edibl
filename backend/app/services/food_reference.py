@@ -82,6 +82,12 @@ _lock = threading.Lock()
 _dataset_cache: dict[str, object] = {}
 _dataset_failed_at: dict[str, float] = {}
 _food_cache: dict[str, object] = {}
+# Keyed lookups cache SEPARATELY from name resolutions. One dict holding both
+# would be two keyspaces sharing a namespace: a product named "key:usda:169640"
+# and the key "usda:169640" are different questions, and any prefix scheme that
+# merges them can be collided by a name a user is free to type. Separate dicts
+# make that impossible rather than unlikely.
+_key_cache: dict[str, object] = {}
 
 
 def reset_cache() -> None:
@@ -90,6 +96,7 @@ def reset_cache() -> None:
         _dataset_cache.clear()
         _dataset_failed_at.clear()
         _food_cache.clear()
+        _key_cache.clear()
     _off_allergen_states.cache_clear()
 
 
@@ -298,6 +305,185 @@ def _resolve_food(text: str):
     return record
 
 
+# --------------------------------------------------------------------------- #
+# A PERSISTED food identity (Product.food_key) — chosen once, looked up by key
+# --------------------------------------------------------------------------- #
+# Why this half exists at all: `_resolve_food` turns free text into a food, and
+# doing that at the moment of a deduction is the guess ADR-0003 reserves for the
+# matching service. Everything below works from a key the host already stored,
+# so a conversion in a consumption path performs an exact lookup and no
+# matching whatsoever. Resolution stays a separate, deliberate step.
+
+# A foodcore key is "<provider>:<source id>". Capped before it is used as a
+# dict key or reflected into a response: it arrives from the database, but it
+# got there from an API body.
+_KEY_MAX = 128
+
+
+def dataset_version(provider: str = "") -> str:
+    """The snapshot version to record beside a key, or "" when unknown.
+
+    ``SourceRecord.dataset_version`` is upstream's own release id ("SR Legacy
+    2018-04"). It is stored with a key so a later dataset rebuild is detectable:
+    a key is only meaningful against the snapshot it was chosen in.
+    """
+    ds = _dataset()
+    if ds is None:
+        return ""
+    try:
+        sources = list(ds.sources)
+    except Exception:  # noqa: BLE001 - never break a caller over provenance
+        return ""
+    want = (provider or "").strip().lower()
+    matches = [s for s in sources if not want or s.provider == want]
+    if not matches:
+        return ""
+    # Mirror foodcore's OWN snapshot-precedence rule (`Dataset._source_for`:
+    # most recent wins, tie-broken on dataset_version). `sources` arrives
+    # ordered `ORDER BY provider, dataset_version` ASC, so taking the first
+    # match returned the LEXICOGRAPHICALLY SMALLEST version — and a file holding
+    # both "SR Legacy 2018-04" and a newer "SR Legacy 2019-04" would convert
+    # against 2019-04 while reporting 2018-04. `key_is_current` would then call
+    # a re-pointed key current: the staleness check failing OPEN, which is the
+    # one direction it must never fail. Disagreeing with the library about which
+    # snapshot is in force is how a version column becomes decoration.
+    best = max(matches, key=lambda s: (s.retrieved_at, s.dataset_version))
+    return str(best.dataset_version)
+
+
+def _food_record(key: str):
+    """The ``FoodRecord`` for a stored key, or None. An EXACT lookup, never a match.
+
+    None when the key is unknown to the current dataset — which is exactly what
+    a dataset change looks like, and the honest answer is "we no longer know
+    what this product is", i.e. fall back to unit arithmetic.
+    """
+    k = (key or "").strip()[:_KEY_MAX]
+    if not k:
+        return None
+    ds = _dataset()
+    if ds is None:
+        return None
+    with _lock:
+        if k in _key_cache:
+            return _key_cache[k]
+    record = None
+    try:
+        record = ds.food_record(k)
+    except Exception as exc:  # noqa: BLE001 - a lookup must never break a caller
+        _LOGGER.debug("food key lookup failed (%s)", type(exc).__name__)
+    with _lock:
+        if len(_key_cache) >= _FOOD_CACHE_MAX:
+            # Clear rather than evict: a memo of a pure lookup over an immutable
+            # dataset costs a repeat query and nothing else.
+            _key_cache.clear()
+        _key_cache[k] = record
+    return record
+
+
+def identity_for_key(key: str) -> dict | None:
+    """What a stored key currently names, for display, or None if unknown now.
+
+    The None case is the user-visible one that matters: it means the stored
+    identity no longer resolves in the dataset this build ships, and the UI must
+    say so rather than show a blank.
+    """
+    record = _food_record(key)
+    if record is None:
+        return None
+    return {"foodKey": record.key, "name": record.description,
+            "provider": record.provider,
+            "datasetVersion": dataset_version(record.provider)}
+
+
+def resolve_identity(text: str) -> dict | None:
+    """A free-text name as a CONFIDENT food identity, or None. Never guesses.
+
+    None covers every uncertain case — no dataset, an unknown name, and above
+    all an AMBIGUOUS one ("rice" is raw or cooked, 185 g vs 158 g per cup).
+    A caller must persist nothing on None and offer ``candidates`` instead:
+    an identity stored from a guess is inherited silently by every conversion
+    that follows, which is strictly worse than having no identity at all.
+    """
+    record = _resolve_food(text)
+    if record is None:
+        return None
+    return {"foodKey": record.key, "name": record.description,
+            "provider": record.provider,
+            "datasetVersion": dataset_version(record.provider)}
+
+
+def candidates(text: str, limit: int = 5) -> list[dict]:
+    """Foods a name could mean, for a human to choose between. Decides nothing.
+
+    This is the LOW-confidence branch's output: ADR-0003 lets a READ aggregate
+    plausible matches and explain the ambiguity, and choosing among these is an
+    explicit human act. ``states`` is carried because it is what actually
+    settles a USDA ambiguity — "raw" vs "cooked" is the whole reason "rice"
+    refuses.
+    """
+    name = (text or "").strip().lower()
+    if not name:
+        return []
+    ds = _dataset()
+    if ds is None:
+        return []
+    try:
+        match = ds.resolve_food(name)
+        rows = [rec for rec, _score in match.candidates[:max(1, int(limit))]]
+        if not rows:
+            rows = []
+            for row in ds.search_foods(name, limit=max(1, int(limit))):
+                record = ds.food_record(row.key)
+                if record is not None:
+                    rows.append(record)
+    except Exception as exc:  # noqa: BLE001 - a lookup must never break a caller
+        _LOGGER.debug("food candidate search failed (%s)", type(exc).__name__)
+        return []
+    return [{"foodKey": r.key, "name": r.description, "provider": r.provider,
+             "states": sorted(r.states),
+             "datasetVersion": dataset_version(r.provider)} for r in rows]
+
+
+def key_is_current(key: str, stored_version: str) -> bool:
+    """Whether a stored identity still names the snapshot it was chosen in.
+
+    This is what makes ``Product.food_key_dataset_version`` load-bearing rather
+    than decorative. foodcore keys are provider ids, and a rebuilt dataset may
+    legitimately re-point one — so an identity chosen against "SR Legacy
+    2018-04" is evidence about that file and no other. On a mismatch the caller
+    must fall back to plain unit arithmetic (and to its refusal) and ask a human
+    to re-confirm; silently converting against a key that now means something
+    else is the exact failure this column exists to prevent.
+
+    A blank stored version is treated as current: it means the identity predates
+    versioning, and the key lookup itself still has to succeed.
+    """
+    if not (key or "").strip():
+        return False
+    stored = (stored_version or "").strip()
+    if not stored:
+        return True
+    provider = key.split(":", 1)[0] if ":" in key else ""
+    current = dataset_version(provider)
+    # No readable version means no dataset, in which case the lookup refuses
+    # anyway — don't invent a mismatch on top of an outage.
+    return not current or current == stored
+
+
+def convert_amount_for_key(value: float, from_unit: str, to_unit: str,
+                           key: str) -> float | None:
+    """``convert_amount``, but for a food identity the host already stored.
+
+    The ONLY difference is how the food is found: an exact ``food_record(key)``
+    lookup instead of resolving a name. Every refusal rule is the same one,
+    shared below — in particular ``method="estimated"`` still refuses, because a
+    persisted identity makes the food certain and changes nothing about what a
+    bare float can say about a convention (ADR-0005).
+    """
+    return _convert_with_record(value, from_unit, to_unit, _food_record(key))
+
+
 def convert_amount(value: float, from_unit: str, to_unit: str,
                    food: str) -> float | None:
     """``value`` in ``from_unit`` as ``to_unit`` for one specific ``food``, or None.
@@ -321,7 +507,18 @@ def convert_amount(value: float, from_unit: str, to_unit: str,
     actually represent an estimate should widen this seam to return the
     ``Outcome`` — not relax the check.
     """
-    record = _resolve_food(food)
+    return _convert_with_record(value, from_unit, to_unit, _resolve_food(food))
+
+
+def _convert_with_record(value: float, from_unit: str, to_unit: str,
+                         record) -> float | None:
+    """The conversion itself, once a food is in hand however it was found.
+
+    ONE body for both entry points on purpose: `convert_amount` resolves a name
+    and `convert_amount_for_key` looks up a stored key, but what counts as a
+    refusal must not depend on which of them asked. A second copy is how the
+    `estimated` guard ends up enforced on one path and not the other.
+    """
     if record is None:
         return None
     ds = _dataset()

@@ -176,7 +176,15 @@ def product_out(p):
         # services/allergens.py and the commit that added this. None is "we have
         # not read a label", never "free from"; a screened product with nothing
         # declared comes back as a real block of `unknown` verdicts instead.
-        "allergens": allergens_block_out(p),
+        "allergens": allergens_block_out(p),        # The PERSISTED food identity, exactly as stored — null when there is
+        # none, which is the default and the safe state. Deliberately NOT
+        # resolved to its name here: that needs foodcore's dataset, and making
+        # every product list expand a 10 MB snapshot to decorate rows would be a
+        # real cost for a string most callers ignore. `GET /products/<id>/
+        # food-identity` resolves it and reports whether it is still current.
+        "foodIdentity": ({"foodKey": p.food_key,
+                          "datasetVersion": p.food_key_dataset_version or ""}
+                         if getattr(p, "food_key", "") else None),
         "createdAt": iso(p.created_at),
     }
 

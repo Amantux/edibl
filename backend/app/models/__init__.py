@@ -279,7 +279,27 @@ class Product(IDMixin, TimestampMixin, db.Model):
     # non-NULL blob with a blank version is treated as NOT SCREENED on read; see
     # services.allergens.stored_allergens, which is the only reader.
     allergen_ruleset_version: Mapped[str] = mapped_column(String(64), default="")
-    allergen_source: Mapped[str] = mapped_column(String(32), default="")
+    allergen_source: Mapped[str] = mapped_column(String(32), default="")    # This product's identity in foodcore's reference dataset, chosen ONCE and
+    # persisted (ADR-0005). It is what makes a density-aware conversion legal
+    # here: `quantity.convert` refuses mass<->volume because it has no food, and
+    # resolving the product's free text against USDA *at the moment of a
+    # deduction* would be the guess ADR-0003 reserves for the matching service.
+    # A stored key is looked up with `Dataset.food_record(key)` — an exact
+    # lookup, never a name match — so no deduction ever depends on a guess.
+    #
+    # "" means NO identity, and that is the safe, default and expected state:
+    # conversions fall back to `convert` and to today's refusal. It is only ever
+    # set from a CONFIDENT resolution or an explicit human choice; an ambiguous
+    # name stores nothing, because an identity stored from a guess is worse than
+    # none — every future conversion would inherit it silently.
+    food_key: Mapped[str] = mapped_column(String(128), default="", server_default="")
+    # The dataset snapshot that resolved `food_key` (foodcore
+    # `SourceRecord.dataset_version`, e.g. "SR Legacy 2018-04"). Stored so a
+    # later dataset change is DETECTABLE rather than silent: a key is only
+    # meaningful against the snapshot it was chosen in, and foodcore's keys are
+    # provider ids that a rebuild can legitimately re-point.
+    food_key_dataset_version: Mapped[str] = mapped_column(
+        String(64), default="", server_default="")
     notes: Mapped[str] = mapped_column(Text, default="")
     group_id: Mapped[str] = mapped_column(String(36), ForeignKey("groups.id"))
     group = relationship("Group", back_populates="products")

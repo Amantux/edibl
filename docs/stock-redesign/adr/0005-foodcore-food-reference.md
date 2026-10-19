@@ -34,27 +34,32 @@ that logic now lives in `foodcore`, a dependency-free library both apps install.
   whether a state is acceptable depends on a policy only the caller holds.
 
 ## Not decided here (deliberately)
-- **`inventory/selection.py` keeps using `convert`.** A lot is a specific product, so a
-  food-aware conversion is arguably right there, and foodcore's two directions do invert
-  exactly (both come off the same published portion), so the round-trip is not the obstacle.
-  The obstacle is identity: the only food name available is the product's free text, resolved
-  against USDA *at the moment of a deduction* — the guess ADR-0003 reserves for the matching
-  service. The prerequisite is a food identity chosen once and persisted on `Product`.
+- ~~**`inventory/selection.py` keeps using `convert`.**~~ **Superseded — see ADR-0006.**
+  The identity prerequisite named here was built (`Product.food_key` +
+  `food_key_dataset_version`), and selection now converts food-aware for products that carry
+  one. **One claim in the original text was wrong and is corrected there:** "foodcore's two
+  directions do invert exactly (both come off the same published portion)" is true of honey —
+  the only food the round-trip test covered — and false in general. USDA publishes
+  per-food portions that contradict each other (alfalfa sprouts: 1 cup = 33 g *and*
+  1 tbsp = 3 g, where 16 tbsp/cup implies 48 g), and 4.7% of mass↔volume round-trips over the
+  shipped dataset do not invert, the worst by 50%. The round-trip was removed rather than
+  bounded.
 - **Nutrition stays as it is.** `_nutrition_from_off` and `foodcore.nutrition` overlap, and
   reconciling them means ranking an ODbL-licensed declared label value against a CC0-licensed
   measured one. That is a licence and precedence judgement, not an integration; its own task.
 
 ## Reachability — what this does NOT yet do
 State this plainly, because the code reads as a shipped feature and is not one:
-- **`convert_for_food` has no caller.** The only references are its definition, its tests and
-  the comment in `inventory/selection.py` explaining why selection does not use it. It is the
-  seam the first real caller will use, not a change to any current answer.
+- ~~**`convert_for_food` has no caller.**~~ **Superseded by ADR-0006**: `convert_for_food_key`
+  — the same seam keyed on a persisted identity rather than free text — is called by
+  `inventory/selection.py`. `convert_for_food` (the free-text entry point) still has no
+  production caller, and deliberately so: resolving a name inside a consumption path is the
+  thing ADR-0003 forbids.
 - ~~**The allergen block reaches the barcode *suggestion* only.**~~ **RESOLVED** — see
   *Allergen persistence* below. The block reached `GET /products/barcode/<code>` only for a
   code you did **not** already own, because the `found: true` branch serialises a `Product`
   and `Product` had no allergen column. The prohibition this bullet carried ("no UI until the
-  `found: true` branch carries it") is **lifted**: the branch now carries it.
-- **Only `measured`/`declared`/`calculated` conversions are returned.** foodcore labels every
+  `found: true` branch carries it") is **lifted**: the branch now carries it.- **Only `measured`/`declared`/`calculated` conversions are returned.** foodcore labels every
   per-item count weight (a clove, a slice) `estimated`, and a bare float cannot say so, so
   those refuse. Lifting that means returning the `Outcome`, together with the unit allow-list.
 

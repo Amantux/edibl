@@ -46,7 +46,18 @@ function block(states = {}, extra = {}) {
  */
 async function render(props) {
   const html = await renderToString(createSSRApp(AllergenPanel, props))
-  return html.replace(/<!--[\s\S]*?-->/g, '')
+  // Repeat to a fixed point rather than a single pass: one pass over
+  // `<!--<!-- x -->-->` leaves a stray `-->` behind. Nothing here is sanitizing
+  // untrusted input — this is our own SSR output being normalised for a string
+  // assertion — but a half-stripped string would make an assertion match for the
+  // wrong reason, which is the bug that matters in a test.
+  let out = html
+  let prev
+  do {
+    prev = out
+    out = out.replace(/<!--[\s\S]*?-->/g, '')
+  } while (out !== prev)
+  return out
 }
 
 describe('AllergenPanel', () => {

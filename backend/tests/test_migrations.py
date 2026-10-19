@@ -45,7 +45,23 @@ def test_the_migration_graph_has_exactly_one_head():
     cfg = AlembicConfig(os.path.join(backend, "alembic.ini"))
     cfg.set_main_option("script_location", os.path.join(backend, "migrations"))
 
-    heads = ScriptDirectory.from_config(cfg).get_heads()
+    # Resolve the graph FIRST and report a dangling parent in its own words.
+    # ScriptDirectory walks the graph eagerly, so a revision naming a
+    # down_revision that does not exist raises a bare `KeyError: '0013_...'`
+    # here — before any assertion runs — and that traceback says nothing about
+    # which file is wrong or why every other test in the suite also just errored.
+    # This is the common case when two migrations are authored in parallel.
+    try:
+        scripts = ScriptDirectory.from_config(cfg)
+        heads = scripts.get_heads()
+    except KeyError as exc:
+        raise AssertionError(
+            f"a migration names a down_revision that does not exist: {exc}. "
+            "Every revision in migrations/versions must have a parent present "
+            "in this checkout — Alembic cannot resolve the graph otherwise, and "
+            "app/__init__.py upgrades in-process at startup, so this is a boot "
+            "failure rather than a test-only problem."
+        ) from None
 
     assert len(heads) == 1, f"migration graph has branched: {heads}"
 

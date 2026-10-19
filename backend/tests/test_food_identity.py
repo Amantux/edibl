@@ -112,15 +112,24 @@ def test_the_newest_snapshot_wins_when_a_provider_has_several(monkeypatch):
     newest (`Dataset._source_for` picks max by retrieved_at). `key_is_current`
     would then call a re-pointed key current — the staleness check failing
     OPEN, the one direction it must never fail."""
-    old = type("S", (), {"provider": "usda", "dataset_version": "SR Legacy 2018-04",
-                         "retrieved_at": "2018-04-01"})()
-    new = type("S", (), {"provider": "usda", "dataset_version": "SR Legacy 2019-04",
-                         "retrieved_at": "2019-04-01"})()
-    monkeypatch.setattr(fr, "_dataset",
-                        lambda: type("D", (), {"sources": (old, new)})())
+    def source(version, retrieved):
+        return type("S", (), {"provider": "usda", "dataset_version": version,
+                              "retrieved_at": retrieved})()
 
-    assert fr.dataset_version("usda") == "SR Legacy 2019-04"
-    assert fr.key_is_current(HONEY, "SR Legacy 2018-04") is False
+    # The third row is what makes this a test rather than a change-detector:
+    # its version sorts LOWEST while its retrieval is NEWEST (a 2018 release
+    # re-pulled in 2020). Ordering on dataset_version alone would pick
+    # "SR Legacy 2019-04" and pass the first assertion by luck, so the rule
+    # under test — most recently RETRIEVED wins, as foodcore's own
+    # `_source_for` does — is the only one that satisfies both.
+    sources = (source("SR Legacy 2018-04", "2018-04-01"),
+               source("SR Legacy 2019-04", "2019-04-01"),
+               source("SR Legacy 2017-09", "2020-01-01"))
+    monkeypatch.setattr(fr, "_dataset",
+                        lambda: type("D", (), {"sources": sources})())
+
+    assert fr.dataset_version("usda") == "SR Legacy 2017-09"
+    assert fr.key_is_current(HONEY, "SR Legacy 2019-04") is False
 
 
 def test_an_unknown_key_resolves_to_nothing():
@@ -193,47 +202,55 @@ def test_a_fully_drawn_lot_takes_its_own_quantity_not_a_round_trip(version):
     assert picks[0].take <= 10.0
 
 
-def test_a_partial_draw_can_never_exceed_the_lot(version):
-    """4 tbsp of alfalfa is 12 g by the measured tbsp portion, but the lot holds
-    10 g. The availability check came from the opposite direction and the two
-    disagree, so the take is clamped. Over-drawing is the one outcome this
-    module must never produce."""
-    lot = _Lot(10, "g", ALFALFA, version)
+def test_a_draw_never_exceeds_the_lot(version):
+    """4 tbsp of alfalfa is 12 g by the measured tbsp portion; the lot holds 10.
+
+    Over-drawing is the one outcome this module must never produce, and with
+    availability and take derived from one factor it is structurally impossible
+    — `remaining < avail / factor` implies `remaining * factor < avail`."""
     assert convert_for_food_key(4, "tbsp", "g", ALFALFA) == pytest.approx(12.0)
 
-    picks, _ = selection.plan_consumption([lot], 4, demand_unit="tbsp")
-
-    assert picks[0].take == pytest.approx(10.0)
-
-
-def test_a_clamped_draw_reports_the_shortfall_it_actually_left(version):
-    """The other half of the clamp, and the one that was missing.
-
-    Clamping the take without also reducing what it CREDITS drives `remaining`
-    to zero: the planner then reports shortfall=0 and stops. This lot owes 12 g
-    for 4 tbsp and holds 10, so 0.67 tbsp is genuinely short and must be said
-    so. A silent under-draw is as wrong as an over-draw."""
-    picks, shortfall = selection.plan_consumption(
+    picks, _ = selection.plan_consumption(
         [_Lot(10, "g", ALFALFA, version)], 4, demand_unit="tbsp")
 
     assert picks[0].take == pytest.approx(10.0)
-    assert shortfall == pytest.approx(0.667, abs=0.01)
 
 
-def test_a_clamped_draw_still_spills_to_the_next_lot(version):
-    """Same disagreement, but there IS more stock. The planner must carry the
-    uncredited demand to the next lot instead of declaring itself finished —
-    the bug was a 4 tbsp request taking 10 g and leaving a 1 kg lot untouched
-    while reporting nothing short."""
+@pytest.mark.parametrize("demand,shortfall", [(4, 0.6667), (6, 2.6667)])
+def test_a_lot_that_cannot_cover_the_demand_reports_the_true_shortfall(
+        version, demand, shortfall):
+    """A 10 g lot of alfalfa is worth 10/3 = 3.333 tbsp, so both of these are
+    short by `demand - 3.333` — a domain fact off the measured tbsp portion.
+
+    Both parametrisations have been wrong at some point, in the SAME way and
+    for the same reason: crediting the lot with a figure taken from the reverse
+    conversion (4.85 tbsp for 10 g) instead of the forward one. At 4 tbsp that
+    was hidden by a clamp; at 6 tbsp it reported 1.15 and drew 13.4 g of the
+    18 g owed. Keeping both pins the two branches to ONE answer."""
+    picks, reported = selection.plan_consumption(
+        [_Lot(10, "g", ALFALFA, version)], demand, demand_unit="tbsp")
+
+    assert picks[0].take == pytest.approx(10.0)
+    assert reported == pytest.approx(shortfall, abs=0.001)
+
+
+@pytest.mark.parametrize("demand,grams", [(4, 12.0), (6, 18.0)])
+def test_an_exhausted_lot_spills_the_rest_of_the_demand(version, demand, grams):
+    """The amount that leaves the pantry must equal the amount asked for.
+
+    This is the assertion that catches a mis-credited lot however it is
+    mis-credited: a lot credited with more than it is worth drives `remaining`
+    to zero early, so the planner declares itself finished while the pantry is
+    short. The 6 tbsp case did exactly that — 13.4 g drawn of 18 g owed, with a
+    1 kg lot sitting untouched and shortfall reported as 0."""
     lots = [_Lot(10, "g", ALFALFA, version, created_at=1),
             _Lot(1000, "g", ALFALFA, version, created_at=2)]
 
-    picks, shortfall = selection.plan_consumption(lots, 4, demand_unit="tbsp")
+    picks, shortfall = selection.plan_consumption(lots, demand, demand_unit="tbsp")
 
     assert len(picks) == 2
     assert shortfall == 0
-    # 4 tbsp is 12 g, and that is what leaves the pantry across both lots.
-    assert sum(p.take for p in picks) == pytest.approx(12.0, abs=0.01)
+    assert sum(p.take for p in picks) == pytest.approx(grams, abs=0.01)
 
 
 def test_a_stale_identity_falls_back_to_plain_conversion(version):

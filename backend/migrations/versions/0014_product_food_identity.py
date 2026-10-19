@@ -18,15 +18,22 @@ point of the default: a guessed identity is worse than none.
 Idempotent + dialect-safe: skipped when the columns already exist (fresh DBs get
 them from the 0001 metadata baseline); real downgrade drops both.
 
+MERGE NOTE — the parent must move to `0013_product_allergens`. `0013` is authored
+on a sibling branch and lands FIRST (coordinator's call), but naming a revision
+that does not exist yet leaves this branch unbootable: Alembic raises KeyError
+resolving the graph, and `app/__init__.py` runs `upgrade head` in-process at
+startup, so the container dies before serving a request. So this points at 0012
+to stay green and bootable on its own, and is re-pointed to 0013 at merge.
+
 Revision ID: 0014_product_food_identity
-Revises: 0013_product_allergens
+Revises: 0012_api_token_access (see the note above)
 Create Date: 2026-10-19
 """
 import sqlalchemy as sa
 from alembic import op
 
 revision = "0014_product_food_identity"
-down_revision = "0013_product_allergens"
+down_revision = "0012_api_token_access"
 branch_labels = None
 depends_on = None
 

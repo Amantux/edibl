@@ -94,56 +94,49 @@ def plan_consumption(lots, amount, demand_unit=None, policy=PREFER_OPEN_FEFO):
         lu = (s.unit or "").strip().lower() or None
         avail = s.quantity or 0
         if du and lu and du != lu:
+            # ONE factor, used for BOTH directions. This is the whole safety
+            # argument of this branch, so it is worth being explicit about:
+            #
+            # The obvious shape asks the converter twice — `avail` into the
+            # demand unit to decide what the lot covers, and `remaining` into
+            # the lot unit to decide the take. Those are opposite directions,
+            # and a food-aware conversion does NOT invert: USDA publishes
+            # per-food portions that contradict each other, so alfalfa sprouts
+            # carry "1 cup = 33 g" AND "1 tbsp = 3 g" though 16 tbsp/cup implies
+            # 48 g. foodcore answers tbsp->g from the tbsp row and g->tbsp from
+            # the cup-derived density, so the two directions disagree by up to
+            # 50% (4.7% of mass<->volume round-trips over the shipped dataset
+            # fail to invert, 0.5% by more than 5%).
+            #
+            # Mixing them is not merely imprecise, it silently LOSES stock: a
+            # 6 tbsp demand against a 10 g lot credited itself 4.85 tbsp (the
+            # reverse scale) for a lot actually worth 3.33 tbsp, so it reported
+            # shortfall=0, drew 13.4 g of the 18 g owed, and never touched the
+            # next lot. Deriving availability from the SAME factor that computes
+            # the take puts both on one scale, makes the planner's arithmetic
+            # self-consistent, and makes over-drawing structurally impossible:
+            # `remaining < avail / factor` implies `remaining * factor < avail`,
+            # so the take can never exceed the lot and needs no clamp.
+            #
+            # The factor is `convert_(1, ...)` because the conversion is linear
+            # (grams = amount x a per-food factor) — verified over the whole
+            # dataset, zero non-linear conversions — so one probe characterises
+            # it exactly. Asking in the demand->lot direction is also the one
+            # that matters: if the demand cannot be expressed in the lot's unit
+            # there is no take to compute, and skipping costs a visible
+            # shortfall rather than a guess.
             convert_ = _converter_for(s)
-            avail_in_demand = convert_(avail, lu, du)
-            if avail_in_demand is None or avail_in_demand <= 0:
+            per_demand_unit = convert_(1, du, lu)   # lot-units per 1 demand-unit
+            if per_demand_unit is None or per_demand_unit <= 0:
                 continue  # incompatible dimension — don't guess
+            avail_in_demand = avail / per_demand_unit
             if remaining >= avail_in_demand:
-                # The whole lot is drawn, so its take is its own quantity — a
-                # FACT, not a conversion. Converting back here used to be a
-                # round-trip, and a round-trip is only safe when the two
-                # directions invert. For plain `convert` they do (exact Decimal
-                # ratios), but for a food-aware conversion they demonstrably do
-                # NOT: USDA publishes per-food portions that disagree with each
-                # other, so alfalfa sprouts are "1 cup = 33 g" AND "1 tbsp =
-                # 3 g" (16 tbsp/cup would make that 48 g). foodcore answers
-                # tbsp->g from the tbsp portion and g->tbsp from the cup-derived
-                # density, and round-tripping the two compounds the discrepancy
-                # — measured across the whole shipped dataset, 4.7% of
-                # mass<->volume round-trips do not invert, 0.5% are off by more
-                # than 5% and the worst (agave syrup, tsp) by 50%. Taking
-                # `avail` directly removes that error class from the deduction
-                # entirely instead of bounding it, and is exactly equivalent for
-                # `convert`, whose round-trip was already exact.
+                # The whole lot is drawn, so the take is its own quantity — a
+                # fact, not a conversion — and it is credited with what that
+                # quantity is actually worth on the same scale.
                 take_lot, take_demand = avail, avail_in_demand
             else:
-                # A PARTIAL draw is a single forward conversion, not a
-                # round-trip: "I need 2 tbsp" -> grams uses the tbsp portion
-                # directly, which is the measured direction.
-                take_lot = convert_(remaining, du, lu)
-                if take_lot is None or take_lot <= 0:
-                    continue
-                take_demand = remaining
-                if take_lot > avail:
-                    # The two directions disagree: the availability check said
-                    # this lot covers `remaining`, but converting the demand
-                    # forward asks for more than the lot holds. Clamp the take —
-                    # over-drawing a lot is the one failure this module must
-                    # never produce — and CREDIT ONLY WHAT `avail` ACTUALLY
-                    # BUYS. Crediting the full `remaining` here (the obvious
-                    # shape) drove `remaining` to 0, so the planner reported
-                    # shortfall=0 and stopped spilling: a 4 tbsp demand took
-                    # 10 g of a lot that owed 12 g and left a 1 kg lot
-                    # untouched, while telling the user nothing was short. A
-                    # silent under-draw is as wrong as an over-draw.
-                    #
-                    # The forward conversion is linear (grams = amount x a
-                    # per-food factor), so inverting it for `avail` is exact and
-                    # — unlike `avail_in_demand`, which came from the direction
-                    # we just decided not to trust — keeps the take and its
-                    # credit on ONE consistent scale.
-                    take_demand = remaining * (avail / take_lot)
-                    take_lot = avail
+                take_lot, take_demand = remaining * per_demand_unit, remaining
             picks.append(Pick(lot=s, take=round(take_lot, 4)))
             remaining = round(remaining - take_demand, 4)
         else:

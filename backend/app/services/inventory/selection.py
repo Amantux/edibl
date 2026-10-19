@@ -48,6 +48,17 @@ def plan_consumption(lots, amount, demand_unit=None, policy=PREFER_OPEN_FEFO):
     (mass vs volume, no density) is SKIPPED — cooking must never guess how much
     of it satisfies the demand. When `demand_unit` is None the old same-unit
     arithmetic is used unchanged."""
+    # Deliberately `convert`, not the food-aware `convert_for_food` (ADR-0005).
+    # A lot IS a specific product, so a density-aware conversion is arguably
+    # right here, and foodcore's two directions do invert exactly — the
+    # round-trip below is not the obstacle. Identity is: the only food name
+    # available is the product's free text, matched against a reference dataset
+    # at the moment of a DEDUCTION, which is the guess ADR-0003 reserves for the
+    # matching service. The prerequisite is a food identity chosen once and
+    # persisted on Product; this call site then becomes correct and the change
+    # is one word. Until then a lot in an incompatible dimension is skipped,
+    # which under-reports what we have (a visible shortfall) rather than
+    # over-drawing stock nobody can put back.
     from ..quantity import convert
     remaining = round(float(amount), 4)  # in demand_unit
     du = (demand_unit or "").strip().lower() or None

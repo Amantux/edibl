@@ -122,6 +122,61 @@ def convert(value, from_unit, to_unit) -> Optional[float]:
     return float(v * ff / ft)
 
 
+def convert_for_food(value, from_unit, to_unit, food) -> Optional[float]:
+    """`convert`, but allowed to cross a dimension when a SPECIFIC food is named.
+
+    `convert` returns None across dimensions because it has no food, and
+    therefore no density — that contract is unchanged and callers that convert
+    into a generic display or target unit must keep using it. This variant is
+    for the sites that know *which* food they are converting: with "honey" in
+    hand, a cup weighs 339 g, and that is a fact rather than a guess.
+
+    `food` is a free-text name, resolved in foodcore's reference dataset by its
+    own confidence-tiered policy, which refuses rather than guesses ("rice" is
+    ambiguous between raw and cooked at 185 g vs 158 g per cup). None on **any**
+    refusal — no food, an ambiguous name, no published weight for the measure,
+    disagreeing preparations, foodcore not installed — so every uncertain case
+    degrades to exactly what `convert` would have returned.
+
+    Within a dimension this is `convert` verbatim: g→kg must stay exact Decimal
+    arithmetic and must not start depending on whether a dataset recognises the
+    food.
+    """
+    direct = convert(value, from_unit, to_unit)
+    if direct is not None:
+        return direct
+    fu = (from_unit or "count").strip().lower()
+    tu = (to_unit or "count").strip().lower()
+    # An ALLOW-list of the dimensions Edibl itself treats as measurements —
+    # NOT a block-list of the ones it doesn't. `dimension_of` gives every
+    # unregistered unit its own `other:` dimension, so a block-list hands all
+    # of them to a library with a wider unit vocabulary than ours, which is not
+    # theoretical: foodcore reads "c" as cup (in a pantry it is at least as
+    # likely to be a can), "t" as tsp (the classic tsp/tbsp ambiguity, a 3x
+    # error) and "#" as lb. A "pack" or a "can" has no standard size, and
+    # "half"/"low"/"presence" are not amounts at all.
+    #
+    # MASS and VOLUME only — COUNT is deliberately absent, for the same reason
+    # food-count measures ("clove", "slice") are: every path from a count to a
+    # weight comes back from foodcore as method="estimated", a convention rather
+    # than a published weight, and `convert_amount` refuses those because a
+    # float cannot say it is an estimate (ADR-0002). Listing a unit whose answer
+    # is always refused would just be two rules disagreeing, and it costs a
+    # pointless food resolution per call. Both move together when a caller can
+    # carry an estimate.
+    #
+    # The test asserts the seam is never consulted for a rejected unit, so this
+    # cannot decay into a refusal that merely happens to come from foodcore.
+    for unit in (fu, tu):
+        if dimension_of(unit) not in (MASS, VOLUME):
+            return None
+    v = _to_decimal(value)
+    if v is None or not (food or "").strip():
+        return None
+    from .food_reference import convert_amount  # local: the only foodcore importer
+    return convert_amount(float(v), fu, tu, food)
+
+
 @dataclass(frozen=True)
 class Quantity:
     value: Optional[Decimal]

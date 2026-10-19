@@ -138,11 +138,19 @@ _ENRICH_MAX = 200
 _NUTRITION_MAX = 50
 
 
-def _backfill_nutrition(gid) -> int:
-    """Top up nutrition for barcode-bearing products that have none, via the same
-    Open Food Facts lookup a scan uses. Best-effort + self-gating (returns 0 when
-    EDIBL_BARCODE_LOOKUP is off, since lookup_barcode yields None); bounded per run."""
+def _backfill_from_barcode(gid) -> tuple[int, int]:
+    """Top up nutrition AND label allergens for barcode-bearing products that are
+    missing either, via the same Open Food Facts lookup a scan uses. Returns
+    (nutrition_filled, allergens_filled). Best-effort + self-gating (returns zeros
+    when EDIBL_BARCODE_LOOKUP is off, since lookup_barcode yields None); bounded
+    per run.
+
+    ONE lookup per product serves both fields. A second pass with its own loop
+    would double Edibl's traffic to a free, community-run service to fetch a
+    response it already had in hand a moment earlier.
+    """
     from flask import current_app
+    from .allergens import SCREEN_ATTEMPTED, apply_to_product
     from .barcode import lookup_barcode
     from ..models import Product
 
@@ -150,13 +158,14 @@ def _backfill_nutrition(gid) -> int:
     # "attempted" with no chance of a hit and get sentinel-marked as checked (below),
     # so they'd never be retried once the user turns lookups on.
     if not current_app.config.get("BARCODE_LOOKUP"):
-        return 0
+        return 0, 0
 
     rows = (db.session.query(Product)
             .filter(Product.group_id == gid, Product.barcode != "",
-                    Product.nutrition.is_(None))
+                    db.or_(Product.nutrition.is_(None),
+                           Product.allergen_source == ""))
             .order_by(Product.created_at.asc()).limit(_NUTRITION_MAX).all())
-    filled = 0
+    filled = screened = 0
     for p in rows:
         try:
             hit = lookup_barcode(p.barcode)
@@ -166,13 +175,23 @@ def _backfill_nutrition(gid) -> int:
         if isinstance(nutrition, dict) and nutrition:
             p.nutrition = nutrition
             filled += 1
-        else:
+        elif p.nutrition is None:
             # Looked up cleanly but OFF has no nutrition for this barcode → sentinel {}
             # (serializes back to null, but is non-NULL so it drops out of this query
             # instead of being re-fetched — and re-hammering OFF — on every run).
             p.nutrition = {}
+        if apply_to_product(p, (hit or {}).get("allergens")):
+            screened += 1
+        elif not p.allergen_source:
+            # The same "already attempted" marker, but it must NOT be stored as an
+            # empty verdict record the way nutrition uses `{}`: an allergen record
+            # that exists and says nothing renders as a screened product with no
+            # allergens found, which is a false clearance. So the marker goes on
+            # `allergen_source` and `label_allergens` stays NULL — `stored_allergens`
+            # still reports this product as never screened, which is the truth.
+            p.allergen_source = SCREEN_ATTEMPTED
         db.session.commit()
-    return filled
+    return filled, screened
 
 
 @register("enrich")
@@ -186,14 +205,15 @@ def _enrich_job(job: Job) -> dict:
     from ..models import Product
 
     gid = job.group_id
-    # Nutrition backfill first — it's OFF-gated, independent of web-search enrichment,
+    # Barcode backfill first — it's OFF-gated, independent of web-search enrichment,
     # so it runs (and reports) even when web search isn't configured.
-    nutrition_filled = _backfill_nutrition(gid)
+    nutrition_filled, allergens_screened = _backfill_from_barcode(gid)
 
     if not enrich.enabled():
-        if nutrition_filled:
+        if nutrition_filled or allergens_screened:
             return {"described": 0, "scanned": 0, "remaining": 0,
-                    "nutritionFilled": nutrition_filled}
+                    "nutritionFilled": nutrition_filled,
+                    "allergensScreened": allergens_screened}
         raise JobError("Web search isn't configured (set an Ollama search key).")
     # Per-run override > the stored "Enrichment" async preference > chat provider.
     cfg = job_cfg(gid, "enrich", job.params or {})
@@ -213,7 +233,8 @@ def _enrich_job(job: Job) -> dict:
             described += 1
         bump(job, done=i)
     return {"described": described, "scanned": len(products),
-            "remaining": missing_q().count(), "nutritionFilled": nutrition_filled}
+            "remaining": missing_q().count(), "nutritionFilled": nutrition_filled,
+            "allergensScreened": allergens_screened}
 
 
 @register("categorize")

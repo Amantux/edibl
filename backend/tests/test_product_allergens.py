@@ -403,3 +403,27 @@ def test_migration_0013_upgrade_is_idempotent(app):
                 db.inspect(db.session.connection()).get_columns("products")}
         assert {"label_allergens", "allergen_ruleset_version",
                 "allergen_source"} <= cols
+
+
+# ---- notes only when they add something the state does not ----------------- #
+def test_a_plain_declaration_stores_no_restating_note():
+    """"declared in Open Food Facts traces_tags" only restates "May contain" in
+    the source's field names. Repeated per allergen it renders as a stutter of
+    identical rows and puts a database column name in front of someone deciding
+    whether to eat something."""
+    p = _Bare()
+    apply_to_product(p, _block([], ["en:peanuts"], "7010"))
+    peanuts = next(v for v in block_out(p)["verdicts"] if v["allergen"] == "peanuts")
+    assert peanuts["state"] == "may_contain"
+    assert "note" not in peanuts
+
+
+def test_a_rule_softened_verdict_keeps_its_explanation():
+    """Oats are a certain declaration whose gluten link is precautionary. That
+    note is the only thing saying why a declared tag reads `may_contain`, so it
+    must survive the filter above — mutation-check for it."""
+    p = _Bare()
+    apply_to_product(p, _block(["en:oats"], [], "7011"))
+    gluten = next(v for v in block_out(p)["verdicts"] if v["allergen"] == "gluten")
+    assert gluten["state"] == "may_contain"
+    assert gluten.get("note"), "a rule-inferred verdict must explain itself"

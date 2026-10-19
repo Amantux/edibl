@@ -116,6 +116,17 @@ def suggestions():
     })
 
 
+@bp.get("/products/<product_id>")
+@login_required
+def get_product(product_id):
+    """One product in full. The read half of a path that already had PUT and
+    DELETE; `stock_out` carries a deliberately lean product summary, so this is
+    how a detail view gets the fields it leaves out — the allergen block in
+    particular, which is ~1.6 kB and has no business riding on every lot in the
+    stock list to serve a panel the user opens one at a time."""
+    return jsonify(product_out(_get(product_id)))
+
+
 @bp.get("/products/<product_id>/insights")
 @login_required
 def insights(product_id):

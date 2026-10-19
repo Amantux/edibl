@@ -59,6 +59,14 @@ SCREEN_ATTEMPTED = "none"
 # an explicit `unknown` per ruleset key is the whole point (ADR-0005).
 _ABSENT = "absent"
 
+# A tag read straight off the label, with no rule applied to it. Its note just
+# names the OFF field the tag came from, which the verdict state already says.
+_DECLARED_TAG = "declared_tag"
+
+# Evidence off OFF's precautionary "may contain" line. Its note names that field
+# and nothing else, which the `may_contain` state already conveys.
+_TRACES_RULE = "off:traces_tags"
+
 
 def compact(block: dict | None) -> dict | None:
     """A `food_reference.allergens_from_declarations` block, compacted for storage.
@@ -103,20 +111,34 @@ def compact(block: dict | None) -> dict | None:
                "needsReview": bool(v.get("needsReview"))}
         terms, notes = [], []
         for e in (v.get("evidence") or []):
-            if e.get("kind") == _ABSENT:
+            kind = e.get("kind")
+            if kind == _ABSENT:
                 continue
             term = (e.get("matchedTerm") or "").strip()
             if term and term not in terms:
                 terms.append(term)
+            # Only a note that says something the STATE does not. Every note
+            # from this source names the OFF field the tag came from, and for
+            # two of the three shapes that is pure restatement:
+            #   traces_tags   -> "May contain" already says precautionary
+            #   declared_tag  -> "Contains" already says declared
+            # Repeated once per allergen those render as a stutter of identical
+            # rows, and they push a database column name in front of someone
+            # deciding whether to eat something. What IS worth saying is the
+            # third shape: a tag declared as CERTAIN whose allergen link is only
+            # precautionary (`en:oats` in allergens_tags -> gluten may_contain).
+            # There, "declared in allergens_tags" against a `May contain` state
+            # is the whole explanation. Unkeyed tags keep their note too — it
+            # says no rule was applied at all.
             note = (e.get("note") or "").strip()
-            if note and note not in notes:
+            if (note and kind != _DECLARED_TAG
+                    and e.get("ruleId") != _TRACES_RULE and note not in notes):
                 notes.append(note)
         if terms:
             row["terms"] = terms
         if notes:
-            # One note: it explains WHY a state is hedged (a declared oat tag
-            # softened to `may_contain` gluten by rule), and the first is the
-            # strongest-stated one because evidence is appended declared-first.
+            # One note: the first is the strongest-stated, because evidence is
+            # appended declared-first.
             row["note"] = notes[0]
         out_verdicts.append(row)
 

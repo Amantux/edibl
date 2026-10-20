@@ -147,6 +147,9 @@ def location_out(loc, with_counts=True):
 
 def product_out(p):
     from ..services.tracking import effective_tracking_mode
+    # Local, like the import above: services import models, so a module-level
+    # import here closes a cycle.
+    from ..services.allergens import block_out as allergens_block_out
     return {
         "id": p.id, "name": p.name, "brand": p.brand, "category": p.category,
         "family": p.family or "",
@@ -166,6 +169,22 @@ def product_out(p):
         },
         "shelfLifeDays": p.shelf_life_days, "notes": p.notes,
         "nutrition": p.nutrition or None,
+        # What the package LABEL declares about allergens, or None when this
+        # product has never been screened. Carried INLINE rather than behind a
+        # dedicated endpoint (myMeal's recipe safety is a separate resource) —
+        # the four reasons that justify the split there do not hold here, see
+        # services/allergens.py and the commit that added this. None is "we have
+        # not read a label", never "free from"; a screened product with nothing
+        # declared comes back as a real block of `unknown` verdicts instead.
+        "allergens": allergens_block_out(p),        # The PERSISTED food identity, exactly as stored — null when there is
+        # none, which is the default and the safe state. Deliberately NOT
+        # resolved to its name here: that needs foodcore's dataset, and making
+        # every product list expand a 10 MB snapshot to decorate rows would be a
+        # real cost for a string most callers ignore. `GET /products/<id>/
+        # food-identity` resolves it and reports whether it is still current.
+        "foodIdentity": ({"foodKey": p.food_key,
+                          "datasetVersion": p.food_key_dataset_version or ""}
+                         if getattr(p, "food_key", "") else None),
         "createdAt": iso(p.created_at),
     }
 

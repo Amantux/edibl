@@ -6,6 +6,7 @@ import { askEdibl } from '../chat'
 import { ui } from '../ui'
 import { useLiveRefresh } from '../live'
 import AddStockModal from '../components/AddStockModal.vue'
+import AllergenPanel from '../components/AllergenPanel.vue'
 
 const addInitialName = ref('')
 const groups = ref([])            // grouped view (all stock)
@@ -367,8 +368,28 @@ const sheetFor = ref(null)              // the lot whose actions are open
 const sheetMode = ref('')               // '' menu | 'correct' | 'split' | 'move'
 const sheetVal = ref('')                // number input for correct/split
 const sheetLoc = ref('')                // location select for move
-function openSheet(s) { sheetFor.value = s; sheetMode.value = ''; sheetVal.value = ''; sheetLoc.value = s.location?.id || '' }
-function closeSheet() { sheetFor.value = null; sheetMode.value = '' }
+// The product's label-allergen block, fetched when a sheet opens rather than
+// carried on every lot in the list: it is ~1.6kB and the panel is read one item
+// at a time. `undefined` = still loading, `null` = never screened (a real
+// answer, and the panel says so), so the two must not be collapsed into one
+// falsy check.
+const sheetAllergens = ref(undefined)
+async function loadSheetAllergens(productId) {
+  sheetAllergens.value = undefined
+  if (!productId) { sheetAllergens.value = null; return }
+  try {
+    const p = await api.get(`/products/${productId}`)
+    // A sheet closed or re-opened on another item while this was in flight must
+    // not have someone else's allergens written into it.
+    if (sheetFor.value?.product?.id === productId) sheetAllergens.value = p?.allergens ?? null
+  } catch (e) {
+    // A failed fetch is NOT "nothing declared" — leave it unknown so the panel
+    // renders its unscreened notice instead of an empty, reassuring one.
+    if (sheetFor.value?.product?.id === productId) sheetAllergens.value = null
+  }
+}
+function openSheet(s) { sheetFor.value = s; sheetMode.value = ''; sheetVal.value = ''; sheetLoc.value = s.location?.id || ''; loadSheetAllergens(s.product?.id) }
+function closeSheet() { sheetFor.value = null; sheetMode.value = ''; sheetAllergens.value = undefined }
 function sheetStart(mode) { sheetMode.value = mode; sheetVal.value = sheetFor.value?.quantity ?? '' }
 // Compact nutrition line for the action sheet — per serving if known, else per 100.
 const sheetNutrition = computed(() => {
@@ -708,6 +729,12 @@ const count = computed(() => filter.value.view === 'all' ? groups.value.length :
         · {{ sheetFor.storageMethod.replace('_',' ') }}<span v-if="sheetFor.packageState==='opened'"> · open</span></p>
       <p v-if="sheetNutrition" class="muted" style="margin-top:-2px;font-size:.8rem;font-variant-numeric:tabular-nums">
         🍎 {{ sheetNutrition.text }} <span style="opacity:.7">{{ sheetNutrition.per }}</span></p>
+
+      <!-- Grouped with the nutrition line: both are derived facts about the food
+           that carry their own provenance. Menu state only, so the correct /
+           split / move forms stay single-purpose. -->
+      <AllergenPanel v-if="!sheetMode && sheetAllergens !== undefined"
+                     :block="sheetAllergens" />
 
       <template v-if="!sheetMode">
         <button class="opt" @click="sheetStart('correct')"><span class="em">📏</span> Correct amount</button>

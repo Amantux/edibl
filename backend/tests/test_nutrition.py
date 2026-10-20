@@ -133,7 +133,9 @@ def test_backfill_sentinels_unfillable_product(auth_client, app, monkeypatch, gi
         app.config["BARCODE_LOOKUP"] = True
         monkeypatch.setattr("app.services.barcode.lookup_barcode",
                             lambda code: {"name": "Mystery"})  # a hit, but no nutrition
-        assert jobs._backfill_nutrition(gid) == 0
+        # (nutrition_filled, allergens_screened) since the pass also screens the
+        # label from the same lookup — neither is fillable from this hit.
+        assert jobs._backfill_from_barcode(gid) == (0, 0)
         refreshed = db.session.get(Product, pid)
         assert refreshed.nutrition == {}                       # sentinel written
         # serializes back to null (UI shows nothing), but is no longer a NULL candidate

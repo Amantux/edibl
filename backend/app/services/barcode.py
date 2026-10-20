@@ -60,9 +60,14 @@ def _num(x):
 
 def _nutrition_from_off(p):
     """Extract a compact, normalized nutrition dict from an OFF product, or None.
+
     Shape: {basis, source, per100?, perServing?, servingSize?, servingQuantity?} where
     per100/perServing carry kcal + macros. Never invents values; sodium is derived from
-    salt (salt/2.5) only when a direct sodium figure is absent."""
+    salt (salt/2.5) only when a direct sodium figure is absent.
+
+    Deliberately NOT reconciled with ``foodcore.nutrition`` (ADR-0005): choosing
+    between this ODbL-licensed declared label value and foodcore's CC0-licensed
+    measured one is a licence and precedence judgement, not an integration."""
     nutr = p.get("nutriments")
     if not isinstance(nutr, dict):
         return None
@@ -98,6 +103,26 @@ def _nutrition_from_off(p):
     return out
 
 
+def _allergens_from_off(p, code):
+    """What the label declares about allergens, as four-state foodcore verdicts.
+
+    OFF publishes **two** fields and they mean different things: ``allergens_tags``
+    is "an ingredient IS this" (declared) and ``traces_tags`` is the precautionary
+    "may contain" line. Reading only the first loses every shared-line warning,
+    which for a severe allergy is the half that matters.
+
+    A missing field is ``unknown``, never "free from". OFF's tags are derived
+    from community-entered ingredient text: they prove presence and say nothing
+    about absence, so the block carries an explicit ``unknown`` verdict for every
+    allergen nothing was declared about (see food_reference). None when foodcore
+    is unavailable, which leaves the payload exactly as it was before.
+    """
+    from .food_reference import allergens_from_declarations
+
+    return allergens_from_declarations(p.get("allergens_tags"),
+                                       p.get("traces_tags"), source_id=code)
+
+
 def _from_off(code):
     """Open Food Facts — food-focused, no key. {name,brand,category,...} or None."""
     import httpx
@@ -119,7 +144,8 @@ def _from_off(code):
     return {"name": name, "brand": (p.get("brands") or "").split(",")[0].strip(),
             "category": _guess_category(p.get("categories_tags")),
             "barcode": code, "source": "openfoodfacts",
-            "nutrition": _nutrition_from_off(p)}
+            "nutrition": _nutrition_from_off(p),
+            "allergens": _allergens_from_off(p, code)}
 
 
 def _from_product_db(code):

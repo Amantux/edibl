@@ -108,6 +108,12 @@ def _resolve_product(data):
                     item_type=it if it in ITEM_TYPES else "food",
                     nutrition=nutrition if isinstance(nutrition, dict) else None,
                     tracking_mode=tm if tm in TRACKING_MODES else "", group_id=gid)
+        # The label's allergen verdicts ride in on the same scan as `nutrition`.
+        # Applied through the service, never assigned raw: it compacts the block
+        # and refuses one with no ruleset version, so a product is either screened
+        # against a known ruleset or left NULL (= never screened).
+        from ..services.allergens import apply_to_product as _apply_allergens
+        _apply_allergens(p, data.get("allergens"))
         db.session.add(p)
     else:
         # Matched by name — back-fill facts we now know but didn't before, so the
@@ -121,6 +127,11 @@ def _resolve_product(data):
         nutrition = data.get("nutrition")
         if isinstance(nutrition, dict) and not p.nutrition:
             p.nutrition = nutrition
+        # Same back-fill for the label's allergens. `apply_to_product` keeps an
+        # existing screening by default, so a re-scan can only ever fill a gap —
+        # it never silently replaces a verdict the household may have acted on.
+        from ..services.allergens import apply_to_product as _apply_allergens
+        _apply_allergens(p, data.get("allergens"))
     # Flush under a SAVEPOINT: a concurrent add of the same (group, barcode) can trip
     # the partial unique index (uq_products_group_barcode). On that race, reuse the
     # product that won the barcode rather than surfacing a 500.

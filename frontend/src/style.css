@@ -9,6 +9,13 @@
   /* Warm stone neutrals — a "fresh kitchen" ground, so the green accent stays scarce. */
   --bg: #f7f5ef; --surface: #fffefb; --surface-2: #f0ede4; --border: #e6e1d4;
   --text: #23201a; --muted: #77726a; --danger: #dc2626; --warning: #c2740a; --success: #16a34a;
+  /* Status colours as TEXT. --danger and --warning are tuned to carry a 3px rule
+     or a chip tint, where 3:1 is enough; as body text they fail AA (measured on
+     --surface / --surface-2: --warning is 3.59 / 3.09 in light, --danger is
+     3.60 / 3.44 in dark). An allergen state word IS the finding, so it has to be
+     legible. Same split myMeal uses, values re-measured against Edibl's warmer
+     neutrals: light 5.99 / 5.16 and 5.69 / 4.90, dark 6.40 / 6.12 and 6.28 / 6.01. */
+  --warning-text: #a04a08; --danger-text: #c81e1e;
   --star: #dda520;                         /* staple ★ — a warm gold, NOT the green accent */
   --warn-soft: rgba(194,116,10,.13);       /* tint behind warning chips (waste / missing) */
   --chart: #b3a892;                         /* neutral data fill — spend isn't good/bad, so not green */
@@ -22,6 +29,9 @@
 @media (prefers-color-scheme: dark) {
   :root { --bg:#14120e; --surface:#1c1a15; --surface-2:#211e17; --border:#3a352b;
     --text:#ece7db; --muted:#a49d8f; --accent-soft: rgba(47,158,68,.18); --warn-soft: rgba(217,140,40,.16);
+    /* Both have to move on near-black: --danger is only 3.60:1 here and --warning,
+       while it passes, sits darker than the text around it. */
+    --warning-text:#d98c28; --danger-text:#f87171;
     --chart:#6b6555; }
   /* Tonal action needs more presence on near-black so it doesn't read dark-on-dark. */
   button.tonal { background: rgba(47,158,68,.22); color:#5cc47f; }

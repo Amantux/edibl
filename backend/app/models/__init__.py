@@ -248,6 +248,58 @@ class Product(IDMixin, TimestampMixin, db.Model):
     # `nutrition.is_(None)` reliably finds "no nutrition" rows however None got there
     # (the enrich backfill depends on this); the {} sentinel stays non-NULL.
     nutrition: Mapped[dict | None] = mapped_column(JSON(none_as_null=True), nullable=True)
+    # What this package's LABEL declares about allergens, as foodcore's four-state
+    # verdicts, captured from a barcode scan exactly like `nutrition` (ADR-0005).
+    #
+    # Named `label_allergens`, NOT `allergens`, on purpose: `FoodConcept.allergens`
+    # two classes up is Edibl's own material lexicon (ADR-0003), used to stop
+    # matching crossing a material boundary, and these two must never be merged or
+    # mistaken for one another. They answer different questions — coconut carries no
+    # allergen in a material lexicon and IS a tree nut under FDA labelling — so one
+    # merged list would be wrong for one of its two consumers. The name is the
+    # cheapest place to make that boundary visible.
+    #
+    # NULL means NEVER SCREENED, which is NOT the same as "screened, nothing found".
+    # A screened product always stores an explicit verdict for every ruleset key, so
+    # a label that declares nothing is twelve `unknown` verdicts, never an empty
+    # list. Absence is never a clearance: an empty or absent record must not be
+    # rendered, queried or summarised as "free from".
+    # none_as_null mirrors `nutrition`: Python None becomes SQL NULL (not the JSON
+    # token `null`), so `label_allergens.is_(None)` reliably finds never-screened
+    # rows however the None got there — the backfill depends on it.
+    label_allergens: Mapped[dict | None] = mapped_column(
+        JSON(none_as_null=True), nullable=True)
+    # The ruleset that produced those verdicts, and the source they were read from
+    # ("openfoodfacts"; "" when nothing has been screened). Denormalised out of the
+    # blob so a re-screen can FIND the rows a ruleset bump stranded without parsing
+    # every product's JSON.
+    #
+    # A verdict whose rule version is unknown cannot be re-interpreted later, and is
+    # worse than no verdict at all — it looks like data and cannot be checked. So a
+    # non-NULL blob with a blank version is treated as NOT SCREENED on read; see
+    # services.allergens.stored_allergens, which is the only reader.
+    allergen_ruleset_version: Mapped[str] = mapped_column(String(64), default="")
+    allergen_source: Mapped[str] = mapped_column(String(32), default="")    # This product's identity in foodcore's reference dataset, chosen ONCE and
+    # persisted (ADR-0005). It is what makes a density-aware conversion legal
+    # here: `quantity.convert` refuses mass<->volume because it has no food, and
+    # resolving the product's free text against USDA *at the moment of a
+    # deduction* would be the guess ADR-0003 reserves for the matching service.
+    # A stored key is looked up with `Dataset.food_record(key)` — an exact
+    # lookup, never a name match — so no deduction ever depends on a guess.
+    #
+    # "" means NO identity, and that is the safe, default and expected state:
+    # conversions fall back to `convert` and to today's refusal. It is only ever
+    # set from a CONFIDENT resolution or an explicit human choice; an ambiguous
+    # name stores nothing, because an identity stored from a guess is worse than
+    # none — every future conversion would inherit it silently.
+    food_key: Mapped[str] = mapped_column(String(128), default="", server_default="")
+    # The dataset snapshot that resolved `food_key` (foodcore
+    # `SourceRecord.dataset_version`, e.g. "SR Legacy 2018-04"). Stored so a
+    # later dataset change is DETECTABLE rather than silent: a key is only
+    # meaningful against the snapshot it was chosen in, and foodcore's keys are
+    # provider ids that a rebuild can legitimately re-point.
+    food_key_dataset_version: Mapped[str] = mapped_column(
+        String(64), default="", server_default="")
     notes: Mapped[str] = mapped_column(Text, default="")
     group_id: Mapped[str] = mapped_column(String(36), ForeignKey("groups.id"))
     group = relationship("Group", back_populates="products")

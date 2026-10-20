@@ -116,6 +116,17 @@ def suggestions():
     })
 
 
+@bp.get("/products/<product_id>")
+@login_required
+def get_product(product_id):
+    """One product in full. The read half of a path that already had PUT and
+    DELETE; `stock_out` carries a deliberately lean product summary, so this is
+    how a detail view gets the fields it leaves out — the allergen block in
+    particular, which is ~1.6 kB and has no business riding on every lot in the
+    stock list to serve a panel the user opens one at a time."""
+    return jsonify(product_out(_get(product_id)))
+
+
 @bp.get("/products/<product_id>/insights")
 @login_required
 def insights(product_id):
@@ -196,6 +207,121 @@ def delete(product_id):
     db.session.delete(_get(product_id))
     db.session.commit()
     return "", 204
+
+
+# --------------------------------------------------------------------------- #
+# Food identity — the reference-dataset food this product IS (ADR-0005)
+# --------------------------------------------------------------------------- #
+# Deliberately its OWN endpoints rather than a field in `_apply`. Setting this
+# is not an edit like a name or a note: it is the one input that lets a
+# consumption path cross mass<->volume, so every future deduction for this
+# product inherits it. It gets an explicit act, an explicit confirmation when
+# the name is ambiguous, and an explicit way to undo — and it is never written
+# as a side effect of saving an unrelated field.
+#
+# This is also why there is NO automatic resolution at product creation. A
+# confident match at create time is still a match nobody looked at, made from
+# free text that is often a brand line ("Tesco Finest Clear Honey"), and it
+# would be stored on thousands of products at once where no one would ever see
+# it. Resolution happens here, one product at a time, with a human present.
+
+
+@bp.get("/products/<product_id>/food-identity")
+@login_required
+def food_identity(product_id):
+    """This product's stored food identity and whether it still resolves.
+
+    `status` is the user-visible part and the reason this endpoint exists:
+    * `none`    — nothing stored (the default; conversions refuse as before)
+    * `current` — resolves in the loaded dataset; `food` names it
+    * `stale`   — chosen against a different dataset snapshot than the one
+                  loaded now, so it is NOT used for conversion until re-confirmed
+    * `unknown` — the dataset no longer has this key (or no dataset is loaded)
+
+    `stale`/`unknown` are not errors to hide. A stored identity that silently
+    stopped meaning what it said is precisely the failure mode this feature has
+    to be honest about, so it is reported rather than smoothed into `none`.
+    """
+    from ..services.food_reference import identity_for_key, key_is_current
+    p = _get(product_id)
+    if not p.food_key:
+        return jsonify({"status": "none", "foodKey": "", "datasetVersion": "",
+                        "food": None})
+    stored_version = p.food_key_dataset_version or ""
+    resolved = identity_for_key(p.food_key)
+    if resolved is None:
+        status = "unknown"
+    elif not key_is_current(p.food_key, stored_version):
+        status = "stale"
+    else:
+        status = "current"
+    return jsonify({"status": status, "foodKey": p.food_key,
+                    "datasetVersion": stored_version, "food": resolved})
+
+
+@bp.put("/products/<product_id>/food-identity")
+@login_required
+def set_food_identity(product_id):
+    """Set this product's food identity, from an explicit key or by resolving a name.
+
+    Two bodies, one rule. `{"foodKey": "usda:168384"}` is a human's choice and is
+    accepted if the dataset knows it. `{"resolveFrom": "honey"}` (or an empty
+    body, which uses the product's name) asks for a CONFIDENT resolution and
+    **persists nothing otherwise** — an ambiguous or unknown name comes back 409
+    with candidates to choose from, leaving the product exactly as it was.
+
+    That refusal is the point. foodcore declines to pick between raw and cooked
+    rice because they differ by 17% per cup; storing either on a guess would
+    bake that error into every later conversion invisibly, which is worse than
+    having no identity at all. 409 + candidates is the same shape `consume`
+    already uses for an ambiguous product, so the client has one pattern.
+    """
+    from ..services.food_reference import (candidates, identity_for_key,
+                                           resolve_identity)
+    p = _get(product_id)
+    data = request.get_json(silent=True) or {}
+    key = str(data.get("foodKey") or "").strip()
+
+    if key:
+        chosen = identity_for_key(key)
+        if chosen is None:
+            # An explicit key that the dataset does not have is a bad request,
+            # not a reason to go matching the name instead.
+            return jsonify({"error": "That food key is not in the reference "
+                                     "dataset."}), 400
+    else:
+        name = str(data.get("resolveFrom") or p.name or "").strip()
+        chosen = resolve_identity(name)
+        if chosen is None:
+            return jsonify({
+                "error": "That name does not identify one specific food, so "
+                         "nothing was saved. Choose which food this product is.",
+                "candidates": candidates(name),
+                "confirmWith": "foodKey",
+            }), 409
+
+    p.food_key = chosen["foodKey"]
+    p.food_key_dataset_version = chosen.get("datasetVersion") or ""
+    db.session.commit()
+    return jsonify({"status": "current", "foodKey": p.food_key,
+                    "datasetVersion": p.food_key_dataset_version,
+                    "food": chosen})
+
+
+@bp.delete("/products/<product_id>/food-identity")
+@login_required
+def clear_food_identity(product_id):
+    """Clear the stored identity — conversions go back to refusing across dimensions.
+
+    Always available, and it cannot fail: the recovery path for a wrong identity
+    must not itself depend on the dataset that made it wrong.
+    """
+    p = _get(product_id)
+    p.food_key = ""
+    p.food_key_dataset_version = ""
+    db.session.commit()
+    return jsonify({"status": "none", "foodKey": "", "datasetVersion": "",
+                    "food": None})
 
 
 # --------------------------------------------------------------------------- #

@@ -13,8 +13,31 @@ passlib==1.7.4
 # passlib 1.7.4 reads bcrypt.__about__ which bcrypt>=4.1 removed; pin below that.
 bcrypt==4.0.1
 python-dotenv>=1.1.0
-gunicorn>=23.0.0
+gunicorn>=26.0.0
 # Edibl MCP server (AI tooling for myMeal / Home Assistant)
-mcp==1.29.0  # pin: newer mcp dropped mcp.server.fastmcp (breaks the MCP server + CI)
+mcp==1.30.0  # pin: newer mcp dropped mcp.server.fastmcp (breaks the MCP server + CI)
 uvicorn>=0.52.0
 httpx>=0.28.1
+# foodcore — the food-reference library Edibl and myMeal SHARE (unit conversion
+# that knows a cup of honey weighs 339 g, USDA portion weights, allergen rules).
+# Zero runtime dependencies, and the USDA SR Legacy snapshot travels inside the
+# wheel as package data, so this adds one package and no services.
+#
+# Pinned to a COMMIT, not a branch or a version range, deliberately. foodcore is
+# consumed by two apps and SOP §8 says a change to shared code is a change to
+# every consumer, made together. A commit pin is what makes that enforceable on
+# THIS side: upgrading is a visible diff someone has to write, review and port —
+# not something a rebuild picks up silently.
+#
+# The asymmetry this comment used to warn about is RESOLVED. foodcore no longer
+# lives inside myMeal: it was extracted to github.com/Amantux/foodcore with its
+# history intact, and BOTH apps now pin it the same way. Neither can edit the
+# shared engine in place, so neither can drift ahead of the other — the
+# obligation is a mechanism now, not a convention.
+#
+# Bumping: move the SHA here and in myMeal's backend/requirements.txt in the
+# same session, after checking foodcore's own CI is green on that commit. That
+# CI installs the wheel into a bare venv and asserts the dataset and rules
+# subpackage actually shipped, which is the one failure a source checkout
+# cannot see.
+foodcore @ git+https://github.com/Amantux/foodcore.git@9f68f20586aec10f27ab75468fd516f6ce2d0df2

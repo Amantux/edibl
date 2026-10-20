@@ -30,6 +30,16 @@ paths-ignore:
   - "backend/tests/**"
   - "custom_components/edibl/tests/**"
   - "e2e/**"
+  # Frontend component tests. Absent until now only because the frontend had no
+  # test files — the rule above always meant to cover them, and the first spec
+  # added immediately raised a high-severity js/incomplete-multi-character-
+  # sanitization on a helper that strips HTML comments out of SSR output so an
+  # assertion matches rendered text rather than the component's own comments.
+  # It normalises a string this repo produced for `expect(...)`; there is no DOM
+  # sink, no untrusted input and nothing is served. (The helper was also made a
+  # proper fixed point, so the idiom is correct on its own terms.)
+  - "frontend/src/**/__tests__/**"
+  - "frontend/**/*.spec.js"
   # Alembic revision scaffolding — generated, reviewed at authoring time, and
   # never reachable from a request path.
   - "backend/migrations/versions/**"

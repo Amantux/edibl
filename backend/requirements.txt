@@ -4,7 +4,7 @@ Flask-Cors>=5.0.0
 Flask-Limiter>=3.8.0
 SQLAlchemy==2.0.51
 # Schema migrations (SQLite + Postgres). Replaces the old create_all/_ensure_columns.
-alembic>=1.13
+alembic>=1.19.0
 # Postgres driver (optional backend). psycopg 3 bundles libpq via [binary];
 # unused when EDIBL_DATABASE_URL is blank (SQLite default).
 psycopg[binary]>=3.3.4
@@ -12,11 +12,11 @@ PyJWT>=2.13.0
 passlib==1.7.4
 # passlib 1.7.4 reads bcrypt.__about__ which bcrypt>=4.1 removed; pin below that.
 bcrypt==4.0.1
-python-dotenv>=1.1.0
+python-dotenv>=1.2.2
 gunicorn>=26.0.0
 # Edibl MCP server (AI tooling for myMeal / Home Assistant)
 mcp==1.30.0  # pin: newer mcp dropped mcp.server.fastmcp (breaks the MCP server + CI)
-uvicorn>=0.52.0
+uvicorn>=0.52.1
 httpx>=0.28.1
 # foodcore — the food-reference library Edibl and myMeal SHARE (unit conversion
 # that knows a cup of honey weighs 339 g, USDA portion weights, allergen rules).

@@ -12,7 +12,7 @@ from ..extensions import db
 from ..models import PlannedItem, ShoppingItem
 from ..auth import login_required, owner_required, current_group
 from ..schemas.serializers import iso, shopping_out
-from ..services.planning import analyze_demand
+from ..services.planning import analyze_demand, analyze_demand_phased
 from ..services import integrations as integ
 from ..services.integrations import integration_status, mymeal_get
 from ..services.settings import set_mymeal
@@ -133,7 +133,7 @@ def cook_ingredients(gid, ingredients, *, source_app="plan", idempotency_key=Non
 def add_shortfall_to_shopping(gid, ingredients):
     """Add each ingredient's shortfall (what's not on hand) to the shopping list as a
     source='recipe' row, skipping anything already 'needed'. Returns the added rows."""
-    shortfall = analyze_demand(gid, ingredients)["shortfall"]
+    shortfall = analyze_demand_phased(gid, ingredients)["shortfall"]
     on_list = {i.name.lower() for i in db.session.query(ShoppingItem)
                .filter_by(group_id=gid, status="needed").all()}
     added = []
@@ -145,6 +145,22 @@ def add_shortfall_to_shopping(gid, ingredients):
         # in a single call doesn't add two identical rows (analyze_demand doesn't merge)
         i = ShoppingItem(name=s["name"], quantity=s["quantity"], unit=s["unit"],
                          source="recipe", group_id=gid)
+        # Add "needed by" note for dated shortfall items
+        if s.get("neededBy"):
+            nb = s["neededBy"]
+            if isinstance(nb, str):
+                # Parse ISO date to extract just the date part
+                try:
+                    from datetime import date
+                    d = date.fromisoformat(nb.replace("Z", "").replace("+00:00", ""))
+                    i.note = f"needed by {d.isoformat()}"
+                except ValueError:
+                    i.note = f"needed by {nb}"
+            elif hasattr(nb, "date"):
+                d = nb.date()
+                i.note = f"needed by {d.isoformat()}"
+            else:
+                i.note = f"needed by {nb}"
         db.session.add(i)
         added.append(i)
     db.session.commit()
@@ -302,8 +318,9 @@ def plan():
     rows = (db.session.query(PlannedItem).filter_by(group_id=current_group().id)
             .order_by(PlannedItem.needed_by.is_(None).asc(),
                       PlannedItem.needed_by.asc()).all())
-    demand = [{"name": p.name, "quantity": p.quantity, "unit": p.unit} for p in rows]
-    analysis = analyze_demand(current_group().id, demand)
+    demand = [{"name": p.name, "quantity": p.quantity, "unit": p.unit,
+               "neededBy": iso(p.needed_by)} for p in rows]
+    analysis = analyze_demand_phased(current_group().id, demand)
     return jsonify({"planned": [_planned_out(p) for p in rows], **analysis})
 
 
@@ -325,7 +342,8 @@ def order():
     """Turn the current plan's shortfall into shopping-list items (skips dupes)."""
     gid = current_group().id
     rows = db.session.query(PlannedItem).filter_by(group_id=gid).all()
-    demand = [{"name": p.name, "quantity": p.quantity, "unit": p.unit} for p in rows]
+    demand = [{"name": p.name, "quantity": p.quantity, "unit": p.unit,
+               "neededBy": iso(p.needed_by)} for p in rows]
     added = add_shortfall_to_shopping(gid, demand)
     return jsonify({"added": len(added), "items": [shopping_out(i) for i in added]})
 

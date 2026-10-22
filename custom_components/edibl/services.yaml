@@ -26,3 +26,61 @@ add_to_shopping_list:
       default: count
       selector:
         text:
+consume:
+  name: Consume stock
+  description: Record consumption of stock (eat, discard, etc.).
+  fields:
+    name:
+      name: Product name
+      description: Name of the product to consume. Required if productId is not provided.
+      required: false
+      example: Whole milk
+      selector:
+        text:
+    productId:
+      name: Product ID
+      description: Product ID to consume directly (skips name resolution). Required if name is not provided.
+      required: false
+      example: "123"
+      selector:
+        text:
+    quantity:
+      name: Quantity
+      description: How much to consume.
+      example: 1
+      default: 1
+      selector:
+        number:
+          min: 0
+          step: 0.1
+          mode: box
+    unit:
+      name: Unit
+      description: Unit of measure (optional, auto-detected if omitted).
+      example: count
+      required: false
+      selector:
+        text:
+    outcome:
+      name: Outcome
+      description: Why the stock was consumed.
+      example: eaten
+      default: eaten
+      selector:
+        select:
+          options:
+            - label: Eaten
+              value: eaten
+            - label: Spoiled
+              value: spoiled
+            - label: Expired
+              value: expired
+            - label: Tossed
+              value: tossed
+    locationId:
+      name: Location ID
+      description: Limit consumption to a specific location (optional).
+      example: fridge
+      required: false
+      selector:
+        text:

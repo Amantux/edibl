@@ -66,6 +66,78 @@ class EdiblCoordinator(DataUpdateCoordinator):
         """POST an item onto the Edibl shopping list."""
         await self._post("/shopping", {"name": name, "quantity": quantity, "unit": unit})
 
+    async def async_consume(
+        self,
+        name: str | None = None,
+        product_id: str | None = None,
+        quantity: float = 1,
+        unit: str | None = None,
+        outcome: str = "eaten",
+        location_id: str | None = None,
+    ) -> dict:
+        """Consume stock by product name or ID.
+
+        Args:
+            name: Product name (required if product_id not provided)
+            product_id: Product ID (optional, skips name resolution)
+            quantity: Amount to consume
+            unit: Unit of measure (optional)
+            outcome: One of eaten/spoiled/expired/tossed
+            location_id: Location scope for consumption (optional)
+
+        Returns:
+            Response dict with consumed amount and draws, or disambiguation candidates.
+
+        Raises:
+            HomeAssistantError: On API error or ambiguous name without product_id.
+        """
+        # Build request body
+        body: dict = {"quantity": quantity, "outcome": outcome}
+        if name:
+            body["name"] = name
+        if product_id:
+            body["productId"] = product_id
+        if unit:
+            body["unit"] = unit
+        if location_id:
+            body["locationId"] = location_id
+
+        try:
+            return await self._post("/stock/consume", body)
+        except aiohttp.ClientResponseError as err:
+            if err.status == 422 and err.response:
+                # Try to parse disambiguation response
+                try:
+                    data = await err.response.json()
+                    if data.get("candidates") or data.get("message"):
+                        # Format readable error with candidates
+                        candidates = data.get("candidates", [])
+                        if candidates:
+                            candidate_strs = []
+                            for c in candidates:
+                                bits = [str(c.get("name") or "")]
+                                detail = [c.get("brand") or "", c.get("category") or ""]
+                                where = c.get("location")
+                                if where:
+                                    detail.append(f"in {where}")
+                                detail = [d for d in detail if d]
+                                if detail:
+                                    bits.append(f"({', '.join(detail)})")
+                                if (c.get("lots") or 0) > 1:
+                                    bits.append(f"{c['lots']} lots")
+                                if c.get("nextExpiry"):
+                                    bits.append(f"next expiry {str(c['nextExpiry'])[:10]}")
+                                candidate_strs.append(" ".join(bits))
+                            raise HomeAssistantError(
+                                f"'{name}' matches several products: {'; '.join(candidate_strs)}. "
+                                f"Provide productId to confirm, or use a more specific name."
+                            )
+                        msg = data.get("message", str(data))
+                        raise HomeAssistantError(msg) from err
+                except Exception:  # noqa: BLE001
+                    pass
+            raise HomeAssistantError(f"Edibl consume failed: {err}") from err
+
     # --- shopping-list writes for the To-do entity --------------------------
     async def async_shopping_add(self, name: str) -> None:
         await self._post("/shopping", {"name": name})

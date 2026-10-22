@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 import logging
-
 import voluptuous as vol
-
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
@@ -18,17 +16,31 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     SERVICE_ADD_TO_SHOPPING,
+    SERVICE_CONSUME,
 )
 from .coordinator import EdiblCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.TODO]
 
+_OUTCOME_VALUES = ["eaten", "spoiled", "expired", "tossed"]
+
 _ADD_SHOPPING_SCHEMA = vol.Schema(
     {
         vol.Required("name"): cv.string,
         vol.Optional("quantity", default=1): vol.Coerce(float),
         vol.Optional("unit", default="count"): cv.string,
+    }
+)
+
+_CONSUME_SCHEMA = vol.Schema(
+    {
+        vol.Exclusive("name", "identifier"): cv.string,
+        vol.Exclusive("productId", "identifier"): cv.string,
+        vol.Optional("quantity", default=1): vol.Coerce(float),
+        vol.Optional("unit"): cv.string,
+        vol.Optional("outcome", default="eaten"): vol.In(_OUTCOME_VALUES),
+        vol.Optional("locationId"): cv.string,
     }
 )
 
@@ -60,6 +72,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data[DOMAIN].pop(entry.entry_id, None)
         if not hass.data[DOMAIN]:
             hass.services.async_remove(DOMAIN, SERVICE_ADD_TO_SHOPPING)
+            hass.services.async_remove(DOMAIN, SERVICE_CONSUME)
     return unloaded
 
 
@@ -78,6 +91,37 @@ def _async_register_services(hass: HomeAssistant) -> None:
         except Exception as err:  # noqa: BLE001 — surface as a service error
             raise HomeAssistantError(f"Edibl request failed: {err}") from err
 
+    async def _handle_consume(call: ServiceCall) -> None:
+        coordinators = list(hass.data.get(DOMAIN, {}).values())
+        if not coordinators:
+            raise HomeAssistantError("No Edibl instance configured")
+        try:
+            result = await coordinators[0].async_consume(
+                name=call.data.get("name"),
+                product_id=call.data.get("productId"),
+                quantity=call.data["quantity"],
+                unit=call.data.get("unit"),
+                outcome=call.data["outcome"],
+                location_id=call.data.get("locationId"),
+            )
+            # Format success message
+            consumed = result.get("consumed", 0)
+            draws = result.get("draws", [])
+            if consumed > 0:
+                msg = f"Consumed {consumed} across {len(draws)} lot(s)"
+                if result.get("shortfall"):
+                    msg += f", short by {result['shortfall']}"
+                raise HomeAssistantError(msg)
+            else:
+                raise HomeAssistantError("No stock matched the criteria")
+        except HomeAssistantError:
+            raise
+        except Exception as err:  # noqa: BLE001 — surface as a service error
+            raise HomeAssistantError(f"Edibl consume failed: {err}") from err
+
     hass.services.async_register(
         DOMAIN, SERVICE_ADD_TO_SHOPPING, _handle_add, schema=_ADD_SHOPPING_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_CONSUME, _handle_consume, schema=_CONSUME_SCHEMA
     )

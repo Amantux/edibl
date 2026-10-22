@@ -501,7 +501,7 @@ def _recipe_or_error(recipe_id):
                     {
                         "configured": res.get("configured", False),
                         "reachable": False,
-                        "error": res.get("error") or "myMeal is not reachable",
+                        "error": "myMeal is not reachable",
                     }
                 ),
                 502,

@@ -40,7 +40,7 @@ _CONSUME_SCHEMA = vol.Schema(
         vol.Optional("quantity", default=1): vol.Coerce(float),
         vol.Optional("unit"): cv.string,
         vol.Optional("outcome", default="eaten"): vol.In(_OUTCOME_VALUES),
-        vol.Optional("locationId"): cv.string,
+        vol.Optional("location_id"): cv.string,
     }
 )
 
@@ -102,7 +102,7 @@ def _async_register_services(hass: HomeAssistant) -> None:
                 quantity=call.data["quantity"],
                 unit=call.data.get("unit"),
                 outcome=call.data["outcome"],
-                location_id=call.data.get("locationId"),
+                location_id=call.data.get("location_id"),
             )
             # Format success message
             consumed = result.get("consumed", 0)

@@ -59,7 +59,7 @@
           "name": "Outcome",
           "description": "Why the stock was consumed."
         },
-        "locationId": {
+        "location_id": {
           "name": "Location ID",
           "description": "Limit consumption to a specific location (optional)."
         }

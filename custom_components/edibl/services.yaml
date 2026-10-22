@@ -77,7 +77,7 @@ consume:
               value: expired
             - label: Tossed
               value: tossed
-    locationId:
+    location_id:
       name: Location ID
       description: Limit consumption to a specific location (optional).
       example: fridge

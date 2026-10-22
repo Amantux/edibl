@@ -4,6 +4,7 @@ myMeal propagates the ingredients its recipes/meal-plans need → Edibl tracks
 them as PlannedItems and reconciles against real stock. The result answers
 "what do I need / what should I order / what can I make right now?".
 """
+
 from datetime import datetime
 
 from flask import Blueprint, request, jsonify, abort
@@ -25,6 +26,7 @@ def _finite_float(v, default=1.0):
     Kept as a local alias because these call sites want a substituted default
     rather than a 422."""
     from ..utils import to_positive_float
+
     return to_positive_float(v, default)
 
 
@@ -32,15 +34,25 @@ def _parse_dt(v):
     if not v:
         return None
     try:
-        return datetime.fromisoformat(str(v).replace("Z", "+00:00").replace("+00:00", ""))
+        return datetime.fromisoformat(
+            str(v).replace("Z", "+00:00").replace("+00:00", "")
+        )
     except ValueError:
         return None
 
 
 def _planned_out(p):
-    return {"id": p.id, "name": p.name, "quantity": p.quantity, "unit": p.unit,
-            "neededBy": iso(p.needed_by), "source": p.source, "sourceRef": p.source_ref,
-            "meal": p.meal, "createdAt": iso(p.created_at)}
+    return {
+        "id": p.id,
+        "name": p.name,
+        "quantity": p.quantity,
+        "unit": p.unit,
+        "neededBy": iso(p.needed_by),
+        "source": p.source,
+        "sourceRef": p.source_ref,
+        "meal": p.meal,
+        "createdAt": iso(p.created_at),
+    }
 
 
 def _map_recipe_ingredients(recipe):
@@ -52,7 +64,7 @@ def _map_recipe_ingredients(recipe):
     # dough and again for dusting is one demand for the summed amount — so cook deducts
     # it once (not twice) and shop adds a single row.
     out = {}
-    for ing in (recipe.get("ingredients") or []):
+    for ing in recipe.get("ingredients") or []:
         food = ing.get("food") or {}
         unit = ing.get("unit") or {}
         name = (food.get("name") or ing.get("display") or "").strip()
@@ -81,6 +93,7 @@ def cook_ingredients(gid, ingredients, *, source_app="plan", idempotency_key=Non
     stock and so isn't fully covered (would need an action-level guard)."""
     from ..services import matching
     from ..services.inventory import selection, consume_lot
+
     results = []
     for idx, it in enumerate(ingredients):
         if not isinstance(it, dict):
@@ -95,7 +108,8 @@ def cook_ingredients(gid, ingredients, *, source_app="plan", idempotency_key=Non
         # than silently eating the wrong product — which is what this function's
         # own docstring already promises.
         resolution = matching.resolve_for_mutation(
-            gid, name, item_types={"food", "beverage"})
+            gid, name, item_types={"food", "beverage"}
+        )
         demand_unit = (it.get("unit") or "").strip() or None
         product = resolution.product
         consumed, shortfall = 0.0, qty
@@ -106,26 +120,40 @@ def cook_ingredients(gid, ingredients, *, source_app="plan", idempotency_key=Non
             # pick's `take` is in that lot's unit; shortfall is in the demand
             # unit, so consumed (demand unit) = qty - shortfall.
             picks, shortfall = selection.plan_consumption(
-                lots, qty, demand_unit=demand_unit)
+                lots, qty, demand_unit=demand_unit
+            )
             for pk in picks:
-                key = f"{idempotency_key}:{idx}:{pk.lot.id}" if idempotency_key else None
-                consume_lot(pk.lot, amount=pk.take, outcome="eaten",
-                            actor_user_id=None, source_app=source_app,
-                            idempotency_key=key)
+                key = (
+                    f"{idempotency_key}:{idx}:{pk.lot.id}" if idempotency_key else None
+                )
+                consume_lot(
+                    pk.lot,
+                    amount=pk.take,
+                    outcome="eaten",
+                    actor_user_id=None,
+                    source_app=source_app,
+                    idempotency_key=key,
+                )
             consumed = max(qty - shortfall, 0.0)
         # "ambiguous, ask which" and "you don't have it" are different answers
         # and used to be indistinguishable (both matched:False, no candidates),
         # so the caller could only report a shortfall. Surface the candidates.
-        row = {"name": name, "consumed": round(consumed, 4),
-               "shortfall": round(shortfall, 4),
-               "unit": demand_unit, "matched": bool(product),
-               "status": "consumed" if product else "unmatched"}
+        row = {
+            "name": name,
+            "consumed": round(consumed, 4),
+            "shortfall": round(shortfall, 4),
+            "unit": demand_unit,
+            "matched": bool(product),
+            "status": "consumed" if product else "unmatched",
+        }
         if product is None and resolution.candidates:
             from ..services import disambiguation
+
             row["status"] = "needs_confirmation"
             row["candidates"] = [
                 disambiguation.candidate_out(c)
-                for c in resolution.candidates[:disambiguation.MAX_CANDIDATES]]
+                for c in resolution.candidates[: disambiguation.MAX_CANDIDATES]
+            ]
         results.append(row)
     return results
 
@@ -134,8 +162,12 @@ def add_shortfall_to_shopping(gid, ingredients):
     """Add each ingredient's shortfall (what's not on hand) to the shopping list as a
     source='recipe' row, skipping anything already 'needed'. Returns the added rows."""
     shortfall = analyze_demand_phased(gid, ingredients)["shortfall"]
-    on_list = {i.name.lower() for i in db.session.query(ShoppingItem)
-               .filter_by(group_id=gid, status="needed").all()}
+    on_list = {
+        i.name.lower()
+        for i in db.session.query(ShoppingItem)
+        .filter_by(group_id=gid, status="needed")
+        .all()
+    }
     added = []
     for s in shortfall:
         key = s["name"].lower()
@@ -143,8 +175,13 @@ def add_shortfall_to_shopping(gid, ingredients):
             continue
         on_list.add(key)  # track within the batch too, so a repeated shortfall name
         # in a single call doesn't add two identical rows (analyze_demand doesn't merge)
-        i = ShoppingItem(name=s["name"], quantity=s["quantity"], unit=s["unit"],
-                         source="recipe", group_id=gid)
+        i = ShoppingItem(
+            name=s["name"],
+            quantity=s["quantity"],
+            unit=s["unit"],
+            source="recipe",
+            group_id=gid,
+        )
         # Add "needed by" note for dated shortfall items
         if s.get("neededBy"):
             nb = s["neededBy"]
@@ -152,6 +189,7 @@ def add_shortfall_to_shopping(gid, ingredients):
                 # Parse ISO date to extract just the date part
                 try:
                     from datetime import date
+
                     d = date.fromisoformat(nb.replace("Z", "").replace("+00:00", ""))
                     i.note = f"needed by {d.isoformat()}"
                 except ValueError:
@@ -194,6 +232,7 @@ def set_mymeal_settings():
         # boundary (env/options bypass this), but a save-time error is better
         # UX than a silent later failure.
         from ..services.url_guard import llm_url_ok
+
         ok, err = llm_url_ok(url)
         if not ok:
             return jsonify({"error": err or "URL is not allowed"}), 422
@@ -229,8 +268,9 @@ def discover_mymeal_debug():
     return jsonify(integ.discover_mymeal_debug())
 
 
-def _upsert_planned(gid, items, *, default_meal="", default_source="mymeal",
-                    default_ref=""):
+def _upsert_planned(
+    gid, items, *, default_meal="", default_source="mymeal", default_ref=""
+):
     """Upsert planned ingredients by (sourceRef, name), pruning any row for a
     sourceRef in this payload whose name is no longer present. Shared by the
     inbound push AND the outbound pull so a full-plan snapshot arriving by either
@@ -239,7 +279,7 @@ def _upsert_planned(gid, items, *, default_meal="", default_source="mymeal",
     Only sourceRefs present in THIS payload are touched — a recipe not in the
     snapshot, and every hand-added row with no sourceRef, is left alone."""
     upserted = []
-    kept: dict[str, set[str]] = {}   # ref -> names this payload still needs
+    kept: dict[str, set[str]] = {}  # ref -> names this payload still needs
     for it in items:
         if not isinstance(it, dict):
             continue  # a bare string / non-object entry must not 500 on .get
@@ -249,8 +289,11 @@ def _upsert_planned(gid, items, *, default_meal="", default_source="mymeal",
         ref = it.get("sourceRef") or default_ref or ""
         existing = None
         if ref:
-            existing = (db.session.query(PlannedItem)
-                        .filter_by(group_id=gid, source_ref=ref, name=name).first())
+            existing = (
+                db.session.query(PlannedItem)
+                .filter_by(group_id=gid, source_ref=ref, name=name)
+                .first()
+            )
             kept.setdefault(ref, set()).add(name)
         p = existing or PlannedItem(group_id=gid, name=name)
         p.quantity = _finite_float(it.get("quantity"))
@@ -269,11 +312,15 @@ def _upsert_planned(gid, items, *, default_meal="", default_source="mymeal",
     for ref, names in kept.items():
         # `kept` only ever gains non-empty refs, so this cannot mass-delete the
         # hand-added items that carry no sourceRef at all.
-        pruned += (db.session.query(PlannedItem)
-                   .filter(PlannedItem.group_id == gid,
-                           PlannedItem.source_ref == ref,
-                           PlannedItem.name.notin_(sorted(names)))
-                   .delete(synchronize_session=False))
+        pruned += (
+            db.session.query(PlannedItem)
+            .filter(
+                PlannedItem.group_id == gid,
+                PlannedItem.source_ref == ref,
+                PlannedItem.name.notin_(sorted(names)),
+            )
+            .delete(synchronize_session=False)
+        )
     return upserted, pruned
 
 
@@ -303,23 +350,41 @@ def ingest_plan():
         return jsonify({"error": "items[] required"}), 422
     gid = current_group().id
     upserted, pruned = _upsert_planned(
-        gid, items, default_meal=data.get("meal", ""),
+        gid,
+        items,
+        default_meal=data.get("meal", ""),
         default_source=data.get("source", "mymeal"),
-        default_ref=data.get("sourceRef") or "")
+        default_ref=data.get("sourceRef") or "",
+    )
     db.session.commit()
-    return jsonify({"upserted": len(upserted), "pruned": pruned,
-                    "items": [_planned_out(p) for p in upserted]}), 201
+    return jsonify(
+        {
+            "upserted": len(upserted),
+            "pruned": pruned,
+            "items": [_planned_out(p) for p in upserted],
+        }
+    ), 201
 
 
 @bp.get("/plan")
 @login_required
 def plan():
     """Current planned demand reconciled against on-hand stock."""
-    rows = (db.session.query(PlannedItem).filter_by(group_id=current_group().id)
-            .order_by(PlannedItem.needed_by.is_(None).asc(),
-                      PlannedItem.needed_by.asc()).all())
-    demand = [{"name": p.name, "quantity": p.quantity, "unit": p.unit,
-               "neededBy": iso(p.needed_by)} for p in rows]
+    rows = (
+        db.session.query(PlannedItem)
+        .filter_by(group_id=current_group().id)
+        .order_by(PlannedItem.needed_by.is_(None).asc(), PlannedItem.needed_by.asc())
+        .all()
+    )
+    demand = [
+        {
+            "name": p.name,
+            "quantity": p.quantity,
+            "unit": p.unit,
+            "neededBy": iso(p.needed_by),
+        }
+        for p in rows
+    ]
     analysis = analyze_demand_phased(current_group().id, demand)
     return jsonify({"planned": [_planned_out(p) for p in rows], **analysis})
 
@@ -342,8 +407,15 @@ def order():
     """Turn the current plan's shortfall into shopping-list items (skips dupes)."""
     gid = current_group().id
     rows = db.session.query(PlannedItem).filter_by(group_id=gid).all()
-    demand = [{"name": p.name, "quantity": p.quantity, "unit": p.unit,
-               "neededBy": iso(p.needed_by)} for p in rows]
+    demand = [
+        {
+            "name": p.name,
+            "quantity": p.quantity,
+            "unit": p.unit,
+            "neededBy": iso(p.needed_by),
+        }
+        for p in rows
+    ]
     added = add_shortfall_to_shopping(gid, demand)
     return jsonify({"added": len(added), "items": [shopping_out(i) for i in added]})
 
@@ -351,7 +423,7 @@ def order():
 @bp.post("/plan/cook")
 @login_required
 def cook():
-    """"I made this" — deduct a meal's ingredients from real stock. For each
+    """ "I made this" — deduct a meal's ingredients from real stock. For each
     ingredient, match a food/beverage product and consume the needed amount across
     its lots (prefer-open, then first-expiring, spilling). Body: {ingredients?:
     [{name, quantity?, unit?}], clear?: bool}. With no ingredients, uses the current
@@ -380,8 +452,9 @@ def cook():
         if cleared:
             db.session.commit()
 
-    return jsonify({"cooked": results, "cleared": cleared,
-                    "meal": data.get("meal", "")})
+    return jsonify(
+        {"cooked": results, "cleared": cleared, "meal": data.get("meal", "")}
+    )
 
 
 @bp.get("/cook/suggestions")
@@ -394,12 +467,18 @@ def cook_suggestions():
     never a 500."""
     mode = (request.args.get("mode") or "make").lower()
     if mode == "useup":
-        res = integ.mymeal_use_it_up(days=request.args.get("days", type=int),
-                                     limit=request.args.get("limit", type=int))
+        res = integ.mymeal_use_it_up(
+            days=request.args.get("days", type=int),
+            limit=request.args.get("limit", type=int),
+        )
     else:
         res = integ.mymeal_suggest()
-    out = {"mode": mode, "configured": res.get("configured", False),
-           "reachable": res.get("reachable", False), "suggestions": []}
+    out = {
+        "mode": mode,
+        "configured": res.get("configured", False),
+        "reachable": res.get("reachable", False),
+        "suggestions": [],
+    }
     if res.get("reachable"):
         data = res.get("data") or {}
         out["suggestions"] = data.get("suggestions") or []
@@ -414,9 +493,20 @@ def _recipe_or_error(recipe_id):
     a ready (json, status) tuple when myMeal is unreachable or the recipe is unusable."""
     res = integ.mymeal_recipe(recipe_id)
     if not res.get("reachable"):
-        return None, None, (jsonify({
-            "configured": res.get("configured", False), "reachable": False,
-            "error": res.get("error") or "myMeal is not reachable"}), 502)
+        return (
+            None,
+            None,
+            (
+                jsonify(
+                    {
+                        "configured": res.get("configured", False),
+                        "reachable": False,
+                        "error": res.get("error") or "myMeal is not reachable",
+                    }
+                ),
+                502,
+            ),
+        )
     recipe = res.get("data") or {}
     ingredients = _map_recipe_ingredients(recipe)
     if not ingredients:
@@ -427,17 +517,20 @@ def _recipe_or_error(recipe_id):
 @bp.post("/cook/recipe/<recipe_id>")
 @login_required
 def cook_recipe(recipe_id):
-    """"I cooked this myMeal recipe" — fetch its ingredients and deduct them from real
+    """ "I cooked this myMeal recipe" — fetch its ingredients and deduct them from real
     stock (same consumption as /plan/cook). Returns per-ingredient consumed/shortfall."""
     ingredients, recipe, err = _recipe_or_error(recipe_id)
     if err:
         return err
     # A per-press token from the client makes a retried cook replay instead of
     # deducting twice (the button is also disabled client-side during the request).
-    token = str((request.get_json(silent=True) or {}).get("idempotencyKey") or "").strip()
+    token = str(
+        (request.get_json(silent=True) or {}).get("idempotencyKey") or ""
+    ).strip()
     idem = f"cook:{recipe_id}:{token}" if token else None
-    results = cook_ingredients(current_group().id, ingredients, source_app="recipe",
-                               idempotency_key=idem)
+    results = cook_ingredients(
+        current_group().id, ingredients, source_app="recipe", idempotency_key=idem
+    )
     return jsonify({"recipe": recipe.get("name") or "", "cooked": results})
 
 
@@ -450,8 +543,13 @@ def shop_recipe(recipe_id):
     if err:
         return err
     added = add_shortfall_to_shopping(current_group().id, ingredients)
-    return jsonify({"recipe": recipe.get("name") or "",
-                    "added": len(added), "items": [shopping_out(i) for i in added]})
+    return jsonify(
+        {
+            "recipe": recipe.get("name") or "",
+            "added": len(added),
+            "items": [shopping_out(i) for i in added],
+        }
+    )
 
 
 @bp.delete("/plan/<item_id>")
@@ -468,8 +566,7 @@ def delete_planned(item_id):
 @bp.post("/plan/clear")
 @login_required
 def clear():
-    n = (db.session.query(PlannedItem).filter_by(group_id=current_group().id)
-         .delete())
+    n = db.session.query(PlannedItem).filter_by(group_id=current_group().id).delete()
     db.session.commit()
     return jsonify({"cleared": n})
 
@@ -520,10 +617,14 @@ def _sync_units_core(gid, *, use_llm):
         raise _SyncUnavailable(502, "myMeal is configured but unreachable.")
     # Defend against a malformed /units response (strings / non-list / version skew).
     raw = res.get("data")
-    mymeal_units = [u for u in raw if isinstance(u, dict) and u.get("name")] \
-        if isinstance(raw, list) else []
-    edibl_units = [unit_out(u) for u in
-                   db.session.query(Unit).filter_by(group_id=gid).all()]
+    mymeal_units = (
+        [u for u in raw if isinstance(u, dict) and u.get("name")]
+        if isinstance(raw, list)
+        else []
+    )
+    edibl_units = [
+        unit_out(u) for u in db.session.query(Unit).filter_by(group_id=gid).all()
+    ]
 
     plan = assistant.reconcile_units(edibl_units, mymeal_units) if use_llm else None
     reconciler = "llm" if plan is not None else "union"
@@ -531,21 +632,35 @@ def _sync_units_core(gid, *, use_llm):
         e_names = {canonical_unit(u["name"]) for u in edibl_units}
         m_names = {canonical_unit(u.get("name")) for u in mymeal_units}
         plan = {
-            "toEdibl": [u for u in mymeal_units
-                        if canonical_unit(u.get("name")) not in e_names],
-            "toMyMeal": [u for u in edibl_units
-                         if canonical_unit(u["name"]) not in m_names],
+            "toEdibl": [
+                u for u in mymeal_units if canonical_unit(u.get("name")) not in e_names
+            ],
+            "toMyMeal": [
+                u for u in edibl_units if canonical_unit(u["name"]) not in m_names
+            ],
         }
 
     # Normalize whatever the reconciler produced to well-formed {name, …} dicts.
     def _clean(items):
-        return [u for u in (items or []) if isinstance(u, dict) and (u.get("name") or "").strip()]
-    plan = {"toEdibl": _clean(plan.get("toEdibl")), "toMyMeal": _clean(plan.get("toMyMeal"))}
+        return [
+            u
+            for u in (items or [])
+            if isinstance(u, dict) and (u.get("name") or "").strip()
+        ]
+
+    plan = {
+        "toEdibl": _clean(plan.get("toEdibl")),
+        "toMyMeal": _clean(plan.get("toMyMeal")),
+    }
 
     before = db.session.query(Unit).filter_by(group_id=gid).count()
     for u in plan["toEdibl"]:
-        _upsert_unit(gid, u.get("name"), plural=u.get("pluralName") or "",
-                     abbreviation=u.get("abbreviation") or "")
+        _upsert_unit(
+            gid,
+            u.get("name"),
+            plural=u.get("pluralName") or "",
+            abbreviation=u.get("abbreviation") or "",
+        )
     db.session.commit()
     added_to_edibl = db.session.query(Unit).filter_by(group_id=gid).count() - before
 
@@ -553,13 +668,21 @@ def _sync_units_core(gid, *, use_llm):
     for u in plan["toMyMeal"]:
         if not (u.get("name") or "").strip():
             continue
-        r = mymeal_post("/units", {"name": u["name"],
-                                   "pluralName": u.get("pluralName") or "",
-                                   "abbreviation": u.get("abbreviation") or ""})
+        r = mymeal_post(
+            "/units",
+            {
+                "name": u["name"],
+                "pluralName": u.get("pluralName") or "",
+                "abbreviation": u.get("abbreviation") or "",
+            },
+        )
         if r.get("reachable"):
             pushed_to_mymeal += 1
-    return {"reconciler": reconciler, "addedToEdibl": added_to_edibl,
-            "pushedToMyMeal": pushed_to_mymeal}
+    return {
+        "reconciler": reconciler,
+        "addedToEdibl": added_to_edibl,
+        "pushedToMyMeal": pushed_to_mymeal,
+    }
 
 
 @bp.post("/integrations/mymeal/sync-units")

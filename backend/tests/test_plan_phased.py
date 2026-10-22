@@ -1,6 +1,6 @@
 """Tests for time-phased demand reconciliation."""
+
 from datetime import date, timedelta
-import pytest
 
 from app.extensions import db
 from app.models import StockLot, Product, Group
@@ -29,8 +29,18 @@ def test_one_butter_two_meals(app):
         # Two meals need 1 kg butter each
         today = date.today()
         demand = [
-            {"name": "Butter", "quantity": 1, "unit": "kg", "neededBy": today.isoformat()},
-            {"name": "Butter", "quantity": 1, "unit": "kg", "neededBy": (today + timedelta(days=3)).isoformat()},
+            {
+                "name": "Butter",
+                "quantity": 1,
+                "unit": "kg",
+                "neededBy": today.isoformat(),
+            },
+            {
+                "name": "Butter",
+                "quantity": 1,
+                "unit": "kg",
+                "neededBy": (today + timedelta(days=3)).isoformat(),
+            },
         ]
 
         result = analyze_demand_phased(g.id, demand)
@@ -49,13 +59,19 @@ def test_one_butter_two_meals(app):
         assert result["items"][1]["onHand"] == 0.0
         assert result["items"][1]["shortfall"] == 1.0
         assert result["items"][1]["onHandAtNeed"] == 0.0
-        assert result["items"][1]["firstShortfallDate"] == (today + timedelta(days=3)).isoformat()
+        assert (
+            result["items"][1]["firstShortfallDate"]
+            == (today + timedelta(days=3)).isoformat()
+        )
 
         # Shortfall list should have one entry with neededBy
         assert len(result["shortfall"]) == 1
         assert result["shortfall"][0]["name"] == "Butter"
         assert result["shortfall"][0]["quantity"] == 1.0
-        assert result["shortfall"][0]["neededBy"] == (today + timedelta(days=3)).isoformat()
+        assert (
+            result["shortfall"][0]["neededBy"]
+            == (today + timedelta(days=3)).isoformat()
+        )
 
         db.session.delete(g)
         db.session.commit()
@@ -154,7 +170,12 @@ def test_plan_order_writes_needed_by_note(app):
 
         today = date.today()
         demand = [
-            {"name": "Cheese", "quantity": 1, "unit": "kg", "neededBy": today.isoformat()},
+            {
+                "name": "Cheese",
+                "quantity": 1,
+                "unit": "kg",
+                "neededBy": today.isoformat(),
+            },
         ]
 
         result = add_shortfall_to_shopping(g.id, demand)
@@ -186,7 +207,12 @@ def test_satisfied_item_no_note(app):
 
         today = date.today()
         demand = [
-            {"name": "Eggs", "quantity": 6, "unit": "count", "neededBy": today.isoformat()},
+            {
+                "name": "Eggs",
+                "quantity": 6,
+                "unit": "count",
+                "neededBy": today.isoformat(),
+            },
         ]
 
         result = add_shortfall_to_shopping(g.id, demand)

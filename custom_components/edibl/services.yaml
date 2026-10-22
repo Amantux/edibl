@@ -32,12 +32,12 @@ consume:
   fields:
     name:
       name: Product name
-      description: Name of the product to consume. Required if productId is not provided.
+      description: Name of the product to consume. Required if product_id is not provided.
       required: false
       example: Whole milk
       selector:
         text:
-    productId:
+    product_id:
       name: Product ID
       description: Product ID to consume directly (skips name resolution). Required if name is not provided.
       required: false

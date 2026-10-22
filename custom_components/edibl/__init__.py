@@ -36,7 +36,7 @@ _ADD_SHOPPING_SCHEMA = vol.Schema(
 _CONSUME_SCHEMA = vol.Schema(
     {
         vol.Exclusive("name", "identifier"): cv.string,
-        vol.Exclusive("productId", "identifier"): cv.string,
+        vol.Exclusive("product_id", "identifier"): cv.string,
         vol.Optional("quantity", default=1): vol.Coerce(float),
         vol.Optional("unit"): cv.string,
         vol.Optional("outcome", default="eaten"): vol.In(_OUTCOME_VALUES),
@@ -98,7 +98,7 @@ def _async_register_services(hass: HomeAssistant) -> None:
         try:
             result = await coordinators[0].async_consume(
                 name=call.data.get("name"),
-                product_id=call.data.get("productId"),
+                product_id=call.data.get("product_id"),
                 quantity=call.data["quantity"],
                 unit=call.data.get("unit"),
                 outcome=call.data["outcome"],

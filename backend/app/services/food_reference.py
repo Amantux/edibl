@@ -51,7 +51,53 @@ _LOGGER = logging.getLogger("edibl.food_reference")
 # regenerable from a 2.5 MB asset already inside the image. Paying the
 # expansion once per container start is plainly better than adding 10 MB to
 # every snapshot a user ever takes of data they already have.
-_SHIPPED_NAME = "usda-sr-legacy-2018-04.sqlite"
+#: The expanded file is named after the CONTENT of the asset, not the USDA
+#: release it came from.
+#:
+#: It used to be the release name, which is not the build. foodcore 0.2.x
+#: rebuilt that same release with different nutrient ids and a new dataset
+#: SCHEMA, so a stale expansion from 0.1.x stayed in the cache looking
+#: perfectly usable. myMeal hit this on its own upgrade and silently reported
+#: "no data" for every nutrient; here it would raise instead, because 0.2.x
+#: checks the schema — louder, but still broken until somebody cleared /tmp by
+#: hand.
+#:
+#: A content hash is the only key that changes exactly when the data changes.
+#: Costs one digest of the asset per process; superseded expansions are swept
+#: on the way past so the cache cannot grow a 24 MB file per release forever.
+#:
+#: Ported from myMeal, in the SAME session this time. The sibling rule exists
+#: because this estate keeps fixing a thing in one app and leaving the other.
+_SHIPPED_STEM = "usda-sr-legacy"
+_DIGESTS: dict[str, str] = {}
+
+
+def _asset_digest(source: str) -> str:
+    """Short content hash of the shipped asset, memoised per path."""
+    import hashlib
+
+    cached = _DIGESTS.get(source)
+    if cached:
+        return cached
+    h = hashlib.sha256()
+    with open(source, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    _DIGESTS[source] = h.hexdigest()[:12]
+    return _DIGESTS[source]
+
+
+def _sweep_superseded(directory: str, keep: str) -> None:
+    """Delete expansions of OTHER builds. Never raises; best effort."""
+    try:
+        for name in os.listdir(directory):
+            if name.startswith(f"{_SHIPPED_STEM}-") and name != keep:
+                try:
+                    os.unlink(os.path.join(directory, name))
+                except OSError:
+                    pass
+    except OSError:
+        pass
 # A private directory, per euid, inside the system temp dir. The path has to be
 # PREDICTABLE so gunicorn's workers share one expansion instead of paying the
 # 10 MB each — but a predictable name in a world-writable directory is also
@@ -168,7 +214,9 @@ def _shipped_dataset_path() -> str:
     if not directory:
         return ""
 
-    target = os.path.join(directory, _SHIPPED_NAME)
+    name = f"{_SHIPPED_STEM}-{_asset_digest(source)}.sqlite"
+    _sweep_superseded(directory, name)
+    target = os.path.join(directory, name)
     try:
         st = os.lstat(target)
         if stat.S_ISREG(st.st_mode) and st.st_size > 0:

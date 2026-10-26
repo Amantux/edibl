@@ -40,4 +40,4 @@ httpx>=0.28.1
 # CI installs the wheel into a bare venv and asserts the dataset and rules
 # subpackage actually shipped, which is the one failure a source checkout
 # cannot see.
-foodcore @ git+https://github.com/Amantux/foodcore.git@v0.2.3
+foodcore @ git+https://github.com/Amantux/foodcore.git@v0.2.4

@@ -33,5 +33,37 @@
         }
       }
     }
+  },
+  "services": {
+    "consume": {
+      "name": "Consume stock",
+      "description": "Record consumption of stock (eat, discard, etc.).",
+      "fields": {
+        "name": {
+          "name": "Product name",
+          "description": "Name of the product to consume. Required if product_id is not provided."
+        },
+        "product_id": {
+          "name": "Product ID",
+          "description": "Product ID to consume directly (skips name resolution). Required if name is not provided."
+        },
+        "quantity": {
+          "name": "Quantity",
+          "description": "How much to consume."
+        },
+        "unit": {
+          "name": "Unit",
+          "description": "Unit of measure (optional, auto-detected if omitted)."
+        },
+        "outcome": {
+          "name": "Outcome",
+          "description": "Why the stock was consumed."
+        },
+        "location_id": {
+          "name": "Location ID",
+          "description": "Limit consumption to a specific location (optional)."
+        }
+      }
+    }
   }
 }

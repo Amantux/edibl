@@ -34,6 +34,7 @@ The integration reads Edibl's REST API and exposes:
   by voice ("add milk to the shopping list") or from any dashboard, check them
   off, and it updates Edibl (and vice-versa).
 - Service: **`edibl.add_to_shopping_list`** (`name`, `quantity`, `unit`).
+- Service: **`edibl.consume`** (`name` or `productId`, `quantity`, `unit`, `outcome`, `locationId`) — record consumption (eat, discard, etc.).
 
 **Install:** HACS → ⋮ → **Custom repositories** → add
 `https://github.com/Amantux/edibl` as an **Integration** → install **Edibl** →

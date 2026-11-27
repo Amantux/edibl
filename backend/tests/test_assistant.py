@@ -307,7 +307,7 @@ def test_list_models_ollama(auth_client, monkeypatch):
         httpx, "Client",
         lambda *a, **k: _FakeGetClient({"models": [{"name": "llama3.1"}, {"name": "mistral"}]}))
     auth_client.put("/api/v1/assistant/settings",
-                    json={"provider": "ollama", "baseUrl": "http://ha:11434"})
+                    json={"provider": "ollama", "baseUrl": "http://127.0.0.1:11434"})
     r = auth_client.post("/api/v1/assistant/models", json={})
     body = r.get_json()
     assert body["provider"] == "ollama" and body["models"] == ["llama3.1", "mistral"]

@@ -1319,8 +1319,7 @@ def reset_settings(gid):
 
 def _fetch_models(cfg):
     """Query the provider for its available models. Best-effort; raises on error."""
-    import httpx
-
+    from .pinned_transport import pinned_client
     from .url_guard import llm_url_ok
 
     p = cfg["provider"]
@@ -1333,19 +1332,19 @@ def _fetch_models(cfg):
     if not ok:
         raise ValueError(f"refusing to reach that base URL: {err}")
 
-    with httpx.Client(timeout=min(cfg["timeout"], 15)) as client:
+    with pinned_client(cfg["base_url"], timeout=min(cfg["timeout"], 15)) as client:
         if p == "ollama":
-            r = client.get(cfg["base_url"] + "/api/tags", headers=_ollama_headers(cfg))
+            r = client.get("/api/tags", headers=_ollama_headers(cfg))
             r.raise_for_status()
             return sorted(m["name"] for m in r.json().get("models", []) if m.get("name"))
         if p == "openai":
             h = {"Authorization": f"Bearer {cfg['api_key']}"} if cfg["api_key"] else {}
-            r = client.get(cfg["base_url"] + "/models", headers=h)
+            r = client.get("/models", headers=h)
             r.raise_for_status()
             return sorted(m["id"] for m in r.json().get("data", []) if m.get("id"))
         if p == "anthropic":
             h = {"x-api-key": cfg["api_key"], "anthropic-version": "2023-06-01"}
-            r = client.get(cfg["base_url"] + "/v1/models", headers=h)
+            r = client.get("/v1/models", headers=h)
             r.raise_for_status()
             return sorted(m["id"] for m in r.json().get("data", []) if m.get("id"))
     return []
@@ -1513,7 +1512,7 @@ def _stream_turn(client, url, headers, body, is_ollama):
 def _stream_openai_style(gid, user_messages, cfg, actions):
     """Streaming twin of :func:`_loop_openai_style` (OpenAI + Ollama). Yields text
     delta + tool events; RETURNS the final reply string."""
-    import httpx
+    from .pinned_transport import pinned_client
 
     is_ollama = cfg["provider"] == "ollama"
     convo = [{"role": "system", "content": _system_prompt()}]
@@ -1524,7 +1523,7 @@ def _stream_openai_style(gid, user_messages, cfg, actions):
         headers["Authorization"] = f"Bearer {cfg['api_key']}"
     url = cfg["base_url"] + ("/api/chat" if is_ollama else "/chat/completions")
 
-    with httpx.Client(timeout=cfg["timeout"]) as client:
+    with pinned_client(cfg["base_url"], timeout=cfg["timeout"]) as client:
         for _ in range(cfg["max_steps"]):
             body = {"model": cfg["model"], "messages": convo,
                     "tools": _openai_tools(), "stream": True}

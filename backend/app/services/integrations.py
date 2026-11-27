@@ -5,6 +5,7 @@ not configured or unreachable, callers get a clear {configured/reachable:false}
 rather than an exception. Edibl is the source of truth for inventory; these are
 for pulling recipes/plans (myMeal) or cross-querying non-food items (HomeHoard).
 """
+from .metrics import record
 from .sanitize import safe_upstream_detail
 import logging
 import os
@@ -33,8 +34,16 @@ def _url_blocked(base_url):
     validated here — right before the bearer token is attached.
     """
     from .url_guard import llm_url_ok
-    ok, _err = llm_url_ok(base_url or "")
-    return not ok
+    ok, err = llm_url_ok(base_url or "")
+    if not ok:
+        # A refused sibling endpoint is a security-relevant event, so it leaves
+        # the structured metric trail (log line + ring) before refusing.
+        try:
+            record("url_guard", ok=False, reason=err)
+        except Exception:  # noqa: BLE001 - metrics must never mask the guard's verdict
+            pass
+        return True
+    return False
 
 
 def _get(base_url, token, path, params=None):

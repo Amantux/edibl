@@ -28,6 +28,29 @@ def test_link_local_mymeal_url_is_refused_before_the_request(monkeypatch):
     assert opened["n"] == 0
 
 
+def test_guard_reject_emits_a_structured_metric(monkeypatch, caplog):
+    """The myMeal use-path guard must leave the same structured trace as the LLM
+    base-URL guard: one metric sample + one `metric ...` log line, and still refuse."""
+    import logging as _logging
+
+    from app.services import integrations as integ
+    from app.services import metrics as metrics_svc
+    from app.services import url_guard
+
+    monkeypatch.setattr(url_guard, "llm_url_ok", lambda url: (False, "unresolvable host"))
+
+    with caplog.at_level(_logging.INFO, logger="edibl.metrics"):
+        blocked = integ._url_blocked("http://this-host-does-not-exist.invalid")
+
+    assert blocked is True
+    assert any("metric" in r.getMessage() and "url_guard" in r.getMessage()
+               and "ok=False" in r.getMessage() for r in caplog.records)
+    samples = metrics_svc.recent("url_guard")
+    assert samples, "a guard reject must be recorded in the metrics ring"
+    assert samples[-1]["kind"] == "url_guard"
+    assert samples[-1]["reason"] == "unresolvable host"
+
+
 def test_private_lan_mymeal_url_still_reaches_the_sibling(monkeypatch):
     import httpx
 

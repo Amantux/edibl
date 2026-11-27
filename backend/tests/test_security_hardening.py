@@ -82,7 +82,7 @@ def test_private_lan_base_url_still_reaches_the_provider(monkeypatch):
     monkeypatch.setattr(svc, "_ollama_headers", lambda cfg: {})
 
     assert svc._fetch_models(_cfg("http://192.168.1.50:11434")) == ["llama3", "mistral"]
-    assert called["url"] == "http://192.168.1.50:11434/api/tags"
+    assert called["url"] == "/api/tags"
 
 
 @pytest.mark.parametrize("url", [

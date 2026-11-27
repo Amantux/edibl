@@ -1142,20 +1142,37 @@ def _job_key(ov, c, provider):
     return ""
 
 
-def _assert_base_url_ok(cfg) -> None:
+def _assert_base_url_ok(cfg) -> list:
     """SSRF guard at the point of USE for the LLM base URL.
 
-    llm_url_ok runs at save-time, in list_models and in job opts — but the chat
-    and completion paths built cfg via _cfg() (which reads LLM_BASE_URL / add-on
-    options directly) and posted to it with the API key attached, never
+    resolve_and_validate runs at save-time, in list_models and in job opts — but the
+    chat and completion paths built cfg via _cfg() (which reads LLM_BASE_URL /
+    add-on options directly) and posted to it with the API key attached, never
     checking. An env/options link-local value therefore bypassed every other
-    guard. Runs on every outbound call. Empty base_url (the homeassistant
-    provider uses the Supervisor) is allowed by llm_url_ok.
+    guard. Runs on every outbound call; the validated address(es) it returns are what
+    the outbound client pins to (``None`` when there is nothing to pin — a blank URL
+    falls back to the configured default). Empty base_url (the homeassistant provider
+    uses the Supervisor) is allowed by the guard.
     """
-    from .url_guard import llm_url_ok
-    ok, err = llm_url_ok(cfg.get("base_url") or "")
+    from .url_guard import resolve_and_validate
+    ok, pinned, err = resolve_and_validate(cfg.get("base_url") or "")
     if not ok:
         raise ValueError(f"refusing to reach that base URL: {err}")
+    return pinned
+
+
+def _llm_client(cfg, timeout=None):
+    """The outbound LLM client for ``cfg``'s base URL.
+
+    Fail closed: the base URL must pass the SSRF guard (see :func:`_assert_base_url_ok`)
+    and the returned client connects the socket to one of the validated addresses —
+    the pinned transport keeps the original host for the TLS SNI + Host header, so the
+    endpoint that was validated is the one that answers. ``timeout`` overrides the
+    configured LLM timeout (the model-listing path caps at 15s).
+    """
+    from .url_guard import pinned_client
+    return pinned_client(cfg["base_url"], _assert_base_url_ok(cfg),
+                        timeout=cfg["timeout"] if timeout is None else timeout)
 
 
 def _cfg(gid=None):
@@ -1221,8 +1238,8 @@ def job_cfg(gid, kind, opts=None):
     if base_url:
         # Validated at the point of USE: this can also arrive through per-run
         # opts, which never pass the settings endpoint's guard.
-        from .url_guard import llm_url_ok
-        ok, err = llm_url_ok(base_url)
+        from .url_guard import resolve_and_validate
+        ok, _pinned, err = resolve_and_validate(base_url)
         if not ok:
             raise ValueError(f"the async AI server URL is not allowed: {err}")
         cfg["base_url"] = base_url
@@ -1319,21 +1336,14 @@ def reset_settings(gid):
 
 def _fetch_models(cfg):
     """Query the provider for its available models. Best-effort; raises on error."""
-    import httpx
-
-    from .url_guard import llm_url_ok
-
     p = cfg["provider"]
     # Validate at the point of USE, before any HTTP client exists: the /assistant
     # settings endpoint guards what it saves, but a base URL supplied through the
     # environment or the add-on options never passes through there. Loopback and
     # private LAN stay allowed (a self-hosted Ollama is the common case); only
-    # link-local — the cloud metadata endpoint — is refused.
-    ok, err = llm_url_ok(cfg["base_url"])
-    if not ok:
-        raise ValueError(f"refusing to reach that base URL: {err}")
-
-    with httpx.Client(timeout=min(cfg["timeout"], 15)) as client:
+    # link-local — the cloud metadata endpoint — is refused. The client is then
+    # built pinned to the validated address.
+    with _llm_client(cfg, timeout=min(cfg["timeout"], 15)) as client:
         if p == "ollama":
             r = client.get(cfg["base_url"] + "/api/tags", headers=_ollama_headers(cfg))
             r.raise_for_status()
@@ -1390,7 +1400,6 @@ def run_chat(gid, messages):
                 "model": None, "enabled": False}
     actions = []
     try:
-        _assert_base_url_ok(cfg)  # SSRF: validate the base URL at point of use
         if provider == "homeassistant":
             reply = _relay_homeassistant(messages, cfg)
         elif provider == "anthropic":
@@ -1424,7 +1433,6 @@ def run_chat_stream(gid, messages):
         return
     actions = []
     try:
-        _assert_base_url_ok(cfg)  # SSRF: validate the base URL at point of use
         if provider in ("ollama", "openai"):
             reply = yield from _stream_openai_style(gid, messages, cfg, actions)
         elif provider == "homeassistant":
@@ -1513,8 +1521,6 @@ def _stream_turn(client, url, headers, body, is_ollama):
 def _stream_openai_style(gid, user_messages, cfg, actions):
     """Streaming twin of :func:`_loop_openai_style` (OpenAI + Ollama). Yields text
     delta + tool events; RETURNS the final reply string."""
-    import httpx
-
     is_ollama = cfg["provider"] == "ollama"
     convo = [{"role": "system", "content": _system_prompt()}]
     convo += [{"role": m["role"], "content": m.get("content", "")}
@@ -1524,7 +1530,7 @@ def _stream_openai_style(gid, user_messages, cfg, actions):
         headers["Authorization"] = f"Bearer {cfg['api_key']}"
     url = cfg["base_url"] + ("/api/chat" if is_ollama else "/chat/completions")
 
-    with httpx.Client(timeout=cfg["timeout"]) as client:
+    with _llm_client(cfg) as client:
         for _ in range(cfg["max_steps"]):
             body = {"model": cfg["model"], "messages": convo,
                     "tools": _openai_tools(), "stream": True}
@@ -1552,11 +1558,8 @@ def _stream_openai_style(gid, user_messages, cfg, actions):
 # --------------------------------------------------------------------------- #
 def _complete(cfg, system, user):
     """Return the model's text for one system+user prompt (no tool calling)."""
-    import httpx
-
-    _assert_base_url_ok(cfg)  # SSRF: validate the base URL at point of use
     provider = cfg["provider"]
-    with httpx.Client(timeout=cfg["timeout"]) as client:
+    with _llm_client(cfg) as client:
         if provider == "ollama":
             r = client.post(cfg["base_url"] + "/api/chat", headers=_ollama_headers(cfg), json={
                 "model": cfg["model"], "stream": False,
@@ -1681,12 +1684,8 @@ _EXTRACT_IMAGE_USER = "Extract the food/grocery items from this receipt or order
 def _complete_vision(cfg, system, user, image_b64, media_type):
     """One completion where the user turn includes an image. Requires a vision
     model (gpt-4o / claude / llava). image_b64 is raw base64 (no data: prefix)."""
-    import httpx
-
-    _assert_base_url_ok(cfg)  # SSRF: validate the base URL at point of use
-
     provider = cfg["provider"]
-    with httpx.Client(timeout=cfg["timeout"]) as client:
+    with _llm_client(cfg) as client:
         if provider == "ollama":
             r = client.post(cfg["base_url"] + "/api/chat", headers=_ollama_headers(cfg), json={
                 "model": cfg["model"], "stream": False,
@@ -1906,8 +1905,6 @@ def _openai_tools():
 
 
 def _loop_openai_style(gid, user_messages, cfg, actions):
-    import httpx
-
     is_ollama = cfg["provider"] == "ollama"
     convo = [{"role": "system", "content": _system_prompt()}]
     convo += [{"role": m["role"], "content": m.get("content", "")}
@@ -1917,7 +1914,7 @@ def _loop_openai_style(gid, user_messages, cfg, actions):
         headers["Authorization"] = f"Bearer {cfg['api_key']}"
     url = cfg["base_url"] + ("/api/chat" if is_ollama else "/chat/completions")
 
-    with httpx.Client(timeout=cfg["timeout"]) as client:
+    with _llm_client(cfg) as client:
         for _ in range(cfg["max_steps"]):
             body = {"model": cfg["model"], "messages": convo,
                     "tools": _openai_tools()}
@@ -1953,8 +1950,6 @@ def _anthropic_tools():
 
 
 def _loop_anthropic(gid, user_messages, cfg, actions):
-    import httpx
-
     convo = [{"role": m["role"], "content": m.get("content", "")}
              for m in user_messages if m.get("role") in ("user", "assistant")]
     headers = {"Content-Type": "application/json",
@@ -1962,7 +1957,7 @@ def _loop_anthropic(gid, user_messages, cfg, actions):
                "anthropic-version": "2023-06-01"}
     url = cfg["base_url"] + "/v1/messages"
 
-    with httpx.Client(timeout=cfg["timeout"]) as client:
+    with _llm_client(cfg) as client:
         for _ in range(cfg["max_steps"]):
             body = {"model": cfg["model"], "max_tokens": 1024,
                     "system": _system_prompt(), "tools": _anthropic_tools(),

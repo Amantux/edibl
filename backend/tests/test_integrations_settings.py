@@ -5,22 +5,22 @@ def test_mymeal_persist_and_masked(auth_client):
     g = auth_client.get("/api/v1/integrations/mymeal").get_json()
     assert g["source"] == "none" and g["url"] == "" and g["hasToken"] is False
     body = auth_client.put("/api/v1/integrations/mymeal",
-                           json={"url": "http://mymeal:8000", "token": "sk-mm"}).get_json()
-    assert body["url"] == "http://mymeal:8000" and body["source"] == "ui"
+                           json={"url": "https://api.mymeal.com/v1", "token": "sk-mm"}).get_json()
+    assert body["url"] == "https://api.mymeal.com/v1" and body["source"] == "ui"
     g = auth_client.get("/api/v1/integrations/mymeal").get_json()
     assert g["hasToken"] is True and "sk-mm" not in str(g)
     # PUT without token keeps it
-    auth_client.put("/api/v1/integrations/mymeal", json={"url": "http://mymeal:9000"})
+    auth_client.put("/api/v1/integrations/mymeal", json={"url": "https://api.mymeal.com/v1"})
     assert auth_client.get("/api/v1/integrations/mymeal").get_json()["hasToken"] is True
 
 
 def test_mymeal_override_env(auth_client):
-    auth_client.application.config["MYMEAL_URL"] = "http://env-mymeal:8000"
+    auth_client.application.config["MYMEAL_URL"] = "https://api.mymeal.com/v1"
     assert auth_client.get("/api/v1/integrations/mymeal").get_json()["source"] == "addon"
-    auth_client.put("/api/v1/integrations/mymeal", json={"url": "http://ui-mymeal:8000"})
+    auth_client.put("/api/v1/integrations/mymeal", json={"url": "https://api.mymeal.com/v1"})
     g = auth_client.get("/api/v1/integrations/mymeal").get_json()
-    assert g["url"] == "http://ui-mymeal:8000" and g["source"] == "ui"
-    assert auth_client.get("/api/v1/integrations/status").get_json()["myMeal"]["url"] == "http://ui-mymeal:8000"
+    assert g["url"] == "https://api.mymeal.com/v1" and g["source"] == "ui"
+    assert auth_client.get("/api/v1/integrations/status").get_json()["myMeal"]["url"] == "https://api.mymeal.com/v1"
 
 
 def test_mymeal_test_when_unconfigured(auth_client):

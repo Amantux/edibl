@@ -17,23 +17,29 @@ _PROBE_TIMEOUT = 1.5  # bounded probes during add-on discovery (matches myMeal)
 
 
 def _client(base_url, token):
-    import httpx
+    from .url_guard import pinned_client, resolve_and_validate
+    ok, pinned, err = resolve_and_validate(base_url or "")
+    if not ok:
+        raise ValueError(f"refusing to reach that base URL: {err}")
     headers = {"Authorization": f"Bearer {token}"} if token else {}
-    return httpx.Client(base_url=base_url.rstrip("/"), headers=headers, timeout=_TIMEOUT)
+    # Outbound sibling traffic goes through the pinned transport: the socket
+    # connects to the validated address while the original host is kept for the
+    # TLS SNI / Host header (a rebound resolver cannot steer it elsewhere).
+    return pinned_client(base_url, pinned, headers=headers, timeout=_TIMEOUT)
 
 
 def _url_blocked(base_url):
     """SSRF guard at the point of USE for the sibling URL.
 
     Same policy Edibl already applies to the owner-supplied LLM base URL
-    (url_guard.llm_url_ok): block link-local (169.254.169.254) while allowing
+    (url_guard.resolve_and_validate): block link-local (169.254.169.254) while allowing
     loopback/private LAN, where a sibling add-on legitimately runs. The myMeal
     URL is set by the same owner at the same trust level and also arrives via
     env / add-on options that bypass any save-time check, so it must be
     validated here — right before the bearer token is attached.
     """
-    from .url_guard import llm_url_ok
-    ok, _err = llm_url_ok(base_url or "")
+    from .url_guard import resolve_and_validate
+    ok, _pinned, _err = resolve_and_validate(base_url or "")
     return not ok
 
 

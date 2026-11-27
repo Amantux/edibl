@@ -48,6 +48,7 @@ from ..services.inventory import (
     split_lot,
     thaw_lot,
 )
+from .metrics import record
 from .sanitize import safe_upstream_detail
 
 _LOGGER = logging.getLogger("edibl.assistant")
@@ -1155,6 +1156,12 @@ def _assert_base_url_ok(cfg) -> None:
     from .url_guard import llm_url_ok
     ok, err = llm_url_ok(cfg.get("base_url") or "")
     if not ok:
+        # A refused endpoint is a security-relevant event, so it leaves the
+        # structured metric trail (log line + ring) before failing closed.
+        try:
+            record("url_guard", ok=False, reason=err)
+        except Exception:  # noqa: BLE001 - metrics must never mask the guard's refusal
+            pass
         raise ValueError(f"refusing to reach that base URL: {err}")
 
 

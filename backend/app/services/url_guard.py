@@ -35,8 +35,9 @@ def llm_url_ok(url):
     try:
         infos = socket.getaddrinfo(host, None)
     except (OSError, UnicodeError):
-        # Unresolvable / malformed host: let the real request fail rather than 500.
-        return True, None
+        # Unresolvable / malformed host: fail closed rather than letting an
+        # endpoint we could not resolve through to the real request.
+        return False, "unresolvable host"
     for info in infos:
         addr = ipaddress.ip_address(info[4][0])
         # An IPv4-mapped IPv6 address (::ffff:169.254.169.254) connects to the real

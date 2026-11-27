@@ -104,6 +104,58 @@ def test_guard_refuses_unsafe_urls(url):
     assert not ok
 
 
+def test_guard_fails_closed_on_unresolvable_host(monkeypatch):
+    """A host that cannot be resolved must be REFUSED, not let through to the request."""
+    import socket
+    from app.services import url_guard
+
+    def _boom(*a, **k):
+        raise OSError("getaddrinfo failed")
+
+    monkeypatch.setattr(socket, "getaddrinfo", _boom)
+    ok, err = url_guard.llm_url_ok("http://this-host-does-not-exist.invalid:11434")
+    assert ok is False
+    assert err == "unresolvable host"
+
+
+def test_guard_fails_closed_on_malformed_host(monkeypatch):
+    """A host that fails IDNA/mangling (UnicodeError) must be REFUSED too."""
+    import socket
+    from app.services import url_guard
+
+    def _boom(*a, **k):
+        raise UnicodeError("malformed host")
+
+    monkeypatch.setattr(socket, "getaddrinfo", _boom)
+    ok, err = url_guard.llm_url_ok("http://exämple.invalid:11434")
+    assert ok is False
+    assert err == "unresolvable host"
+
+
+def test_assert_base_url_ok_emits_a_metric_on_reject(monkeypatch, caplog):
+    """A refused base URL must leave the structured trace (metric log line + ring
+    sample), and _assert_base_url_ok must still raise — the caller fails closed
+    either way."""
+    import logging as _logging
+
+    from app.services import assistant as svc
+    from app.services import metrics as metrics_svc
+    from app.services import url_guard
+
+    monkeypatch.setattr(url_guard, "llm_url_ok", lambda url: (False, "base URL host is not allowed"))
+
+    with caplog.at_level(_logging.INFO, logger="edibl.metrics"):
+        with pytest.raises(ValueError, match="refusing to reach"):
+            svc._assert_base_url_ok({"base_url": "http://169.254.169.254"})
+
+    assert any("metric" in r.getMessage() and "url_guard" in r.getMessage()
+               and "ok=False" in r.getMessage() for r in caplog.records)
+    samples = metrics_svc.recent("url_guard")
+    assert samples, "a guard reject must be recorded in the metrics ring"
+    assert samples[-1]["kind"] == "url_guard"
+    assert samples[-1]["reason"] == "base URL host is not allowed"
+
+
 # --- SPA path traversal ------------------------------------------------------
 
 def test_spa_serves_a_nested_asset(app, tmp_path, monkeypatch):

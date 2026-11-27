@@ -6,6 +6,7 @@ rather than an exception. Edibl is the source of truth for inventory; these are
 for pulling recipes/plans (myMeal) or cross-querying non-food items (HomeHoard).
 """
 from .sanitize import safe_upstream_detail
+from .url_guard import guarded_client, guarded_send, llm_url_ok
 import logging
 import os
 
@@ -17,22 +18,22 @@ _PROBE_TIMEOUT = 1.5  # bounded probes during add-on discovery (matches myMeal)
 
 
 def _client(base_url, token):
-    import httpx
     headers = {"Authorization": f"Bearer {token}"} if token else {}
-    return httpx.Client(base_url=base_url.rstrip("/"), headers=headers, timeout=_TIMEOUT)
+    # follow_redirects=False + guarded_send re-validating every hop: a sibling
+    # redirect to a blocked host aborts the call instead of being followed blindly.
+    return guarded_client(base_url=base_url.rstrip("/"), headers=headers, timeout=_TIMEOUT)
 
 
 def _url_blocked(base_url):
     """SSRF guard at the point of USE for the sibling URL.
 
     Same policy Edibl already applies to the owner-supplied LLM base URL
-    (url_guard.llm_url_ok): block link-local (169.254.169.254) while allowing
-    loopback/private LAN, where a sibling add-on legitimately runs. The myMeal
-    URL is set by the same owner at the same trust level and also arrives via
-    env / add-on options that bypass any save-time check, so it must be
-    validated here — right before the bearer token is attached.
+    (url_guard.llm_url_ok): block non-public addresses (link-local, loopback,
+    private LAN, reserved, multicast). The myMeal URL is set by the same owner at
+    the same trust level and also arrives via env / add-on options that bypass any
+    save-time check, so it must be validated here — right before the bearer token
+    is attached.
     """
-    from .url_guard import llm_url_ok
     ok, _err = llm_url_ok(base_url or "")
     return not ok
 
@@ -45,7 +46,7 @@ def _get(base_url, token, path, params=None):
                 "error": "connected-app URL is not allowed"}
     try:
         with _client(base_url, token) as c:
-            r = c.get(path, params=params or {})
+            r = guarded_send(c, "get", path, params=params or {})
             r.raise_for_status()
             return {"configured": True, "reachable": True, "data": r.json()}
     except Exception as e:  # noqa: BLE001 - bounded, best-effort
@@ -64,7 +65,7 @@ def _write(method, base_url, token, path, payload=None):
                 "error": "connected-app URL is not allowed"}
     try:
         with _client(base_url, token) as c:
-            r = c.request(method, path, json=payload)
+            r = guarded_send(c, method, path, json=payload)
             r.raise_for_status()
             return {"configured": True, "reachable": True,
                     "data": r.json() if r.content else None}

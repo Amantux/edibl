@@ -39,7 +39,7 @@ class _FakeClient:
 
 def _configure(app, provider="ollama"):
     app.config["LLM_PROVIDER"] = provider
-    app.config["LLM_BASE_URL"] = "http://llm.test"
+    app.config["LLM_BASE_URL"] = "https://api.openai.com/v1"
     app.config["LLM_API_KEY"] = "k"
     app.config["LLM_MODEL"] = "test-model"
     app.config["LLM_TIMEOUT"] = 5
@@ -144,7 +144,7 @@ def test_parse_items_handles_garbage(app):
 def test_extract_endpoint(auth_client, monkeypatch):
     app = auth_client.application
     app.config["LLM_PROVIDER"] = "ollama"
-    app.config["LLM_BASE_URL"] = "http://x"
+    app.config["LLM_BASE_URL"] = "https://api.openai.com/v1"
     app.config["LLM_MODEL"] = "m"
     script = [{"message": {"role": "assistant",
                            "content": '[{"name":"Eggs","quantity":12,"unit":"count"}]'}}]
@@ -167,6 +167,7 @@ def test_homeassistant_enabled_but_completion_only(app):
 def test_homeassistant_relay_chat(app, monkeypatch):
     app.config["LLM_PROVIDER"] = "homeassistant"
     app.config["LLM_API_KEY"] = "supervisor-token"
+    app.config["LLM_BASE_URL"] = "https://api.openai.com/v1"
     ha_response = {"response": {"speech": {"plain": {"speech": "You have 2 litres of milk."}}}}
     monkeypatch.setattr(httpx, "Client", lambda *a, **k: _FakeClient([ha_response]))
     with app.app_context():
@@ -255,9 +256,9 @@ def test_settings_ui_overrides_addon_env(auth_client):
     g = auth_client.get("/api/v1/assistant/settings").get_json()
     assert g["source"] == "addon" and g["provider"] == "anthropic"
     body = auth_client.put("/api/v1/assistant/settings", json={
-        "provider": "ollama", "baseUrl": "http://ha:11434", "model": "llama3.1"}).get_json()
+        "provider": "ollama", "baseUrl": "https://api.openai.com/v1", "model": "llama3.1"}).get_json()
     assert body["provider"] == "ollama" and body["source"] == "ui"
-    assert body["baseUrl"] == "http://ha:11434"
+    assert body["baseUrl"] == "https://api.openai.com/v1"
     cfg = auth_client.get("/api/v1/assistant/config").get_json()
     assert cfg["provider"] == "ollama" and cfg["model"] == "llama3.1"
 
@@ -307,7 +308,7 @@ def test_list_models_ollama(auth_client, monkeypatch):
         httpx, "Client",
         lambda *a, **k: _FakeGetClient({"models": [{"name": "llama3.1"}, {"name": "mistral"}]}))
     auth_client.put("/api/v1/assistant/settings",
-                    json={"provider": "ollama", "baseUrl": "http://ha:11434"})
+                    json={"provider": "ollama", "baseUrl": "https://api.openai.com/v1"})
     r = auth_client.post("/api/v1/assistant/models", json={})
     body = r.get_json()
     assert body["provider"] == "ollama" and body["models"] == ["llama3.1", "mistral"]
@@ -417,7 +418,7 @@ def test_agent_id_from_addon_option_reaches_cfg_and_settings(app):
 def test_reset_settings_clears_ui_override(auth_client, app):
     app.config["LLM_PROVIDER"] = ""  # no add-on provider configured
     auth_client.put("/api/v1/assistant/settings",
-                    json={"provider": "ollama", "baseUrl": "http://ollama.test"})
+                    json={"provider": "ollama", "baseUrl": "https://api.openai.com/v1"})
     assert auth_client.get("/api/v1/assistant/settings").get_json()["source"] == "ui"
     r = auth_client.delete("/api/v1/assistant/settings").get_json()
     assert r["source"] == "none" and r["provider"] == ""  # fell back to add-on/env

@@ -50,44 +50,18 @@ def test_link_local_base_url_is_refused_without_a_request(monkeypatch):
     assert seen["opened"] is False   # blocked BEFORE any client was constructed
 
 
-def test_private_lan_base_url_still_reaches_the_provider(monkeypatch):
-    """The guard must NOT break a self-hosted Ollama on the LAN/loopback."""
-    from app.services import assistant as svc
+def test_private_lan_base_url_is_refused_without_a_request(monkeypatch):
+    """The widened guard refuses private LAN too — only globally-routable hosts
+    may be dialed. The client must never be built for it."""
+    from app.services.assistant import _fetch_models
 
-    called = {}
-
-    class _Resp:
-        def raise_for_status(self):
-            pass
-
-        def json(self):
-            return {"models": [{"name": "llama3"}, {"name": "mistral"}]}
-
-    class _Client:
-        def __init__(self, *a, **k):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
-        def get(self, url, headers=None):
-            called["url"] = url
-            return _Resp()
-
-    import httpx
-    monkeypatch.setattr(httpx, "Client", _Client)
-    monkeypatch.setattr(svc, "_ollama_headers", lambda cfg: {})
-
-    assert svc._fetch_models(_cfg("http://192.168.1.50:11434")) == ["llama3", "mistral"]
-    assert called["url"] == "http://192.168.1.50:11434/api/tags"
+    seen = _no_network(monkeypatch)
+    with pytest.raises(ValueError, match="refusing to reach"):
+        _fetch_models(_cfg("http://192.168.1.50:11434"))
+    assert seen["opened"] is False   # blocked BEFORE any client was constructed
 
 
 @pytest.mark.parametrize("url", [
-    "http://127.0.0.1:11434",        # loopback — the single-box install
-    "http://192.168.1.50:11434",     # private LAN — a NAS running Ollama
     "https://api.openai.com/v1",     # public provider
 ])
 def test_guard_allows_legitimate_hosts(url):
@@ -97,6 +71,9 @@ def test_guard_allows_legitimate_hosts(url):
 
 @pytest.mark.parametrize("url", [
     "http://169.254.169.254/latest/meta-data/",   # cloud metadata
+    "http://127.0.0.1:11434",        # loopback — the single-box install
+    "http://192.168.1.50:11434",     # private LAN — a NAS running Ollama
+    "http://no-such-host.invalid",   # unresolvable → fail closed
     "ftp://example.com",                          # wrong scheme
 ])
 def test_guard_refuses_unsafe_urls(url):

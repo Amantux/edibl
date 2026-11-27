@@ -28,7 +28,9 @@ def test_link_local_mymeal_url_is_refused_before_the_request(monkeypatch):
     assert opened["n"] == 0
 
 
-def test_private_lan_mymeal_url_still_reaches_the_sibling(monkeypatch):
+def test_a_private_lan_mymeal_url_is_refused_before_the_request(monkeypatch):
+    """The widened guard refuses private LAN too — only globally-routable sibling
+    hosts are dialed. Blocked before any token-bearing request is built."""
     import httpx
 
     class _Resp:
@@ -45,6 +47,6 @@ def test_private_lan_mymeal_url_still_reaches_the_sibling(monkeypatch):
 
     monkeypatch.setattr(httpx, "Client", _Client)
 
-    assert integrations._get("http://192.168.1.9:8099", "t", "/have")["reachable"] is True
-    assert integrations._write("POST", "http://10.0.0.5:8099", "t", "/x", {})["reachable"] is True
+    assert integrations._get("http://192.168.1.9:8099", "t", "/have")["reachable"] is False
+    assert integrations._write("POST", "http://10.0.0.5:8099", "t", "/x", {})["reachable"] is False
 

@@ -11,7 +11,7 @@ from app.services import assistant
 from app.services import settings as st
 
 
-def _chat_cfg(monkeypatch, host="http://fast-box:11434"):
+def _chat_cfg(monkeypatch, host="https://api.openai.com/v1"):
     monkeypatch.setattr(assistant, "_cfg", lambda gid=None: {
         "provider": "ollama", "base_url": host, "api_key": "", "model": "chat-model",
         "agent_id": "", "timeout": 60, "max_steps": 6})
@@ -23,17 +23,17 @@ def test_an_unset_area_still_means_same_as_chat(app, auth_client, monkeypatch, g
     with app.app_context():
         _chat_cfg(monkeypatch)
         cfg = assistant.job_cfg(gid, "enrich", {})
-        assert cfg["base_url"] == "http://fast-box:11434"
+        assert cfg["base_url"] == "https://api.openai.com/v1"
 
 
 def test_a_job_can_point_at_its_own_server(app, auth_client, monkeypatch, gid):
 
     with app.app_context():
         st.set_job_settings(gid, enrich={"provider": "ollama", "model": "qwen3:4b",
-                                         "baseUrl": "http://192.168.1.50:11434"})
+                                         "baseUrl": "https://api.openai.com/v1"})
         _chat_cfg(monkeypatch)
         cfg = assistant.job_cfg(gid, "enrich", {})
-        assert cfg["base_url"] == "http://192.168.1.50:11434"
+        assert cfg["base_url"] == "https://api.openai.com/v1"
         assert cfg["model"] == "qwen3:4b"
 
 
@@ -43,32 +43,32 @@ def test_the_async_server_does_not_leak_into_chat(app, auth_client, monkeypatch,
 
     with app.app_context():
         st.set_job_settings(gid, enrich={"provider": "ollama",
-                                         "baseUrl": "http://slow-box:11434"})
+                                         "baseUrl": "https://api.openai.com/v1"})
         _chat_cfg(monkeypatch)
-        assert assistant.job_cfg(gid, "enrich", {})["base_url"] == "http://slow-box:11434"
+        assert assistant.job_cfg(gid, "enrich", {})["base_url"] == "https://api.openai.com/v1"
         # The chat config itself is untouched.
-        assert assistant._cfg(gid)["base_url"] == "http://fast-box:11434"
+        assert assistant._cfg(gid)["base_url"] == "https://api.openai.com/v1"
 
 
 def test_the_two_job_areas_are_independent(app, auth_client, monkeypatch, gid):
 
     with app.app_context():
         st.set_job_settings(gid,
-                            enrich={"provider": "ollama", "baseUrl": "http://box-a:11434"},
-                            organize={"provider": "ollama", "baseUrl": "http://box-b:11434"})
+                            enrich={"provider": "ollama", "baseUrl": "https://api.openai.com/v1"},
+                            organize={"provider": "ollama", "baseUrl": "https://api.anthropic.com/v1"})
         _chat_cfg(monkeypatch)
-        assert assistant.job_cfg(gid, "enrich", {})["base_url"] == "http://box-a:11434"
-        assert assistant.job_cfg(gid, "categorize", {})["base_url"] == "http://box-b:11434"
+        assert assistant.job_cfg(gid, "enrich", {})["base_url"] == "https://api.openai.com/v1"
+        assert assistant.job_cfg(gid, "categorize", {})["base_url"] == "https://api.anthropic.com/v1"
 
 
 def test_a_per_run_option_beats_the_stored_server(app, auth_client, monkeypatch, gid):
 
     with app.app_context():
         st.set_job_settings(gid, enrich={"provider": "ollama",
-                                         "baseUrl": "http://stored:11434"})
+                                         "baseUrl": "https://api.openai.com/v1"})
         _chat_cfg(monkeypatch)
-        cfg = assistant.job_cfg(gid, "enrich", {"baseUrl": "http://per-run:11434"})
-        assert cfg["base_url"] == "http://per-run:11434"
+        cfg = assistant.job_cfg(gid, "enrich", {"baseUrl": "https://api.anthropic.com/v1"})
+        assert cfg["base_url"] == "https://api.anthropic.com/v1"
 
 
 def test_the_async_key_wins_over_the_provider_default(app, auth_client, monkeypatch, gid):
@@ -136,10 +136,11 @@ def test_an_unsafe_server_supplied_per_run_is_refused_at_use(app, auth_client, m
     assert "not allowed" in str(ei.value)
 
 
-def test_a_private_lan_server_is_allowed(auth_client):
-    """Self-hosting on the LAN is the entire use case — it must not be blocked."""
+def test_a_private_lan_server_is_refused(auth_client):
+    """Self-hosting on the LAN is now refused — the widened guard only allows
+    globally-routable hosts (private LAN, loopback, link-local, reserved and
+    multicast are all non-public)."""
     r = auth_client.put("/api/v1/assistant/job-settings",
                         json={"enrich": {"provider": "ollama",
                                          "baseUrl": "http://192.168.1.50:11434"}})
-    assert r.status_code == 200
-    assert r.get_json()["enrich"]["baseUrl"] == "http://192.168.1.50:11434"
+    assert r.status_code == 422

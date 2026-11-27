@@ -49,6 +49,8 @@ from ..services.inventory import (
     thaw_lot,
 )
 from .sanitize import safe_upstream_detail
+from .url_guard import (guarded_client, guarded_redirect_target, guarded_send,
+                       llm_url_ok, MAX_REDIRECTS)
 
 _LOGGER = logging.getLogger("edibl.assistant")
 
@@ -1142,20 +1144,24 @@ def _job_key(ov, c, provider):
     return ""
 
 
-def _assert_base_url_ok(cfg) -> None:
-    """SSRF guard at the point of USE for the LLM base URL.
+def _assert_base_url_ok(cfg, base_url=None, refused="refusing to reach that base URL") -> None:
+    """SSRF guard at the point of USE for the LLM base URL — the single guarded
+    egress path for every outbound LLM call.
 
-    llm_url_ok runs at save-time, in list_models and in job opts — but the chat
-    and completion paths built cfg via _cfg() (which reads LLM_BASE_URL / add-on
-    options directly) and posted to it with the API key attached, never
-    checking. An env/options link-local value therefore bypassed every other
-    guard. Runs on every outbound call. Empty base_url (the homeassistant
-    provider uses the Supervisor) is allowed by llm_url_ok.
+    The decision itself lives in url_guard.llm_url_ok; this helper applies it and
+    raises when the host is refused. llm_url_ok runs at save-time, in list_models
+    and in job opts — but the chat and completion paths built cfg via _cfg() (which
+    reads LLM_BASE_URL / add-on options directly) and posted to it with the API key
+    attached, never checking. An env/options link-local value therefore bypassed
+    every other guard. Runs on every outbound call. Empty base_url (the
+    homeassistant provider uses the Supervisor) is allowed by llm_url_ok.
+
+    ``base_url`` overrides ``cfg["base_url"]`` (the async per-run AI server opt);
+    ``refused`` names the refused target in the error, for that context.
     """
-    from .url_guard import llm_url_ok
-    ok, err = llm_url_ok(cfg.get("base_url") or "")
+    ok, err = llm_url_ok(base_url if base_url is not None else (cfg.get("base_url") or ""))
     if not ok:
-        raise ValueError(f"refusing to reach that base URL: {err}")
+        raise ValueError(f"{refused}: {err}")
 
 
 def _cfg(gid=None):
@@ -1219,12 +1225,11 @@ def job_cfg(gid, kind, opts=None):
     # above. This is what lets the slow async work run on a local box while chat
     # stays on something faster.
     if base_url:
-        # Validated at the point of USE: this can also arrive through per-run
-        # opts, which never pass the settings endpoint's guard.
-        from .url_guard import llm_url_ok
-        ok, err = llm_url_ok(base_url)
-        if not ok:
-            raise ValueError(f"the async AI server URL is not allowed: {err}")
+        # Validated at the point of USE via the single guarded egress path: this
+        # can also arrive through per-run opts, which never pass the settings
+        # endpoint's guard.
+        _assert_base_url_ok(cfg, base_url=base_url,
+                            refused="the async AI server URL is not allowed")
         cfg["base_url"] = base_url
     if api_key:
         cfg["api_key"] = api_key
@@ -1319,33 +1324,28 @@ def reset_settings(gid):
 
 def _fetch_models(cfg):
     """Query the provider for its available models. Best-effort; raises on error."""
-    import httpx
-
-    from .url_guard import llm_url_ok
+    # Validate at the point of USE, before any HTTP client exists, via the single
+    # guarded egress path: the /assistant settings endpoint guards what it saves,
+    # but a base URL supplied through the environment or the add-on options never
+    # passes through there. Non-public targets — loopback, private LAN, link-local,
+    # reserved, multicast — are refused; only globally-routable hosts are allowed.
+    _assert_base_url_ok(cfg)
 
     p = cfg["provider"]
-    # Validate at the point of USE, before any HTTP client exists: the /assistant
-    # settings endpoint guards what it saves, but a base URL supplied through the
-    # environment or the add-on options never passes through there. Loopback and
-    # private LAN stay allowed (a self-hosted Ollama is the common case); only
-    # link-local — the cloud metadata endpoint — is refused.
-    ok, err = llm_url_ok(cfg["base_url"])
-    if not ok:
-        raise ValueError(f"refusing to reach that base URL: {err}")
-
-    with httpx.Client(timeout=min(cfg["timeout"], 15)) as client:
+    with guarded_client(timeout=min(cfg["timeout"], 15)) as client:
         if p == "ollama":
-            r = client.get(cfg["base_url"] + "/api/tags", headers=_ollama_headers(cfg))
+            r = guarded_send(client, "get", cfg["base_url"] + "/api/tags",
+                            headers=_ollama_headers(cfg))
             r.raise_for_status()
             return sorted(m["name"] for m in r.json().get("models", []) if m.get("name"))
         if p == "openai":
             h = {"Authorization": f"Bearer {cfg['api_key']}"} if cfg["api_key"] else {}
-            r = client.get(cfg["base_url"] + "/models", headers=h)
+            r = guarded_send(client, "get", cfg["base_url"] + "/models", headers=h)
             r.raise_for_status()
             return sorted(m["id"] for m in r.json().get("data", []) if m.get("id"))
         if p == "anthropic":
             h = {"x-api-key": cfg["api_key"], "anthropic-version": "2023-06-01"}
-            r = client.get(cfg["base_url"] + "/v1/models", headers=h)
+            r = guarded_send(client, "get", cfg["base_url"] + "/v1/models", headers=h)
             r.raise_for_status()
             return sorted(m["id"] for m in r.json().get("data", []) if m.get("id"))
     return []
@@ -1452,69 +1452,81 @@ def run_chat_stream(gid, messages):
 def _stream_turn(client, url, headers, body, is_ollama):
     """Consume ONE streamed model turn. Yields ``{"type":"delta","text"}`` as text
     arrives; RETURNS ``(content, tool_calls, assistant_msg)`` where assistant_msg is
-    the message to append to the running conversation for the next round."""
+    the message to append to the running conversation for the next round.
+
+    Redirects are followed hop by hop — each target re-validated through
+    url_guard.llm_url_ok — because the client never follows blindly
+    (``follow_redirects=False``) and a rebound-to-blocked host must abort the turn.
+    """
     content = ""
-    with client.stream("POST", url, headers=headers, json=body) as r:
-        r.raise_for_status()
-        if is_ollama:
-            tool_calls = []
+    followed = 0
+    while True:
+        with client.stream("POST", url, headers=headers, json=body) as r:
+            next_req = guarded_redirect_target(r)
+            if next_req is not None:
+                if followed >= MAX_REDIRECTS:
+                    raise ValueError("exceeded the maximum number of redirects")
+                followed += 1
+                url = str(next_req.url)
+                continue
+            r.raise_for_status()
+            if is_ollama:
+                tool_calls = []
+                for line in r.iter_lines():
+                    if not line:
+                        continue
+                    obj = json.loads(line)
+                    msg = obj.get("message") or {}
+                    piece = msg.get("content") or ""
+                    if piece:
+                        content += piece
+                        yield {"type": "delta", "text": piece}
+                    tool_calls.extend(msg.get("tool_calls") or [])
+                    if obj.get("done"):
+                        break
+                assistant_msg = {"role": "assistant", "content": content}
+                if tool_calls:
+                    assistant_msg["tool_calls"] = tool_calls
+                return content, tool_calls, assistant_msg
+            # OpenAI-compatible SSE: `data: {json}` lines, `data: [DONE]` terminates.
+            frags = {}
             for line in r.iter_lines():
-                if not line:
+                if not line or not line.startswith("data:"):
                     continue
-                obj = json.loads(line)
-                msg = obj.get("message") or {}
-                piece = msg.get("content") or ""
-                if piece:
-                    content += piece
-                    yield {"type": "delta", "text": piece}
-                tool_calls.extend(msg.get("tool_calls") or [])
-                if obj.get("done"):
+                payload = line[len("data:"):].strip()
+                if payload == "[DONE]":
                     break
-            assistant_msg = {"role": "assistant", "content": content}
+                chunk = json.loads(payload)
+                choices = chunk.get("choices") or []
+                if not choices:
+                    continue
+                delta = choices[0].get("delta") or {}
+                if delta.get("content"):
+                    content += delta["content"]
+                    yield {"type": "delta", "text": delta["content"]}
+                for tc in delta.get("tool_calls") or []:
+                    slot = frags.setdefault(tc.get("index", 0), {"id": "", "name": "", "args": ""})
+                    if tc.get("id"):
+                        slot["id"] = tc["id"]
+                    fn = tc.get("function") or {}
+                    if fn.get("name"):
+                        slot["name"] = fn["name"]
+                    if fn.get("arguments"):
+                        slot["args"] += fn["arguments"]
+            tool_calls = [
+                {"id": frags[i]["id"] or f"call_{i}", "type": "function",
+                 "function": {"name": frags[i]["name"], "arguments": frags[i]["args"]}}
+                for i in sorted(frags)
+            ]
+            assistant_msg = {"role": "assistant", "content": content or None}
             if tool_calls:
                 assistant_msg["tool_calls"] = tool_calls
             return content, tool_calls, assistant_msg
-        # OpenAI-compatible SSE: `data: {json}` lines, `data: [DONE]` terminates.
-        frags = {}
-        for line in r.iter_lines():
-            if not line or not line.startswith("data:"):
-                continue
-            payload = line[len("data:"):].strip()
-            if payload == "[DONE]":
-                break
-            chunk = json.loads(payload)
-            choices = chunk.get("choices") or []
-            if not choices:
-                continue
-            delta = choices[0].get("delta") or {}
-            if delta.get("content"):
-                content += delta["content"]
-                yield {"type": "delta", "text": delta["content"]}
-            for tc in delta.get("tool_calls") or []:
-                slot = frags.setdefault(tc.get("index", 0), {"id": "", "name": "", "args": ""})
-                if tc.get("id"):
-                    slot["id"] = tc["id"]
-                fn = tc.get("function") or {}
-                if fn.get("name"):
-                    slot["name"] = fn["name"]
-                if fn.get("arguments"):
-                    slot["args"] += fn["arguments"]
-        tool_calls = [
-            {"id": frags[i]["id"] or f"call_{i}", "type": "function",
-             "function": {"name": frags[i]["name"], "arguments": frags[i]["args"]}}
-            for i in sorted(frags)
-        ]
-        assistant_msg = {"role": "assistant", "content": content or None}
-        if tool_calls:
-            assistant_msg["tool_calls"] = tool_calls
-        return content, tool_calls, assistant_msg
 
 
 def _stream_openai_style(gid, user_messages, cfg, actions):
     """Streaming twin of :func:`_loop_openai_style` (OpenAI + Ollama). Yields text
     delta + tool events; RETURNS the final reply string."""
-    import httpx
-
     is_ollama = cfg["provider"] == "ollama"
     convo = [{"role": "system", "content": _system_prompt()}]
     convo += [{"role": m["role"], "content": m.get("content", "")}
@@ -1524,7 +1536,7 @@ def _stream_openai_style(gid, user_messages, cfg, actions):
         headers["Authorization"] = f"Bearer {cfg['api_key']}"
     url = cfg["base_url"] + ("/api/chat" if is_ollama else "/chat/completions")
 
-    with httpx.Client(timeout=cfg["timeout"]) as client:
+    with guarded_client(timeout=cfg["timeout"]) as client:
         for _ in range(cfg["max_steps"]):
             body = {"model": cfg["model"], "messages": convo,
                     "tools": _openai_tools(), "stream": True}
@@ -1552,13 +1564,12 @@ def _stream_openai_style(gid, user_messages, cfg, actions):
 # --------------------------------------------------------------------------- #
 def _complete(cfg, system, user):
     """Return the model's text for one system+user prompt (no tool calling)."""
-    import httpx
-
     _assert_base_url_ok(cfg)  # SSRF: validate the base URL at point of use
     provider = cfg["provider"]
-    with httpx.Client(timeout=cfg["timeout"]) as client:
+    with guarded_client(timeout=cfg["timeout"]) as client:
         if provider == "ollama":
-            r = client.post(cfg["base_url"] + "/api/chat", headers=_ollama_headers(cfg), json={
+            r = guarded_send(client, "post", cfg["base_url"] + "/api/chat",
+                            headers=_ollama_headers(cfg), json={
                 "model": cfg["model"], "stream": False,
                 "messages": [{"role": "system", "content": system},
                              {"role": "user", "content": user}]})
@@ -1566,7 +1577,7 @@ def _complete(cfg, system, user):
             return r.json()["message"].get("content", "")
         if provider == "openai":
             headers = {"Authorization": f"Bearer {cfg['api_key']}"} if cfg["api_key"] else {}
-            r = client.post(cfg["base_url"] + "/chat/completions", headers=headers, json={
+            r = guarded_send(client, "post", cfg["base_url"] + "/chat/completions", headers=headers, json={
                 "model": cfg["model"],
                 "messages": [{"role": "system", "content": system},
                              {"role": "user", "content": user}]})
@@ -1574,7 +1585,7 @@ def _complete(cfg, system, user):
             return r.json()["choices"][0]["message"].get("content", "") or ""
         if provider == "anthropic":
             headers = {"x-api-key": cfg["api_key"], "anthropic-version": "2023-06-01"}
-            r = client.post(cfg["base_url"] + "/v1/messages", headers=headers, json={
+            r = guarded_send(client, "post", cfg["base_url"] + "/v1/messages", headers=headers, json={
                 "model": cfg["model"], "max_tokens": 2048, "system": system,
                 "messages": [{"role": "user", "content": user}]})
             r.raise_for_status()
@@ -1585,8 +1596,8 @@ def _complete(cfg, system, user):
             body = {"text": f"{system}\n\n{user}", "language": "en"}
             if cfg.get("agent_id"):  # target a specific HA conversation agent
                 body["agent_id"] = cfg["agent_id"]
-            r = client.post(cfg["base_url"] + "/api/conversation/process", headers=headers,
-                            json=body)
+            r = guarded_send(client, "post", cfg["base_url"] + "/api/conversation/process",
+                            headers=headers, json=body)
             r.raise_for_status()
             data = r.json()
             return (((data.get("response") or {}).get("speech") or {})
@@ -1681,14 +1692,13 @@ _EXTRACT_IMAGE_USER = "Extract the food/grocery items from this receipt or order
 def _complete_vision(cfg, system, user, image_b64, media_type):
     """One completion where the user turn includes an image. Requires a vision
     model (gpt-4o / claude / llava). image_b64 is raw base64 (no data: prefix)."""
-    import httpx
-
     _assert_base_url_ok(cfg)  # SSRF: validate the base URL at point of use
 
     provider = cfg["provider"]
-    with httpx.Client(timeout=cfg["timeout"]) as client:
+    with guarded_client(timeout=cfg["timeout"]) as client:
         if provider == "ollama":
-            r = client.post(cfg["base_url"] + "/api/chat", headers=_ollama_headers(cfg), json={
+            r = guarded_send(client, "post", cfg["base_url"] + "/api/chat",
+                            headers=_ollama_headers(cfg), json={
                 "model": cfg["model"], "stream": False,
                 "messages": [{"role": "system", "content": system},
                              {"role": "user", "content": user, "images": [image_b64]}]})
@@ -1697,7 +1707,7 @@ def _complete_vision(cfg, system, user, image_b64, media_type):
         if provider == "openai":
             headers = {"Authorization": f"Bearer {cfg['api_key']}"} if cfg["api_key"] else {}
             data_url = f"data:{media_type};base64,{image_b64}"
-            r = client.post(cfg["base_url"] + "/chat/completions", headers=headers, json={
+            r = guarded_send(client, "post", cfg["base_url"] + "/chat/completions", headers=headers, json={
                 "model": cfg["model"],
                 "messages": [{"role": "system", "content": system},
                              {"role": "user", "content": [
@@ -1707,7 +1717,7 @@ def _complete_vision(cfg, system, user, image_b64, media_type):
             return r.json()["choices"][0]["message"].get("content", "") or ""
         if provider == "anthropic":
             headers = {"x-api-key": cfg["api_key"], "anthropic-version": "2023-06-01"}
-            r = client.post(cfg["base_url"] + "/v1/messages", headers=headers, json={
+            r = guarded_send(client, "post", cfg["base_url"] + "/v1/messages", headers=headers, json={
                 "model": cfg["model"], "max_tokens": 2048, "system": system,
                 "messages": [{"role": "user", "content": [
                     {"type": "image", "source": {"type": "base64",
@@ -1906,8 +1916,6 @@ def _openai_tools():
 
 
 def _loop_openai_style(gid, user_messages, cfg, actions):
-    import httpx
-
     is_ollama = cfg["provider"] == "ollama"
     convo = [{"role": "system", "content": _system_prompt()}]
     convo += [{"role": m["role"], "content": m.get("content", "")}
@@ -1917,13 +1925,13 @@ def _loop_openai_style(gid, user_messages, cfg, actions):
         headers["Authorization"] = f"Bearer {cfg['api_key']}"
     url = cfg["base_url"] + ("/api/chat" if is_ollama else "/chat/completions")
 
-    with httpx.Client(timeout=cfg["timeout"]) as client:
+    with guarded_client(timeout=cfg["timeout"]) as client:
         for _ in range(cfg["max_steps"]):
             body = {"model": cfg["model"], "messages": convo,
                     "tools": _openai_tools()}
             if is_ollama:
                 body["stream"] = False
-            r = client.post(url, headers=headers, json=body)
+            r = guarded_send(client, "post", url, headers=headers, json=body)
             r.raise_for_status()
             data = r.json()
             msg = (data["message"] if is_ollama
@@ -1953,8 +1961,6 @@ def _anthropic_tools():
 
 
 def _loop_anthropic(gid, user_messages, cfg, actions):
-    import httpx
-
     convo = [{"role": m["role"], "content": m.get("content", "")}
              for m in user_messages if m.get("role") in ("user", "assistant")]
     headers = {"Content-Type": "application/json",
@@ -1962,12 +1968,12 @@ def _loop_anthropic(gid, user_messages, cfg, actions):
                "anthropic-version": "2023-06-01"}
     url = cfg["base_url"] + "/v1/messages"
 
-    with httpx.Client(timeout=cfg["timeout"]) as client:
+    with guarded_client(timeout=cfg["timeout"]) as client:
         for _ in range(cfg["max_steps"]):
             body = {"model": cfg["model"], "max_tokens": 1024,
                     "system": _system_prompt(), "tools": _anthropic_tools(),
                     "messages": convo}
-            r = client.post(url, headers=headers, json=body)
+            r = guarded_send(client, "post", url, headers=headers, json=body)
             r.raise_for_status()
             data = r.json()
             blocks = data.get("content", [])

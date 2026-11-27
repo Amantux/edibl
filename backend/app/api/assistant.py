@@ -17,7 +17,7 @@ from ..services.settings import (
 # The guard now lives in services/ so the point of USE (_fetch_models) shares the
 # one implementation with this save path — a base URL from env/add-on options
 # never passes through here, so validating only on save left it unchecked.
-from ..services.url_guard import llm_url_ok as _llm_url_ok
+from ..services.url_guard import llm_url_ok
 
 bp = Blueprint("assistant", __name__)
 
@@ -56,8 +56,6 @@ def put_job_settings_endpoint():
     """Set the async-job AI preference (owner only). Body:
     {enrich:{provider,model,baseUrl,apiKey?,clearApiKey?}, organize:{...}}.
     Blank field = same as chat. The key is never returned, only `apiKeySet`."""
-    from ..services.url_guard import llm_url_ok
-
     data = request.get_json(force=True) or {}
     for area in ("enrich", "organize"):
         blk = data.get(area)
@@ -97,7 +95,7 @@ def put_settings():
     if "provider" in data:
         kwargs["provider"] = str(data["provider"] or "")
     if "baseUrl" in data:
-        ok, err = _llm_url_ok(str(data["baseUrl"] or ""))
+        ok, err = llm_url_ok(str(data["baseUrl"] or ""))
         if not ok:
             return jsonify({"error": err}), 422
         kwargs["base_url"] = str(data["baseUrl"] or "")
@@ -129,7 +127,7 @@ def list_models():
     provider = data.get("provider")
     if provider is not None and str(provider) not in assistant.PROVIDER_CHOICES:
         return jsonify({"error": "unknown provider"}), 422
-    ok, err = _llm_url_ok(data.get("baseUrl") or "")
+    ok, err = llm_url_ok(data.get("baseUrl") or "")
     if not ok:
         return jsonify({"error": err}), 422
     return jsonify(assistant.list_models(
